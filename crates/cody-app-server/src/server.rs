@@ -1,0 +1,397 @@
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
+
+use axum::{
+    body::Bytes,
+    extract::{
+        ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
+        Query, State,
+    },
+    http::{header, HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Json, Router,
+};
+use cody_core::{
+    AgentRuntime, CodyEngine, EventId, Result as CodyResult, StartTurn, ThreadId, Turn, TurnId,
+};
+use futures_util::{FutureExt, SinkExt, StreamExt};
+use serde_json::{json, Value};
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, warn};
+
+use crate::rpc::{RpcDispatcher, RpcError, RpcRequest, RpcResponse};
+
+#[derive(Clone)]
+pub struct AppState {
+    pub engine: Arc<CodyEngine>,
+    pub turns: TurnManager,
+    auth_token: Arc<str>,
+    allowed_origins: Arc<HashSet<String>>,
+}
+
+impl AppState {
+    pub fn new(engine: Arc<CodyEngine>) -> Self {
+        let auth_token = std::env::var("CODY_SERVER_TOKEN")
+            .ok()
+            .filter(|token| !token.trim().is_empty())
+            .unwrap_or_else(|| format!("{}{}", EventId::new(), EventId::new()));
+        let allowed_origins = std::env::var("CODY_ALLOWED_ORIGINS")
+            .ok()
+            .into_iter()
+            .flat_map(|origins| {
+                origins
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|origin| !origin.is_empty())
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        Self::with_auth(engine, auth_token, allowed_origins)
+    }
+
+    pub fn with_auth(
+        engine: Arc<CodyEngine>,
+        auth_token: impl Into<String>,
+        allowed_origins: HashSet<String>,
+    ) -> Self {
+        Self {
+            engine,
+            turns: TurnManager::default(),
+            auth_token: Arc::from(auth_token.into()),
+            allowed_origins: Arc::new(allowed_origins),
+        }
+    }
+
+    pub fn auth_token(&self) -> &str {
+        &self.auth_token
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct TurnManager {
+    active: Arc<Mutex<HashMap<TurnId, CancellationToken>>>,
+}
+
+impl TurnManager {
+    pub async fn start(&self, runtime: Arc<AgentRuntime>, request: StartTurn) -> CodyResult<Turn> {
+        let turn = runtime.prepare_turn(request).await?;
+        let cancellation = CancellationToken::new();
+        self.active
+            .lock()
+            .await
+            .insert(turn.id, cancellation.clone());
+
+        let active = self.active.clone();
+        let turn_id = turn.id;
+        tokio::spawn(async move {
+            let execution =
+                std::panic::AssertUnwindSafe(runtime.execute_turn(turn_id, cancellation))
+                    .catch_unwind()
+                    .await;
+            match execution {
+                Ok(Err(error)) => debug!(%turn_id, %error, "turn task finished with an error"),
+                Err(_) => warn!(%turn_id, "turn task panicked outside the guarded agent loop"),
+                Ok(Ok(_)) => {}
+            }
+            active.lock().await.remove(&turn_id);
+        });
+        Ok(turn)
+    }
+
+    pub async fn cancel(&self, turn_id: TurnId) -> bool {
+        let cancellation = self.active.lock().await.get(&turn_id).cloned();
+        if let Some(cancellation) = cancellation {
+            cancellation.cancel();
+            true
+        } else {
+            false
+        }
+    }
+}
+
+pub fn app(state: AppState) -> Router {
+    Router::new()
+        .route("/health", get(health))
+        .route("/v1/rpc", post(http_rpc))
+        .route("/v1/ws", get(websocket_upgrade))
+        .route("/v1/app-server", get(websocket_upgrade))
+        .with_state(state)
+}
+
+async fn health() -> Json<Value> {
+    Json(json!({
+        "status": "ok",
+        "service": "cody-app-server",
+        "version": env!("CARGO_PKG_VERSION"),
+    }))
+}
+
+async fn http_rpc(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    if !authorized(&headers, None, &state) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "missing or invalid bearer token" })),
+        )
+            .into_response();
+    }
+    let is_json = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value.eq_ignore_ascii_case("application/json")
+                || value.to_ascii_lowercase().starts_with("application/json;")
+        });
+    if !is_json {
+        return (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Json(json!({ "error": "Content-Type must be application/json" })),
+        )
+            .into_response();
+    }
+    let request = match serde_json::from_slice::<RpcRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => {
+            return (
+                StatusCode::OK,
+                Json(RpcResponse::error(Value::Null, RpcError::parse(error))),
+            )
+                .into_response();
+        }
+    };
+    let dispatcher = RpcDispatcher::new(state);
+    match dispatcher.handle(request).await {
+        Some(response) => (StatusCode::OK, Json(response)).into_response(),
+        None => StatusCode::NO_CONTENT.into_response(),
+    }
+}
+
+async fn websocket_upgrade(
+    websocket: WebSocketUpgrade,
+    State(state): State<AppState>,
+    Query(auth): Query<WebSocketAuth>,
+    headers: HeaderMap,
+) -> Response {
+    if !origin_allowed(&headers, &state) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "websocket origin is not allowed" })),
+        )
+            .into_response();
+    }
+    if !authorized(&headers, auth.token.as_deref(), &state) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "missing or invalid websocket token" })),
+        )
+            .into_response();
+    }
+    websocket.on_upgrade(move |socket| websocket_session(socket, state))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct WebSocketAuth {
+    #[serde(default)]
+    token: Option<String>,
+}
+
+fn authorized(headers: &HeaderMap, query_token: Option<&str>, state: &AppState) -> bool {
+    let bearer = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    bearer.or(query_token).is_some_and(|candidate| {
+        constant_time_eq(candidate.as_bytes(), state.auth_token.as_bytes())
+    })
+}
+
+fn origin_allowed(headers: &HeaderMap, state: &AppState) -> bool {
+    let Some(origin) = headers.get(header::ORIGIN) else {
+        // Native app/CLI clients normally omit Origin.
+        return true;
+    };
+    origin
+        .to_str()
+        .ok()
+        .is_some_and(|origin| state.allowed_origins.contains(origin))
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right)
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
+}
+
+async fn websocket_session(socket: WebSocket, state: AppState) {
+    let dispatcher = RpcDispatcher::new(state.clone());
+    let mut events = state.engine.events().subscribe();
+    let (mut sender, mut receiver) = socket.split();
+    let mut subscriptions = HashSet::<ThreadId>::new();
+
+    loop {
+        tokio::select! {
+            incoming = receiver.next() => {
+                let Some(incoming) = incoming else { break };
+                match incoming {
+                    Ok(WsMessage::Text(text)) => {
+                        let response = match serde_json::from_str::<RpcRequest>(text.as_str()) {
+                            Ok(request) => handle_ws_request(&dispatcher, &state, request, &mut subscriptions).await,
+                            Err(error) => Some(RpcResponse::error(Value::Null, RpcError::parse(error))),
+                        };
+                        if let Some(response) = response {
+                            if send_json(&mut sender, &response).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Ok(WsMessage::Binary(bytes)) => {
+                        let response = match serde_json::from_slice::<RpcRequest>(&bytes) {
+                            Ok(request) => handle_ws_request(&dispatcher, &state, request, &mut subscriptions).await,
+                            Err(error) => Some(RpcResponse::error(Value::Null, RpcError::parse(error))),
+                        };
+                        if let Some(response) = response {
+                            if send_json(&mut sender, &response).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Ok(WsMessage::Ping(payload)) => {
+                        if sender.send(WsMessage::Pong(payload)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(WsMessage::Pong(_)) => {}
+                    Ok(WsMessage::Close(_)) | Err(_) => break,
+                }
+            }
+            event = events.recv() => {
+                match event {
+                    Ok(event) => {
+                        if !subscriptions.contains(&event.thread_id) {
+                            continue;
+                        }
+                        let notification = json!({
+                            "jsonrpc": "2.0",
+                            "method": "turn/event",
+                            "params": event,
+                        });
+                        if send_json(&mut sender, &notification).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        warn!(skipped, "websocket client lagged behind the event stream");
+                        let notification = json!({
+                            "jsonrpc": "2.0",
+                            "method": "server/event_gap",
+                            "params": { "skipped": skipped },
+                        });
+                        if send_json(&mut sender, &notification).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        }
+    }
+}
+
+async fn handle_ws_request(
+    dispatcher: &RpcDispatcher,
+    state: &AppState,
+    request: RpcRequest,
+    subscriptions: &mut HashSet<ThreadId>,
+) -> Option<RpcResponse> {
+    if request.jsonrpc != "2.0" {
+        return request
+            .id
+            .map(|id| RpcResponse::error(id, RpcError::invalid_request("jsonrpc must be '2.0'")));
+    }
+    if matches!(
+        request.method.as_str(),
+        "thread/subscribe" | "thread.subscribe"
+    ) {
+        let id = request.id.clone();
+        let result = serde_json::from_value::<ThreadSubscription>(request.params)
+            .map_err(RpcError::invalid_params);
+        let result = match result {
+            Ok(params) => match state.engine.store().get_thread(params.thread_id).await {
+                Ok(_) => {
+                    subscriptions.insert(params.thread_id);
+                    Ok(json!({ "subscribed": true, "thread_id": params.thread_id }))
+                }
+                Err(error) => Err(RpcError::from(error)),
+            },
+            Err(error) => Err(error),
+        };
+        return id.map(|id| match result {
+            Ok(value) => RpcResponse::success(id, value),
+            Err(error) => RpcResponse::error(id, error),
+        });
+    }
+    if matches!(
+        request.method.as_str(),
+        "thread/unsubscribe" | "thread.unsubscribe"
+    ) {
+        let id = request.id.clone();
+        let result = serde_json::from_value::<ThreadSubscription>(request.params)
+            .map_err(RpcError::invalid_params)
+            .map(|params| {
+                let removed = subscriptions.remove(&params.thread_id);
+                json!({ "subscribed": false, "removed": removed, "thread_id": params.thread_id })
+            });
+        return id.map(|id| match result {
+            Ok(value) => RpcResponse::success(id, value),
+            Err(error) => RpcResponse::error(id, error),
+        });
+    }
+
+    // Starting or inspecting a thread implicitly subscribes this connection.
+    if matches!(
+        request.method.as_str(),
+        "turn/start"
+            | "turn.start"
+            | "thread/get"
+            | "thread.get"
+            | "thread/messages"
+            | "thread.messages"
+    ) {
+        if let Some(thread_id) = request
+            .params
+            .get("thread_id")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok())
+        {
+            subscriptions.insert(thread_id);
+        }
+    }
+    dispatcher.handle(request).await
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ThreadSubscription {
+    thread_id: ThreadId,
+}
+
+async fn send_json<S, T>(sender: &mut S, value: &T) -> Result<(), ()>
+where
+    S: futures_util::Sink<WsMessage> + Unpin,
+    T: serde::Serialize,
+{
+    let text = serde_json::to_string(value).map_err(|_| ())?;
+    sender
+        .send(WsMessage::Text(text.into()))
+        .await
+        .map_err(|_| ())
+}

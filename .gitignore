@@ -1,0 +1,5 @@
+/target
+/.cody
+.env
+*.swp
+.DS_Store
