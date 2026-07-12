@@ -242,11 +242,19 @@ impl RpcDispatcher {
                     .await
                     .map_err(RpcError::from)?;
                 let turns = store.list_turns(thread.id).await.map_err(RpcError::from)?;
+                let pending_approvals = self
+                    .state
+                    .engine
+                    .runtime()
+                    .approvals()
+                    .list(Some(thread.id))
+                    .await;
                 Ok(json!({
                     "thread": thread,
                     "workspace": workspace,
                     "messages": messages,
                     "turns": turns,
+                    "pending_approvals": pending_approvals,
                 }))
             }
             "thread/reference/add" | "thread.reference.add" => {

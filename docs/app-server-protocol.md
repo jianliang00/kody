@@ -19,7 +19,7 @@ HTTP requires `Authorization: Bearer <token>` and `Content-Type: application/jso
 | `project/import` | Import an existing directory/Git repository |
 | `project/get`, `project/list` | Read Project state |
 | `thread/create` | Create a Thread and its Workspace; optional `working_directory` auto-imports a Project |
-| `thread/get`, `thread/list`, `thread/messages` | Read Thread state/history |
+| `thread/get`, `thread/list`, `thread/messages` | Read Thread state/history; `thread/get` also returns current pending approvals |
 | `thread/reference/add` | Add a persistent default Thread or Project reference |
 | `turn/start`, `turn/get`, `turn/cancel` | Run and control an Agent Turn |
 | `approval/respond` | Resolve a pending Shell approval |
@@ -94,7 +94,7 @@ When `approval_requested` arrives, respond with:
 }
 ```
 
-Events are live and held in a bounded process-local broadcast buffer. They are not replayed after reconnect/restart; use `thread/get` and `turn/get` to reconcile durable state. A slow subscriber may receive `server/event_gap` with the skipped count.
+Events are live and held in a bounded process-local broadcast buffer. They are not replayed after reconnect/restart; use `thread/get` and `turn/get` to reconcile state. `thread/get.pending_approvals` contains actionable approvals still waiting in the current server process, so a renderer reconnect does not strand a Turn. A full server restart fails interrupted Turns during recovery, so no stale approval remains actionable. A slow subscriber may receive `server/event_gap` with the skipped count.
 
 ## Errors
 

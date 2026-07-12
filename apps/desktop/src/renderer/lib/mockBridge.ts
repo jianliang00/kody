@@ -1,0 +1,551 @@
+import type { CodyDesktopBridge } from '@shared/bridge'
+import type {
+  ChatMessage,
+  ContextReference,
+  EventEnvelope,
+  Project,
+  RpcMethod,
+  RpcMethodMap,
+  ServerStatus,
+  Thread,
+  ThreadSnapshot,
+  Turn
+} from '@shared/protocol'
+
+const now = Date.now()
+const iso = (offsetMinutes = 0): string => new Date(now + offsetMinutes * 60_000).toISOString()
+const id = (prefix: string): string => `${prefix}-${crypto.randomUUID()}`
+
+const seedProjects: Project[] = [
+  {
+    id: 'project-cody',
+    name: 'cody',
+    root: '/Users/demo/Code/cody',
+    kind: 'git',
+    git: { remote: 'github.com/example/cody', branch: 'ui/electron-shell' },
+    created_at: iso(-14_400)
+  },
+  {
+    id: 'project-atlas',
+    name: 'atlas-api',
+    root: '/Users/demo/Code/atlas-api',
+    kind: 'git',
+    git: { remote: 'github.com/example/atlas-api', branch: 'main' },
+    created_at: iso(-8_200)
+  },
+  {
+    id: 'project-notes',
+    name: 'product-notes',
+    root: '/Users/demo/Documents/product-notes',
+    kind: 'directory',
+    created_at: iso(-3_200)
+  }
+]
+
+const seedThreads: Thread[] = [
+  {
+    id: 'thread-electron',
+    title: 'Shape the Electron workspace',
+    workspace_id: 'workspace-electron',
+    status: 'idle',
+    default_references: [
+      { kind: 'project', project_id: 'project-cody', access: 'read_write' }
+    ],
+    summary: 'A focused pass on the desktop shell, bridge boundary, and renderer experience.',
+    created_at: iso(-1_520),
+    updated_at: iso(-8)
+  },
+  {
+    id: 'thread-agent-loop',
+    title: 'Design the agent loop',
+    workspace_id: 'workspace-loop',
+    status: 'idle',
+    default_references: [],
+    summary: 'Provider-neutral model turns, tool execution, approvals, and terminal states.',
+    created_at: iso(-4_200),
+    updated_at: iso(-1_400)
+  },
+  {
+    id: 'thread-context',
+    title: 'Context reference semantics',
+    workspace_id: 'workspace-context',
+    status: 'idle',
+    default_references: [],
+    summary: 'Thread and Project mentions remain independent, explicit, and composable.',
+    created_at: iso(-3_800),
+    updated_at: iso(-2_000)
+  }
+]
+
+const seedMessages: ChatMessage[] = [
+  {
+    id: 'message-electron-user',
+    thread_id: 'thread-electron',
+    turn_id: 'turn-electron-1',
+    role: 'user',
+    parts: [
+      {
+        type: 'text',
+        text: 'Create a calm desktop workspace that keeps conversations and code assets independent.'
+      }
+    ],
+    references: [
+      { kind: 'thread', thread_id: 'thread-context', mode: 'summary' },
+      { kind: 'project', project_id: 'project-cody', access: 'read_write' }
+    ],
+    created_at: iso(-20)
+  },
+  {
+    id: 'message-electron-assistant',
+    thread_id: 'thread-electron',
+    turn_id: 'turn-electron-1',
+    role: 'assistant',
+    parts: [
+      {
+        type: 'text',
+        text:
+          'I mapped the experience around three independent surfaces:\n\n- **Assets** for durable Threads and reusable Projects\n- **Conversation** for the linear working record\n- **Context** for the ephemeral Workspace, references, and activity\n\nThe composer treats `@thread` and `@project` as structured context, so the visible prompt stays readable while access remains explicit.'
+      }
+    ],
+    references: [],
+    created_at: iso(-8)
+  }
+]
+
+const seedTurns: Turn[] = [
+  {
+    id: 'turn-electron-1',
+    thread_id: 'thread-electron',
+    input_message_id: 'message-electron-user',
+    provider: 'echo',
+    model: 'cody-demo',
+    status: 'completed',
+    created_at: iso(-20),
+    started_at: iso(-20),
+    completed_at: iso(-8)
+  }
+]
+
+interface PendingApproval {
+  approvalId: string
+  turnId: string
+  threadId: string
+  command: string
+  toolCallId: string
+  resolved: boolean
+}
+
+function clone<T>(value: T): T {
+  return structuredClone(value)
+}
+
+function pathName(path: string): string {
+  return path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'Imported project'
+}
+
+function createMockStore() {
+  const projects = clone(seedProjects)
+  const threads = clone(seedThreads)
+  const snapshots = new Map<string, ThreadSnapshot>()
+  const events = new Set<(event: EventEnvelope) => void>()
+  const statusListeners = new Set<(status: ServerStatus) => void>()
+  const timers = new Map<string, number[]>()
+  const approvals = new Map<string, PendingApproval>()
+  const sequence = new Map<string, number>()
+
+  for (const thread of threads) {
+    snapshots.set(thread.id, {
+      thread,
+      workspace: {
+        id: thread.workspace_id,
+        thread_id: thread.id,
+        root: `/tmp/cody/workspaces/${thread.id}`,
+        created_at: thread.created_at
+      },
+      messages: thread.id === 'thread-electron' ? clone(seedMessages) : [],
+      turns: thread.id === 'thread-electron' ? clone(seedTurns) : [],
+      pending_approvals: []
+    })
+  }
+
+  const emit = (threadId: string, turnId: string, event: EventEnvelope['event']): void => {
+    const nextSequence = (sequence.get(turnId) ?? 0) + 1
+    sequence.set(turnId, nextSequence)
+    const envelope: EventEnvelope = {
+      id: id('event'),
+      thread_id: threadId,
+      turn_id: turnId,
+      sequence: nextSequence,
+      created_at: new Date().toISOString(),
+      event
+    }
+    events.forEach((listener) => listener(clone(envelope)))
+  }
+
+  const schedule = (turnId: string, delay: number, callback: () => void): void => {
+    const timer = window.setTimeout(callback, delay)
+    timers.set(turnId, [...(timers.get(turnId) ?? []), timer])
+  }
+
+  const clearTurnTimers = (turnId: string): void => {
+    for (const timer of timers.get(turnId) ?? []) window.clearTimeout(timer)
+    timers.delete(turnId)
+  }
+
+  const finish = (threadId: string, turnId: string, response: string): void => {
+    const snapshot = snapshots.get(threadId)
+    if (!snapshot) return
+    const turn = snapshot.turns.find((item) => item.id === turnId)
+    if (!turn || turn.status === 'cancelled') return
+
+    turn.status = 'completed'
+    turn.completed_at = new Date().toISOString()
+    snapshot.thread.status = 'idle'
+    snapshot.thread.updated_at = turn.completed_at
+    snapshot.messages.push({
+      id: id('message'),
+      thread_id: threadId,
+      turn_id: turnId,
+      role: 'assistant',
+      parts: [{ type: 'text', text: response }],
+      references: [],
+      created_at: turn.completed_at
+    })
+    emit(threadId, turnId, { type: 'model_output_delta', delta: response })
+    emit(threadId, turnId, { type: 'model_completed', stop_reason: 'end_turn' })
+    emit(threadId, turnId, { type: 'turn_completed', final_text: response })
+    clearTurnTimers(turnId)
+  }
+
+  const runTurn = (threadId: string, turnId: string, prompt: string): void => {
+    emit(threadId, turnId, { type: 'turn_started' })
+    schedule(turnId, 180, () => emit(threadId, turnId, { type: 'step_started', step: 1 }))
+    schedule(turnId, 360, () =>
+      emit(threadId, turnId, { type: 'model_started', provider: 'echo', model: 'cody-demo' })
+    )
+    schedule(turnId, 640, () =>
+      emit(threadId, turnId, {
+        type: 'model_reasoning_delta',
+        delta: 'Inspecting the active references and current workspace…'
+      })
+    )
+
+    const requiresApproval = /shell|command|cargo|test|build/i.test(prompt)
+    if (requiresApproval) {
+      const approvalId = id('approval')
+      const command = prompt.toLocaleLowerCase().includes('build') ? 'cargo build --workspace' : 'cargo test --workspace'
+      approvals.set(approvalId, {
+        approvalId,
+        turnId,
+        threadId,
+        command,
+        toolCallId: id('tool-call'),
+        resolved: false
+      })
+      schedule(turnId, 980, () =>
+        emit(threadId, turnId, {
+          type: 'approval_requested',
+          approval_id: approvalId,
+          tool_call_id: approvals.get(approvalId)?.toolCallId ?? `tool-${approvalId}`,
+          name: 'shell',
+          arguments: { command, cwd: '/Users/demo/Code/cody' },
+          reason: 'This command executes inside the referenced Project and may create build artifacts.'
+        })
+      )
+      return
+    }
+
+    schedule(turnId, 1_120, () =>
+      finish(
+        threadId,
+        turnId,
+        'I reviewed the current context and prepared the next change. The Thread remains the durable record; Project access is scoped only to this turn.'
+      )
+    )
+  }
+
+  const rpc = async <M extends RpcMethod>(
+    method: M,
+    params: RpcMethodMap[M]['params']
+  ): Promise<RpcMethodMap[M]['result']> => {
+    await new Promise((resolve) => window.setTimeout(resolve, 90))
+
+    switch (method) {
+      case 'initialize':
+        return {
+          server_info: { name: 'cody-browser-mock', version: '0.1.0' },
+          capabilities: { approvals: true, context_references: true }
+        } as RpcMethodMap[M]['result']
+      case 'provider/list':
+        return { providers: ['echo', 'openai-compatible'] } as RpcMethodMap[M]['result']
+      case 'project/list':
+        return { projects: clone(projects) } as RpcMethodMap[M]['result']
+      case 'thread/list':
+        return {
+          threads: clone(threads).sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+        } as RpcMethodMap[M]['result']
+      case 'project/import': {
+        const input = params as RpcMethodMap['project/import']['params']
+        const existing = projects.find((project) => project.root === input.path)
+        if (existing) return clone(existing) as RpcMethodMap[M]['result']
+        const project: Project = {
+          id: id('project'),
+          name: input.name?.trim() || pathName(input.path),
+          root: input.path,
+          kind: input.path.toLocaleLowerCase().includes('git') ? 'git' : 'directory',
+          created_at: new Date().toISOString()
+        }
+        projects.unshift(project)
+        return clone(project) as RpcMethodMap[M]['result']
+      }
+      case 'thread/create': {
+        const input = params as RpcMethodMap['thread/create']['params']
+        let importedProject: Project | undefined
+        const defaultReferences: ContextReference[] = []
+        if (input.working_directory) {
+          importedProject = projects.find((project) => project.root === input.working_directory)
+          if (!importedProject) {
+            importedProject = {
+              id: id('project'),
+              name: pathName(input.working_directory),
+              root: input.working_directory,
+              kind: 'directory',
+              created_at: new Date().toISOString()
+            }
+            projects.unshift(importedProject)
+          }
+          defaultReferences.push({
+            kind: 'project',
+            project_id: importedProject.id,
+            access: 'read_write'
+          })
+        }
+        const createdAt = new Date().toISOString()
+        const thread: Thread = {
+          id: id('thread'),
+          title: input.title.trim() || 'Untitled thread',
+          workspace_id: id('workspace'),
+          status: 'idle',
+          default_references: defaultReferences,
+          created_at: createdAt,
+          updated_at: createdAt
+        }
+        threads.unshift(thread)
+        const snapshot: ThreadSnapshot = {
+          thread,
+          workspace: {
+            id: thread.workspace_id,
+            thread_id: thread.id,
+            root: `/tmp/cody/workspaces/${thread.id}`,
+            created_at: createdAt
+          },
+          messages: [],
+          turns: [],
+          pending_approvals: []
+        }
+        snapshots.set(thread.id, snapshot)
+        return {
+          thread: clone(thread),
+          workspace: clone(snapshot.workspace),
+          imported_project: importedProject ? clone(importedProject) : undefined
+        } as RpcMethodMap[M]['result']
+      }
+      case 'thread/get': {
+        const input = params as RpcMethodMap['thread/get']['params']
+        const snapshot = snapshots.get(input.thread_id)
+        if (!snapshot) throw new Error(`Thread ${input.thread_id} was not found`)
+        return clone(snapshot) as RpcMethodMap[M]['result']
+      }
+      case 'thread/reference/add': {
+        const input = params as RpcMethodMap['thread/reference/add']['params']
+        const snapshot = snapshots.get(input.thread_id)
+        if (!snapshot) throw new Error(`Thread ${input.thread_id} was not found`)
+        const key = input.reference.kind === 'thread'
+          ? `thread:${input.reference.thread_id}`
+          : `project:${input.reference.project_id}`
+        snapshot.thread.default_references = [
+          ...snapshot.thread.default_references.filter((reference) => {
+            const currentKey = reference.kind === 'thread'
+              ? `thread:${reference.thread_id}`
+              : `project:${reference.project_id}`
+            return currentKey !== key
+          }),
+          input.reference
+        ]
+        return clone(snapshot.thread) as RpcMethodMap[M]['result']
+      }
+      case 'turn/start': {
+        const input = params as RpcMethodMap['turn/start']['params']
+        const snapshot = snapshots.get(input.thread_id)
+        if (!snapshot) throw new Error(`Thread ${input.thread_id} was not found`)
+        const createdAt = new Date().toISOString()
+        const message: ChatMessage = {
+          id: id('message'),
+          thread_id: input.thread_id,
+          turn_id: undefined,
+          role: 'user',
+          parts: [{ type: 'text', text: input.message }],
+          references: clone(input.references),
+          created_at: createdAt
+        }
+        const turn: Turn = {
+          id: id('turn'),
+          thread_id: input.thread_id,
+          input_message_id: message.id,
+          provider: input.provider,
+          model: input.model || 'cody-demo',
+          status: 'running',
+          created_at: createdAt,
+          started_at: createdAt
+        }
+        message.turn_id = turn.id
+        snapshot.messages.push(message)
+        snapshot.turns.push(turn)
+        snapshot.thread.status = 'running'
+        snapshot.thread.updated_at = createdAt
+        window.setTimeout(() => runTurn(input.thread_id, turn.id, input.message), 0)
+        return clone(turn) as RpcMethodMap[M]['result']
+      }
+      case 'turn/cancel': {
+        const input = params as RpcMethodMap['turn/cancel']['params']
+        let cancelled = false
+        for (const snapshot of snapshots.values()) {
+          const turn = snapshot.turns.find((item) => item.id === input.turn_id)
+          if (!turn || turn.status !== 'running') continue
+          clearTurnTimers(turn.id)
+          turn.status = 'cancelled'
+          turn.completed_at = new Date().toISOString()
+          snapshot.thread.status = 'idle'
+          emit(snapshot.thread.id, turn.id, { type: 'turn_cancelled' })
+          cancelled = true
+          break
+        }
+        return { cancelled } as RpcMethodMap[M]['result']
+      }
+      case 'approval/respond': {
+        const input = params as RpcMethodMap['approval/respond']['params']
+        const approval = approvals.get(input.approval_id)
+        if (!approval || approval.resolved) {
+          return { resolved: false } as RpcMethodMap[M]['result']
+        }
+        approval.resolved = true
+        emit(approval.threadId, approval.turnId, {
+          type: 'approval_resolved',
+          approval_id: approval.approvalId,
+          approved: input.approved
+        })
+        if (input.approved) {
+          emit(approval.threadId, approval.turnId, {
+            type: 'tool_started',
+            tool_call_id: approval.toolCallId,
+            name: 'shell',
+            arguments: { command: approval.command, cwd: '/Users/demo/Code/cody' }
+          })
+          schedule(approval.turnId, 520, () => {
+            emit(approval.threadId, approval.turnId, {
+              type: 'tool_completed',
+              tool_call_id: approval.toolCallId,
+              name: 'shell',
+              content: 'Finished successfully in 0.42s',
+              is_error: false
+            })
+            emit(approval.threadId, approval.turnId, {
+              type: 'file_changed',
+              project_id: 'project-cody',
+              path: 'apps/desktop/src/renderer/App.tsx'
+            })
+            finish(
+              approval.threadId,
+              approval.turnId,
+              'The command completed successfully. I verified the referenced Project and recorded the changed file in this Thread’s activity.'
+            )
+          })
+        } else {
+          finish(
+            approval.threadId,
+            approval.turnId,
+            'I left the workspace unchanged because shell access was denied. I can continue with read-only inspection or propose the command for you to run manually.'
+          )
+        }
+        return { resolved: true } as RpcMethodMap[M]['result']
+      }
+      default:
+        throw new Error(`Browser mock does not implement ${String(method)}`)
+    }
+  }
+
+  return {
+    rpc,
+    projects,
+    threads,
+    snapshots,
+    events,
+    statusListeners
+  }
+}
+
+export function createMockBridge(): CodyDesktopBridge {
+  const store = createMockStore()
+  const connectedStatus: ServerStatus = {
+    phase: 'connected',
+    detail: 'Browser preview · in-memory server'
+  }
+
+  return {
+    rpc: store.rpc,
+    copyText: async (text) => navigator.clipboard?.writeText(text),
+    pickDirectory: async () => '/Users/demo/Code/new-project',
+    getServerStatus: async () => connectedStatus,
+    onEvent: (listener) => {
+      store.events.add(listener)
+      return () => store.events.delete(listener)
+    },
+    onServerStatus: (listener) => {
+      store.statusListeners.add(listener)
+      return () => store.statusListeners.delete(listener)
+    },
+    onCommand: () => () => undefined,
+    windowAction: async () => undefined,
+    platform: navigator.userAgent.includes('Mac')
+      ? 'darwin'
+      : navigator.userAgent.includes('Win')
+        ? 'win32'
+        : 'linux'
+  }
+}
+
+let browserBridge: CodyDesktopBridge | undefined
+
+function createDisconnectedBridge(): CodyDesktopBridge {
+  const status: ServerStatus = {
+    phase: 'disconnected',
+    detail: 'The desktop preload bridge is unavailable.'
+  }
+  return {
+    rpc: async () => {
+      throw new Error(status.detail)
+    },
+    copyText: async () => {
+      throw new Error(status.detail)
+    },
+    pickDirectory: async () => null,
+    getServerStatus: async () => status,
+    onEvent: () => () => undefined,
+    onServerStatus: (listener) => {
+      listener(status)
+      return () => undefined
+    },
+    onCommand: () => () => undefined,
+    windowAction: async () => undefined,
+    platform: 'linux'
+  }
+}
+
+export function getCodyBridge(): CodyDesktopBridge {
+  if (window.cody) return window.cody
+  const isDevelopment = Boolean(
+    (import.meta as ImportMeta & { env?: Record<string, string | boolean | undefined> }).env?.DEV
+  )
+  browserBridge ??= isDevelopment ? createMockBridge() : createDisconnectedBridge()
+  return browserBridge
+}

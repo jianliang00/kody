@@ -381,7 +381,7 @@ impl AgentRuntime {
                 check_cancelled(&cancellation)?;
                 if call.name == "shell" && self.config.require_shell_approval {
                     let approved = self
-                        .request_tool_approval(&call, &cancellation, &emitter)
+                        .request_tool_approval(turn, &call, &cancellation, &emitter)
                         .await?;
                     if !approved {
                         let result = ToolResult::error(
@@ -433,18 +433,31 @@ impl AgentRuntime {
 
     async fn request_tool_approval(
         &self,
+        turn: &Turn,
         call: &ToolCall,
         cancellation: &CancellationToken,
         emitter: &TurnEmitter,
     ) -> Result<bool> {
         let approval_id = ApprovalId::new();
-        let receiver = self.approvals.register(approval_id).await?;
+        let reason = "shell commands run outside an OS filesystem sandbox".to_owned();
+        let receiver = self
+            .approvals
+            .register(PendingApproval {
+                approval_id,
+                thread_id: turn.thread_id,
+                turn_id: turn.id,
+                tool_call_id: call.id.clone(),
+                name: call.name.clone(),
+                arguments: call.arguments.clone(),
+                reason: reason.clone(),
+            })
+            .await?;
         emitter.emit(AgentEvent::ApprovalRequested {
             approval_id,
             tool_call_id: call.id.clone(),
             name: call.name.clone(),
             arguments: call.arguments.clone(),
-            reason: "shell commands run outside an OS filesystem sandbox".into(),
+            reason,
         });
         let decision = tokio::select! {
             biased;
@@ -512,19 +525,42 @@ impl AgentRuntime {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PendingApproval {
+    pub approval_id: ApprovalId,
+    pub thread_id: ThreadId,
+    pub turn_id: TurnId,
+    pub tool_call_id: String,
+    pub name: String,
+    pub arguments: Value,
+    pub reason: String,
+}
+
+struct PendingApprovalEntry {
+    approval: PendingApproval,
+    decision: oneshot::Sender<bool>,
+}
+
 #[derive(Clone, Default)]
 pub struct ApprovalBroker {
-    pending: Arc<Mutex<std::collections::HashMap<ApprovalId, oneshot::Sender<bool>>>>,
+    pending: Arc<Mutex<std::collections::HashMap<ApprovalId, PendingApprovalEntry>>>,
 }
 
 impl ApprovalBroker {
-    async fn register(&self, approval_id: ApprovalId) -> Result<oneshot::Receiver<bool>> {
+    async fn register(&self, approval: PendingApproval) -> Result<oneshot::Receiver<bool>> {
         let (sender, receiver) = oneshot::channel();
+        let approval_id = approval.approval_id;
         if self
             .pending
             .lock()
             .await
-            .insert(approval_id, sender)
+            .insert(
+                approval_id,
+                PendingApprovalEntry {
+                    approval,
+                    decision: sender,
+                },
+            )
             .is_some()
         {
             return Err(CodyError::Conflict(format!(
@@ -534,8 +570,20 @@ impl ApprovalBroker {
         Ok(receiver)
     }
 
+    /// Returns a snapshot of actionable approvals so a reconnecting client can
+    /// recover even when it missed the original live event.
+    pub async fn list(&self, thread_id: Option<ThreadId>) -> Vec<PendingApproval> {
+        self.pending
+            .lock()
+            .await
+            .values()
+            .filter(|entry| thread_id.is_none_or(|id| entry.approval.thread_id == id))
+            .map(|entry| entry.approval.clone())
+            .collect()
+    }
+
     pub async fn respond(&self, approval_id: ApprovalId, approved: bool) -> Result<()> {
-        let sender = self
+        let entry = self
             .pending
             .lock()
             .await
@@ -545,7 +593,7 @@ impl ApprovalBroker {
                     "approval {approval_id} does not exist or was already resolved"
                 ))
             })?;
-        sender.send(approved).map_err(|_| {
+        entry.decision.send(approved).map_err(|_| {
             CodyError::Conflict(format!("approval {approval_id} is no longer waiting"))
         })
     }

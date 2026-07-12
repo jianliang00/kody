@@ -2,7 +2,7 @@
 
 Cody 是一个从零实现的 Rust Coding Agent 核心框架。它把 Agent Loop、模型 Provider、工具执行、持久状态和客户端协议拆成独立边界，既可以嵌入 Rust 应用，也可以通过 JSON-RPC App Server 接入 CLI、桌面端、IDE 或 Web 客户端。
 
-当前实现对应这组数据模型：
+当前包含 Rust Agent Runtime、App Server，以及基于 Electron + React 的桌面客户端。实现对应这组数据模型：
 
 - `Thread`：一条持久、线性的完整对话流。
 - `Project`：用户导入或创建的代码资产，可以是普通目录或 Git 仓库。
@@ -16,7 +16,7 @@ Cody 是一个从零实现的 Rust Coding Agent 核心框架。它把 Agent Loop
 - 对象安全的 `ModelProvider`，内置 Echo、测试用 Scripted，以及 OpenAI-compatible Chat Completions Provider。
 - Provider Registry：同一进程可注册多个 Provider 实例，每次 Turn 独立选择 Provider 和模型。
 - `read_file`、`write_file`、`list_directory`、`shell` 工具及路径越界、符号链接逃逸、只读 Project 检查。
-- Shell 显式审批：默认每一次模型发起的 Shell 调用都通过事件等待客户端批准。
+- Shell 显式审批：默认每一次模型发起的 Shell 调用都等待客户端批准；Renderer 重连可通过 Thread 快照恢复待审批项。
 - Thread/Turn 原子状态迁移，阻止同一 Thread 并发 Turn 和 Turn 重复执行。
 - 引用解析与上下文预算；被引用对话作为低优先级 JSON 参考数据注入，不复制进当前 Thread。
 - 版本化 JSON 持久化，原子替换、启动校验及中断 Turn 恢复。
@@ -38,9 +38,14 @@ crates/
 └── cody-app-server/
     ├── rpc.rs          # JSON-RPC 方法
     └── server.rs       # HTTP / WebSocket、鉴权、Turn 管理
+apps/
+└── desktop/
+    ├── src/main/       # Electron 主进程与 App Server 生命周期
+    ├── src/preload/    # 最小权限 IPC Bridge
+    └── src/renderer/   # React 对话工作台
 ```
 
-更完整的设计说明见 [docs/architecture.md](docs/architecture.md)，协议见 [docs/app-server-protocol.md](docs/app-server-protocol.md)。
+更完整的设计说明见 [docs/architecture.md](docs/architecture.md)，协议见 [docs/app-server-protocol.md](docs/app-server-protocol.md)，桌面交互约束见 [apps/desktop/UI_SPEC.md](apps/desktop/UI_SPEC.md)。
 
 ## 快速开始
 
@@ -50,6 +55,15 @@ crates/
 cargo test --workspace
 cargo run -p cody-app-server
 ```
+
+桌面端开发：
+
+```bash
+npm install
+npm run desktop:dev
+```
+
+Electron 主进程会在随机 loopback 端口启动并认证 Rust App Server，Token 只保留在主进程；Renderer 只能通过白名单 IPC 调用 JSON-RPC。执行 `npm run desktop:package` 会先构建 release 版 Rust Server，再生成桌面安装产物。
 
 服务默认监听 `127.0.0.1:8765`。启动日志会输出本次服务的认证 Token；生产集成建议通过 `CODY_SERVER_TOKEN` 注入固定的高熵 Token。
 

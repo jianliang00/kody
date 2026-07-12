@@ -256,9 +256,10 @@ async fn shell_waits_for_an_explicit_approval_decision() {
         .unwrap();
     let mut events = engine.events().subscribe();
     let runtime = engine.runtime().clone();
+    let turn_id = turn.id;
     let execution = tokio::spawn(async move {
         runtime
-            .execute_turn(turn.id, CancellationToken::new())
+            .execute_turn(turn_id, CancellationToken::new())
             .await
     });
 
@@ -274,12 +275,23 @@ async fn shell_waits_for_an_explicit_approval_decision() {
     assert!(tokio::fs::metadata(workspace.root.join("approved.txt"))
         .await
         .is_err());
+    let pending = engine.runtime().approvals().list(Some(thread.id)).await;
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].approval_id, approval_id);
+    assert_eq!(pending[0].turn_id, turn_id);
+    assert_eq!(pending[0].name, "shell");
     engine
         .runtime()
         .approvals()
         .respond(approval_id, true)
         .await
         .unwrap();
+    assert!(engine
+        .runtime()
+        .approvals()
+        .list(Some(thread.id))
+        .await
+        .is_empty());
 
     assert_eq!(
         execution.await.unwrap().unwrap().status,

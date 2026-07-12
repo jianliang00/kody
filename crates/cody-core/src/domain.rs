@@ -102,7 +102,7 @@ pub struct Thread {
     pub status: ThreadStatus,
     /// References that are always available to the conversation. A project
     /// imported from `thread/create.working_directory` is recorded here.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub default_references: Vec<ContextReference>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
@@ -185,7 +185,7 @@ pub struct Message {
     pub turn_id: Option<TurnId>,
     pub role: MessageRole,
     pub parts: Vec<MessagePart>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub references: Vec<ContextReference>,
     pub created_at: DateTime<Utc>,
 }
