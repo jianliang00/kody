@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{future::pending, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -7,8 +7,9 @@ use cody_core::{
         FinishReason, ModelContent, ModelDeltaSink, ModelProvider, ModelRequest, ModelResponse,
         ModelRole, ScriptedProvider,
     },
-    AgentEvent, CodyEngine, ContextReference, EngineConfig, Message, MessageId, MessagePart,
-    MessageRole, Result, StartTurn, ThreadReferenceMode, ThreadStatus, TurnStatus,
+    AgentEvent, CodyEngine, ContextReference, EngineConfig, InMemoryStore, Message, MessageId,
+    MessagePart, MessageRole, Result, StartTurn, ThreadReferenceMode, ThreadStatus,
+    ThreadTitleGenerator, ThreadTitleRequest, TurnStatus, DEFAULT_THREAD_TITLE,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -21,6 +22,248 @@ async fn engine() -> (CodyEngine, TempDir) {
         ..EngineConfig::default()
     };
     (CodyEngine::new(config).await.unwrap(), state)
+}
+
+async fn wait_for_title(engine: &CodyEngine, thread_id: cody_core::ThreadId) -> String {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let title = engine.store().get_thread(thread_id).await.unwrap().title;
+            if title != DEFAULT_THREAD_TITLE {
+                return title;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("background title generation timed out")
+}
+
+#[tokio::test]
+async fn first_completed_echo_turn_generates_one_deterministic_title() {
+    let (engine, _state) = engine().await;
+    engine
+        .providers()
+        .register(Arc::new(cody_core::provider::EchoProvider::default()))
+        .unwrap();
+    let (thread, _, _) = engine
+        .create_thread(DEFAULT_THREAD_TITLE, None)
+        .await
+        .unwrap();
+
+    let first = engine
+        .runtime()
+        .prepare_turn(StartTurn {
+            thread_id: thread.id,
+            message: "## Implement OAuth callback handling!\nKeep existing sessions.".into(),
+            references: Vec::new(),
+            provider: "echo".into(),
+            model: None,
+            temperature: None,
+            max_output_tokens: None,
+        })
+        .await
+        .unwrap();
+    engine
+        .runtime()
+        .execute_turn(first.id, CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        wait_for_title(&engine, thread.id).await,
+        "Implement OAuth callback handling"
+    );
+
+    let second = engine
+        .runtime()
+        .prepare_turn(StartTurn {
+            thread_id: thread.id,
+            message: "Replace the title with something else".into(),
+            references: Vec::new(),
+            provider: "echo".into(),
+            model: None,
+            temperature: None,
+            max_output_tokens: None,
+        })
+        .await
+        .unwrap();
+    engine
+        .runtime()
+        .execute_turn(second.id, CancellationToken::new())
+        .await
+        .unwrap();
+    tokio::task::yield_now().await;
+
+    assert_eq!(
+        engine.store().get_thread(thread.id).await.unwrap().title,
+        "Implement OAuth callback handling"
+    );
+}
+
+#[tokio::test]
+async fn an_explicit_thread_title_is_never_overwritten() {
+    let (engine, _state) = engine().await;
+    engine
+        .providers()
+        .register(Arc::new(cody_core::provider::EchoProvider::default()))
+        .unwrap();
+    let (thread, _, _) = engine
+        .create_thread("User-chosen architecture title", None)
+        .await
+        .unwrap();
+    let turn = engine
+        .runtime()
+        .prepare_turn(StartTurn {
+            thread_id: thread.id,
+            message: "This message would otherwise become a title".into(),
+            references: Vec::new(),
+            provider: "echo".into(),
+            model: None,
+            temperature: None,
+            max_output_tokens: None,
+        })
+        .await
+        .unwrap();
+    engine
+        .runtime()
+        .execute_turn(turn.id, CancellationToken::new())
+        .await
+        .unwrap();
+    tokio::task::yield_now().await;
+
+    assert_eq!(
+        engine.store().get_thread(thread.id).await.unwrap().title,
+        "User-chosen architecture title"
+    );
+}
+
+#[derive(Debug)]
+struct BlockingTitleGenerator {
+    started: tokio::sync::Semaphore,
+}
+
+impl Default for BlockingTitleGenerator {
+    fn default() -> Self {
+        Self {
+            started: tokio::sync::Semaphore::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl ThreadTitleGenerator for BlockingTitleGenerator {
+    async fn generate(&self, _request: &ThreadTitleRequest) -> Result<Option<String>> {
+        self.started.add_permits(1);
+        pending().await
+    }
+}
+
+#[tokio::test]
+async fn provider_backed_title_generation_never_blocks_turn_completion() {
+    let state = TempDir::new().unwrap();
+    let config = EngineConfig {
+        state_root: state.path().join("state"),
+        ..EngineConfig::default()
+    };
+    let generator = Arc::new(BlockingTitleGenerator::default());
+    let engine = CodyEngine::with_store_and_title_generator(
+        config,
+        Arc::new(InMemoryStore::default()),
+        generator.clone(),
+    )
+    .await
+    .unwrap();
+    engine
+        .providers()
+        .register(Arc::new(cody_core::provider::EchoProvider::default()))
+        .unwrap();
+    let (thread, _, _) = engine
+        .create_thread(DEFAULT_THREAD_TITLE, None)
+        .await
+        .unwrap();
+    let turn = engine
+        .runtime()
+        .prepare_turn(StartTurn {
+            thread_id: thread.id,
+            message: "Complete without waiting for a title model".into(),
+            references: Vec::new(),
+            provider: "echo".into(),
+            model: None,
+            temperature: None,
+            max_output_tokens: None,
+        })
+        .await
+        .unwrap();
+
+    let completed = tokio::time::timeout(
+        Duration::from_millis(250),
+        engine
+            .runtime()
+            .execute_turn(turn.id, CancellationToken::new()),
+    )
+    .await
+    .expect("turn completion waited for title generation")
+    .unwrap();
+    assert_eq!(completed.status, TurnStatus::Completed);
+    generator.started.acquire().await.unwrap().forget();
+    assert_eq!(
+        engine.store().get_thread(thread.id).await.unwrap().title,
+        DEFAULT_THREAD_TITLE
+    );
+}
+
+#[tokio::test]
+async fn terminal_event_is_emitted_only_after_thread_is_idle() {
+    let (engine, _state) = engine().await;
+    engine
+        .providers()
+        .register(Arc::new(cody_core::provider::EchoProvider::default()))
+        .unwrap();
+    let (thread, _, _) = engine.create_thread("Ordering test", None).await.unwrap();
+    let turn = engine
+        .runtime()
+        .prepare_turn(StartTurn {
+            thread_id: thread.id,
+            message: "Complete this turn".into(),
+            references: Vec::new(),
+            provider: "echo".into(),
+            model: None,
+            temperature: None,
+            max_output_tokens: None,
+        })
+        .await
+        .unwrap();
+    let mut events = engine.events().subscribe();
+    let runtime = engine.runtime().clone();
+    let turn_id = turn.id;
+    let execution = tokio::spawn(async move {
+        runtime
+            .execute_turn(turn_id, CancellationToken::new())
+            .await
+    });
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let envelope = events.recv().await.unwrap();
+            if matches!(envelope.event, AgentEvent::TurnCompleted { .. }) {
+                assert_eq!(
+                    engine.store().get_thread(thread.id).await.unwrap().status,
+                    ThreadStatus::Idle
+                );
+                assert_eq!(
+                    engine.store().get_turn(turn.id).await.unwrap().status,
+                    TurnStatus::Completed
+                );
+                break;
+            }
+        }
+    })
+    .await
+    .expect("terminal event was not emitted");
+    assert_eq!(
+        execution.await.unwrap().unwrap().status,
+        TurnStatus::Completed
+    );
 }
 
 #[tokio::test]

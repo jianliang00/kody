@@ -7,9 +7,11 @@ export type DesktopCommand =
   | 'toggle-rail'
   | 'toggle-inspector'
 
+export type DirectoryPickerPurpose = 'project' | 'working-directory'
+
 export interface CodyDesktopBridge {
   rpc<M extends RpcMethod>(method: M, params: RpcMethodMap[M]['params']): Promise<RpcMethodMap[M]['result']>
-  pickDirectory(): Promise<string | null>
+  pickDirectory(purpose?: DirectoryPickerPurpose): Promise<string | null>
   copyText(text: string): Promise<void>
   getServerStatus(): Promise<ServerStatus>
   onEvent(listener: (event: EventEnvelope) => void): () => void

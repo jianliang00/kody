@@ -1,4 +1,4 @@
-import { AtSign, Send, Square } from 'lucide-react'
+import { AtSign, FolderOpen, Send, Square, X } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import type { ContextReference, Project, Thread } from '@shared/protocol'
 import {
@@ -15,16 +15,22 @@ import { MentionPalette } from './MentionPalette'
 import { ReferenceChips } from './ReferenceChips'
 
 interface ComposerProps {
-  currentThreadId: string
+  currentThreadId?: string
   threads: Thread[]
   projects: Project[]
   references: ContextReference[]
   providers: string[]
   provider: string
   running: boolean
+  message: string
+  draft?: boolean
+  workingDirectory?: string
   unavailable?: boolean
   onReferencesChange: (references: ContextReference[]) => void
   onProviderChange: (provider: string) => void
+  onMessageChange: (message: string) => void
+  onPickWorkingDirectory?: () => Promise<void>
+  onClearWorkingDirectory?: () => void
   onSend: (message: string, references: ContextReference[]) => Promise<boolean>
   onCancel: () => Promise<void>
 }
@@ -37,13 +43,18 @@ export function Composer({
   providers,
   provider,
   running,
+  message,
+  draft = false,
+  workingDirectory,
   unavailable = false,
   onReferencesChange,
   onProviderChange,
+  onMessageChange,
+  onPickWorkingDirectory,
+  onClearWorkingDirectory,
   onSend,
   onCancel
 }: ComposerProps) {
-  const [message, setMessage] = useState('')
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [manualPalette, setManualPalette] = useState(false)
   const [paletteQuery, setPaletteQuery] = useState('')
@@ -79,7 +90,7 @@ export function Composer({
 
   const selectCandidate = (candidate: ReferenceCandidate): void => {
     onReferencesChange(upsertReference(references, candidate.reference))
-    if (mention) setMessage((current) => removeMention(current, mention))
+    if (mention) onMessageChange(removeMention(message, mention))
     closePalette('composer')
     setValidationError('')
   }
@@ -99,7 +110,7 @@ export function Composer({
   }
 
   const updateMessage = (value: string, cursor: number): void => {
-    setMessage(value)
+    onMessageChange(value)
     setValidationError('')
     const nextMention = findMention(value, cursor)
     if (nextMention) {
@@ -128,7 +139,7 @@ export function Composer({
     try {
       const sent = await onSend(trimmed, references)
       if (sent) {
-        setMessage('')
+        onMessageChange('')
         onReferencesChange([])
         closePalette('composer')
       }
@@ -263,8 +274,33 @@ export function Composer({
             <AtSign aria-hidden="true" size={16} />
             <span>Add context</span>
           </button>
+          {draft && workingDirectory ? (
+            <div className="working-directory-chip" title={workingDirectory}>
+              <FolderOpen aria-hidden="true" size={15} />
+              <span>{workingDirectory}</span>
+              <button
+                type="button"
+                onClick={onClearWorkingDirectory}
+                aria-label="Clear working directory"
+              >
+                <X aria-hidden="true" size={13} />
+              </button>
+            </div>
+          ) : draft ? (
+            <button
+              className="context-button"
+              type="button"
+              disabled={unavailable || running}
+              onClick={() => void onPickWorkingDirectory?.()}
+            >
+              <FolderOpen aria-hidden="true" size={16} />
+              <span>Working directory</span>
+            </button>
+          ) : null}
           <span id="composer-hint" className="composer__hint">
-            References attach here and remain active in later Thread context · <kbd>Enter</kbd> send
+            {draft
+              ? <>Your first message creates the Thread · <kbd>Enter</kbd> send</>
+              : <>References attach here and remain active later · <kbd>Enter</kbd> send</>}
           </span>
         </div>
         {running ? (

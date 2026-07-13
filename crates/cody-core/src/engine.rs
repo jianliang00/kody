@@ -17,6 +17,7 @@ use crate::{
     provider::ProviderRegistry,
     runtime::{AgentRuntime, AgentRuntimeConfig},
     store::{InMemoryStore, JsonFileStore, StateStore},
+    title::{ThreadTitleGenerator, DEFAULT_THREAD_TITLE},
     tools::ToolRegistry,
 };
 
@@ -113,19 +114,49 @@ impl CodyEngine {
     }
 
     pub async fn with_store(config: EngineConfig, store: Arc<dyn StateStore>) -> Result<Self> {
+        Self::build(config, store, None).await
+    }
+
+    /// Builds an engine with a provider-backed or application-specific title
+    /// generator. The runtime preserves its deterministic local fallback and
+    /// runs title enrichment outside the turn completion path.
+    pub async fn with_store_and_title_generator(
+        config: EngineConfig,
+        store: Arc<dyn StateStore>,
+        title_generator: Arc<dyn ThreadTitleGenerator>,
+    ) -> Result<Self> {
+        Self::build(config, store, Some(title_generator)).await
+    }
+
+    async fn build(
+        config: EngineConfig,
+        store: Arc<dyn StateStore>,
+        title_generator: Option<Arc<dyn ThreadTitleGenerator>>,
+    ) -> Result<Self> {
         tokio::fs::create_dir_all(config.state_root.join("workspaces")).await?;
         let providers = Arc::new(ProviderRegistry::default());
         let tools = Arc::new(ToolRegistry::with_builtins()?);
         let events = EventHub::new(config.event_buffer);
         let context_builder = Arc::new(DefaultContextBuilder::default());
-        let runtime = Arc::new(AgentRuntime::new(
-            store.clone(),
-            providers.clone(),
-            tools.clone(),
-            events.clone(),
-            context_builder,
-            config.agent.clone(),
-        ));
+        let runtime = Arc::new(match title_generator {
+            Some(title_generator) => AgentRuntime::new_with_title_generator(
+                store.clone(),
+                providers.clone(),
+                tools.clone(),
+                events.clone(),
+                context_builder,
+                title_generator,
+                config.agent.clone(),
+            ),
+            None => AgentRuntime::new(
+                store.clone(),
+                providers.clone(),
+                tools.clone(),
+                events.clone(),
+                context_builder,
+                config.agent.clone(),
+            ),
+        });
 
         Ok(Self {
             config,
@@ -248,6 +279,12 @@ impl CodyEngine {
         title: impl Into<String>,
         working_directory: Option<PathBuf>,
     ) -> Result<(Thread, Workspace, Option<Project>)> {
+        let title = title.into();
+        let title = if title.trim().is_empty() {
+            DEFAULT_THREAD_TITLE.to_owned()
+        } else {
+            title
+        };
         let imported_project = match working_directory {
             Some(path) => Some(self.import_project(path, None).await?),
             None => None,
@@ -266,7 +303,7 @@ impl CodyEngine {
         let now = Utc::now();
         let thread = Thread {
             id: thread_id,
-            title: title.into(),
+            title,
             workspace_id,
             status: ThreadStatus::Idle,
             default_references: imported_project

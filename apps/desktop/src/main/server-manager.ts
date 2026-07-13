@@ -105,6 +105,13 @@ export class CodyServerManager {
   ): Promise<RpcMethodMap[M]['result']> {
     await this.start()
     const result = await this.sendRpc<RpcMethodMap[M]['result']>(method, params)
+    if (method === 'thread/create-and-start') {
+      const threadId = (result as { thread?: { id?: unknown } }).thread?.id
+      if (typeof threadId === 'string') {
+        this.subscriptions.add(threadId)
+        await this.sendRpc('thread/subscribe', { thread_id: threadId })
+      }
+    }
     if (method === 'thread/get' || method === 'turn/start') {
       const threadId = (params as { thread_id?: unknown }).thread_id
       if (typeof threadId === 'string') this.subscriptions.add(threadId)

@@ -10,6 +10,7 @@ const RPC_METHODS = new Set<RpcMethod>([
   'project/import',
   'thread/list',
   'thread/create',
+  'thread/create-and-start',
   'thread/get',
   'thread/reference/add',
   'turn/start',
@@ -42,6 +43,22 @@ export function validateRpcInvocation(method: unknown, params: unknown): asserts
       requireKeys(params, ['title'], ['working_directory'])
       requireString(params.title, 'title', 512)
       requireOptionalString(params.working_directory, 'working_directory', 32_768)
+      break
+    case 'thread/create-and-start':
+      requireKeys(
+        params,
+        ['client_request_id', 'message', 'references', 'provider'],
+        ['model', 'working_directory']
+      )
+      requireId(params.client_request_id, 'client_request_id')
+      requireString(params.message, 'message', 128_000)
+      requireString(params.provider, 'provider', 256)
+      requireOptionalString(params.model, 'model', 256)
+      requireOptionalString(params.working_directory, 'working_directory', 32_768)
+      if (!Array.isArray(params.references) || params.references.length > 128) {
+        throw new Error('Invalid Turn references')
+      }
+      if (!params.references.every(isContextReference)) throw new Error('Invalid Turn context reference')
       break
     case 'thread/get':
       requireKeys(params, ['thread_id'])

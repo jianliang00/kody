@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
 };
 
@@ -15,7 +15,8 @@ use axum::{
     Json, Router,
 };
 use cody_core::{
-    AgentRuntime, CodyEngine, EventId, Result as CodyResult, StartTurn, ThreadId, Turn, TurnId,
+    AgentRuntime, CodyEngine, EventId, ProjectId, Result as CodyResult, StartTurn, ThreadId, Turn,
+    TurnId, WorkspaceId,
 };
 use futures_util::{FutureExt, SinkExt, StreamExt};
 use serde_json::{json, Value};
@@ -25,10 +26,67 @@ use tracing::{debug, warn};
 
 use crate::rpc::{RpcDispatcher, RpcError, RpcRequest, RpcResponse};
 
+const CREATE_REQUEST_CACHE_CAPACITY: usize = 1_024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CreateRequestRecord {
+    pub fingerprint: String,
+    pub thread_id: ThreadId,
+    pub workspace_id: WorkspaceId,
+    pub turn_id: TurnId,
+    pub project_id: Option<ProjectId>,
+}
+
+/// Process-local idempotency window. Order is tracked independently from the
+/// hash table so capacity eviction is deterministic FIFO, not hash iteration
+/// order.
+#[derive(Debug)]
+pub(crate) struct CreateRequestCache {
+    records: HashMap<String, CreateRequestRecord>,
+    insertion_order: VecDeque<String>,
+    capacity: usize,
+}
+
+impl Default for CreateRequestCache {
+    fn default() -> Self {
+        Self::with_capacity(CREATE_REQUEST_CACHE_CAPACITY)
+    }
+}
+
+impl CreateRequestCache {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            records: HashMap::new(),
+            insertion_order: VecDeque::new(),
+            capacity: capacity.max(1),
+        }
+    }
+
+    pub fn get(&self, request_id: &str) -> Option<&CreateRequestRecord> {
+        self.records.get(request_id)
+    }
+
+    pub fn insert(&mut self, request_id: String, record: CreateRequestRecord) {
+        if let Some(existing) = self.records.get_mut(&request_id) {
+            *existing = record;
+            return;
+        }
+        while self.records.len() >= self.capacity {
+            let Some(oldest) = self.insertion_order.pop_front() else {
+                break;
+            };
+            self.records.remove(&oldest);
+        }
+        self.insertion_order.push_back(request_id.clone());
+        self.records.insert(request_id, record);
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub engine: Arc<CodyEngine>,
     pub turns: TurnManager,
+    pub(crate) create_requests: Arc<Mutex<CreateRequestCache>>,
     auth_token: Arc<str>,
     allowed_origins: Arc<HashSet<String>>,
 }
@@ -62,6 +120,7 @@ impl AppState {
         Self {
             engine,
             turns: TurnManager::default(),
+            create_requests: Arc::new(Mutex::new(CreateRequestCache::default())),
             auth_token: Arc::from(auth_token.into()),
             allowed_origins: Arc::new(allowed_origins),
         }
@@ -79,15 +138,32 @@ pub struct TurnManager {
 
 impl TurnManager {
     pub async fn start(&self, runtime: Arc<AgentRuntime>, request: StartTurn) -> CodyResult<Turn> {
+        let (turn, cancellation) = self.prepare(runtime.clone(), request).await?;
+        self.execute_prepared(runtime, turn.id, cancellation);
+        Ok(turn)
+    }
+
+    pub async fn prepare(
+        &self,
+        runtime: Arc<AgentRuntime>,
+        request: StartTurn,
+    ) -> CodyResult<(Turn, CancellationToken)> {
         let turn = runtime.prepare_turn(request).await?;
         let cancellation = CancellationToken::new();
         self.active
             .lock()
             .await
             .insert(turn.id, cancellation.clone());
+        Ok((turn, cancellation))
+    }
 
+    pub fn execute_prepared(
+        &self,
+        runtime: Arc<AgentRuntime>,
+        turn_id: TurnId,
+        cancellation: CancellationToken,
+    ) {
         let active = self.active.clone();
-        let turn_id = turn.id;
         tokio::spawn(async move {
             let execution =
                 std::panic::AssertUnwindSafe(runtime.execute_turn(turn_id, cancellation))
@@ -100,7 +176,6 @@ impl TurnManager {
             }
             active.lock().await.remove(&turn_id);
         });
-        Ok(turn)
     }
 
     pub async fn cancel(&self, turn_id: TurnId) -> bool {
@@ -320,6 +395,42 @@ async fn handle_ws_request(
     }
     if matches!(
         request.method.as_str(),
+        "thread/create-and-start" | "thread.create-and-start"
+    ) {
+        let id = request.id.clone();
+        let result = dispatcher.create_and_prepare_thread(request.params).await;
+        let result = match result {
+            Ok((value, prepared)) => {
+                let thread_id = value
+                    .get("thread")
+                    .and_then(|thread| thread.get("id"))
+                    .cloned()
+                    .and_then(|value| serde_json::from_value::<ThreadId>(value).ok())
+                    .ok_or_else(|| RpcError::invalid_params("created Thread response has no id"));
+                match thread_id {
+                    Ok(thread_id) => {
+                        subscriptions.insert(thread_id);
+                        if let Some((turn_id, cancellation)) = prepared {
+                            state.turns.execute_prepared(
+                                state.engine.runtime().clone(),
+                                turn_id,
+                                cancellation,
+                            );
+                        }
+                        Ok(value)
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            Err(error) => Err(error),
+        };
+        return id.map(|id| match result {
+            Ok(value) => RpcResponse::success(id, value),
+            Err(error) => RpcResponse::error(id, error),
+        });
+    }
+    if matches!(
+        request.method.as_str(),
         "thread/subscribe" | "thread.subscribe"
     ) {
         let id = request.id.clone();
@@ -394,4 +505,34 @@ where
         .send(WsMessage::Text(text.into()))
         .await
         .map_err(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(fingerprint: &str) -> CreateRequestRecord {
+        CreateRequestRecord {
+            fingerprint: fingerprint.into(),
+            thread_id: ThreadId::new(),
+            workspace_id: WorkspaceId::new(),
+            turn_id: TurnId::new(),
+            project_id: None,
+        }
+    }
+
+    #[test]
+    fn create_request_cache_evicts_in_insertion_order() {
+        let mut cache = CreateRequestCache::with_capacity(2);
+        cache.insert("first".into(), record("one"));
+        cache.insert("second".into(), record("two"));
+
+        // Reads do not change insertion order.
+        assert!(cache.get("first").is_some());
+        cache.insert("third".into(), record("three"));
+
+        assert!(cache.get("first").is_none());
+        assert!(cache.get("second").is_some());
+        assert!(cache.get("third").is_some());
+    }
 }

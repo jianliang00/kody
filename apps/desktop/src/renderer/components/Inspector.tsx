@@ -51,6 +51,8 @@ function eventCopy(event: EventEnvelope['event']): { label: string; detail?: str
       }
     case 'file_changed':
       return { label: 'File changed', detail: event.path, kind: 'file' }
+    case 'thread_updated':
+      return { label: 'Thread named', detail: event.title, kind: 'turn' }
     case 'turn_completed':
       return { label: 'Turn completed', kind: 'turn' }
     case 'turn_failed':

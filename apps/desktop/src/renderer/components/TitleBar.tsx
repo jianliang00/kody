@@ -17,6 +17,7 @@ interface TitleBarProps {
   platform: NodeJS.Platform
   darkTheme: boolean
   railCollapsed: boolean
+  showInspector: boolean
   onOpenRail: () => void
   onOpenInspector: () => void
   onRetry: () => void
@@ -30,6 +31,7 @@ export function TitleBar({
   platform,
   darkTheme,
   railCollapsed,
+  showInspector,
   onOpenRail,
   onOpenInspector,
   onRetry,
@@ -50,14 +52,14 @@ export function TitleBar({
       </div>
 
       <div className="titlebar__identity">
-        <h1>{thread?.title || 'Cody'}</h1>
+        <h1>{thread?.title || 'New conversation'}</h1>
         {thread ? (
           <span className={`thread-badge thread-badge--${thread.status}`}>
             <span aria-hidden="true" />
             {thread.status === 'running' ? 'Working' : thread.status}
           </span>
         ) : (
-          <span>Durable conversations · composable context</span>
+          <span>Thread begins with your first message</span>
         )}
       </div>
 
@@ -82,9 +84,11 @@ export function TitleBar({
         <button className="icon-button" type="button" onClick={onToggleTheme} aria-label={`Use ${darkTheme ? 'light' : 'dark'} theme`}>
           {darkTheme ? <Sun aria-hidden="true" size={17} /> : <Moon aria-hidden="true" size={17} />}
         </button>
-        <button className="icon-button inspector-trigger" type="button" onClick={onOpenInspector} aria-label="Open context inspector">
-          <PanelRightOpen aria-hidden="true" size={17} />
-        </button>
+        {showInspector ? (
+          <button className="icon-button inspector-trigger" type="button" onClick={onOpenInspector} aria-label="Open context inspector">
+            <PanelRightOpen aria-hidden="true" size={17} />
+          </button>
+        ) : null}
         {platform !== 'darwin' ? (
           <div className="window-controls" aria-label="Window controls">
             <button type="button" onClick={() => onWindowAction('minimize')} aria-label="Minimize window"><Minus aria-hidden="true" size={14} /></button>

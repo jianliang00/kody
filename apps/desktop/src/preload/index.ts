@@ -1,14 +1,14 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
-import type { CodyDesktopBridge, DesktopCommand } from '../shared/bridge'
+import type { CodyDesktopBridge, DesktopCommand, DirectoryPickerPurpose } from '../shared/bridge'
 import type { EventEnvelope, RpcMethod, RpcMethodMap, ServerStatus } from '../shared/protocol'
 
 const bridge: CodyDesktopBridge = Object.freeze({
   rpc<M extends RpcMethod>(method: M, params: RpcMethodMap[M]['params']) {
     return ipcRenderer.invoke('cody:rpc', method, params) as Promise<RpcMethodMap[M]['result']>
   },
-  pickDirectory() {
-    return ipcRenderer.invoke('cody:pick-directory') as Promise<string | null>
+  pickDirectory(purpose?: DirectoryPickerPurpose) {
+    return ipcRenderer.invoke('cody:pick-directory', purpose) as Promise<string | null>
   },
   copyText(text: string) {
     return ipcRenderer.invoke('cody:copy-text', text) as Promise<void>

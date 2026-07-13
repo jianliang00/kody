@@ -20,18 +20,24 @@ export function registerIpcHandlers(options: IpcOptions): void {
     )
   })
 
-  ipcMain.handle('cody:pick-directory', async (event) => {
+  ipcMain.handle('cody:pick-directory', async (event, purpose: unknown) => {
     assertTrustedSender(event, options)
+    if (purpose !== undefined && purpose !== 'project' && purpose !== 'working-directory') {
+      throw new Error('Unsupported directory picker purpose')
+    }
     const owner = options.getWindow()
+    const workingDirectory = purpose === 'working-directory'
+    const title = workingDirectory ? 'Choose a working directory' : 'Add a Project directory'
+    const buttonLabel = workingDirectory ? 'Use Directory' : 'Add Project'
     const result = owner
       ? await dialog.showOpenDialog(owner, {
-          title: 'Choose a project directory',
-          buttonLabel: 'Choose Directory',
+          title,
+          buttonLabel,
           properties: ['openDirectory', 'createDirectory']
         })
       : await dialog.showOpenDialog({
-          title: 'Choose a project directory',
-          buttonLabel: 'Choose Directory',
+          title,
+          buttonLabel,
           properties: ['openDirectory', 'createDirectory']
         })
     return result.canceled ? null : result.filePaths[0] ?? null

@@ -1,13 +1,10 @@
 import {
   AlertTriangle,
-  FolderPlus,
   LoaderCircle,
-  MessageCirclePlus,
-  PanelLeftOpen,
   RefreshCcw,
   WifiOff
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CodyDesktopBridge } from '@shared/bridge'
 import type {
   ChatMessage,
@@ -22,8 +19,9 @@ import type {
 import { AssetRail } from './components/AssetRail'
 import { Composer } from './components/Composer'
 import { Conversation } from './components/Conversation'
-import { CreateThreadDialog } from './components/CreateThreadDialog'
+import { DraftConversation } from './components/DraftConversation'
 import { Inspector } from './components/Inspector'
+import { ProjectShelf } from './components/ProjectShelf'
 import { TitleBar } from './components/TitleBar'
 import { getCodyBridge } from './lib/mockBridge'
 import { referenceKey, upsertReference } from './lib/references'
@@ -93,6 +91,13 @@ function optimisticMessage(
   }
 }
 
+interface ComposerDraftState {
+  message: string
+  references: ContextReference[]
+}
+
+const EMPTY_COMPOSER_DRAFT: ComposerDraftState = { message: '', references: [] }
+
 export function App() {
   const bridge = useMemo(() => getCodyBridge(), [])
   const [status, setStatus] = useState<ServerStatus>({ phase: 'starting', detail: 'Starting local server…' })
@@ -102,7 +107,7 @@ export function App() {
   const [provider, setProvider] = useState('')
   const [activeThreadId, setActiveThreadId] = useState<string>()
   const [snapshot, setSnapshot] = useState<ThreadSnapshot>()
-  const [draftReferences, setDraftReferences] = useState<ContextReference[]>([])
+  const [composerDrafts, setComposerDrafts] = useState<Record<string, ComposerDraftState>>({})
   const [eventsByThread, setEventsByThread] = useState<Record<string, EventEnvelope[]>>({})
   const [runningTurns, setRunningTurns] = useState<Record<string, string>>({})
   const [resolvingApprovals, setResolvingApprovals] = useState<Set<string>>(new Set())
@@ -110,8 +115,8 @@ export function App() {
   const [bootstrapping, setBootstrapping] = useState(true)
   const [appError, setAppError] = useState('')
   const [announcement, setAnnouncement] = useState('Starting Cody')
-  const [createOpen, setCreateOpen] = useState(false)
-  const [createDirectory, setCreateDirectory] = useState<string>()
+  const [draftId, setDraftId] = useState(() => crypto.randomUUID())
+  const [draftWorkingDirectory, setDraftWorkingDirectory] = useState<string>()
   const [railOpen, setRailOpen] = useState(false)
   const [railCollapsed, setRailCollapsed] = useState(
     () => window.localStorage.getItem('cody.railCollapsed') === 'true'
@@ -123,12 +128,15 @@ export function App() {
   const [darkTheme, setDarkTheme] = useState(initialTheme)
 
   const activeThreadRef = useRef<string | undefined>(undefined)
+  const draftIdRef = useRef(draftId)
   const loadRequestRef = useRef(0)
   const lastSequenceRef = useRef(new Map<string, number>())
   const startTurnRef = useRef(false)
   const cancelTurnRef = useRef(false)
   const approvalRef = useRef(new Set<string>())
   const statusRef = useRef<ServerStatus['phase']>('starting')
+  const hasHydratedRef = useRef(false)
+  const preferDraftRef = useRef(false)
 
   const applySnapshot = useCallback((nextSnapshot: ThreadSnapshot): void => {
     if (activeThreadRef.current !== nextSnapshot.thread.id) return
@@ -160,9 +168,11 @@ export function App() {
 
   const selectThread = useCallback(async (threadId: string): Promise<void> => {
     const request = ++loadRequestRef.current
+    preferDraftRef.current = false
     activeThreadRef.current = threadId
     setActiveThreadId(threadId)
-    setDraftReferences([])
+    setDraftWorkingDirectory(undefined)
+    setSnapshot(undefined)
     setLoadingThread(true)
     setAppError('')
     window.localStorage.setItem('cody.activeThreadId', threadId)
@@ -180,8 +190,8 @@ export function App() {
     }
   }, [applySnapshot, bridge])
 
-  const bootstrap = useCallback(async (): Promise<void> => {
-    setBootstrapping(true)
+  const bootstrap = useCallback(async (preserveNavigation = false): Promise<void> => {
+    if (!preserveNavigation) setBootstrapping(true)
     setAppError('')
     try {
       const nextStatus = await bridge.getServerStatus()
@@ -206,18 +216,35 @@ export function App() {
           : providerResult.providers[0] ?? ''
       )
 
-      const persistedId = window.localStorage.getItem('cody.activeThreadId') ?? undefined
-      const preferredId = activeThreadRef.current && threadResult.threads.some((thread) => thread.id === activeThreadRef.current)
-        ? activeThreadRef.current
-        : threadResult.threads.some((thread) => thread.id === persistedId)
-          ? persistedId
-          : threadResult.threads[0]?.id
-      if (preferredId) await selectThread(preferredId)
-      else {
-        activeThreadRef.current = undefined
-        setActiveThreadId(undefined)
-        setSnapshot(undefined)
+      const activeId = activeThreadRef.current
+      if (preserveNavigation) {
+        if (activeId && threadResult.threads.some((thread) => thread.id === activeId)) {
+          const nextSnapshot = await bridge.rpc('thread/get', { thread_id: activeId })
+          applySnapshot(nextSnapshot)
+        }
+      } else {
+        if (preferDraftRef.current) {
+          activeThreadRef.current = undefined
+          setActiveThreadId(undefined)
+          setSnapshot(undefined)
+          hasHydratedRef.current = true
+          setAnnouncement('Cody is connected and ready')
+          return
+        }
+        const persistedId = window.localStorage.getItem('cody.activeThreadId') ?? undefined
+        const preferredId = activeId && threadResult.threads.some((thread) => thread.id === activeId)
+          ? activeId
+          : threadResult.threads.some((thread) => thread.id === persistedId)
+            ? persistedId
+            : threadResult.threads[0]?.id
+        if (preferredId) await selectThread(preferredId)
+        else {
+          activeThreadRef.current = undefined
+          setActiveThreadId(undefined)
+          setSnapshot(undefined)
+        }
       }
+      hasHydratedRef.current = true
       setAnnouncement('Cody is connected and ready')
     } catch (error) {
       const detail = error instanceof Error ? error.message : 'Cody could not connect to the local server.'
@@ -225,14 +252,29 @@ export function App() {
       setStatus({ phase: 'error', detail })
       setAppError(detail)
     } finally {
-      setBootstrapping(false)
+      if (!preserveNavigation) setBootstrapping(false)
     }
-  }, [bridge, selectThread])
+  }, [applySnapshot, bridge, selectThread])
 
   useEffect(() => {
     document.documentElement.dataset.theme = darkTheme ? 'dark' : 'light'
     window.localStorage.setItem('cody.theme', darkTheme ? 'dark' : 'light')
   }, [darkTheme])
+
+  useLayoutEffect(() => {
+    const dock = document.querySelector<HTMLElement>('.composer-dock')
+    if (!dock || typeof ResizeObserver === 'undefined') return
+    const updateOffset = (): void => {
+      document.documentElement.style.setProperty('--composer-dock-height', `${dock.getBoundingClientRect().height}px`)
+    }
+    const observer = new ResizeObserver(updateOffset)
+    observer.observe(dock)
+    updateOffset()
+    return () => {
+      observer.disconnect()
+      document.documentElement.style.removeProperty('--composer-dock-height')
+    }
+  }, [activeThreadId, bootstrapping, draftId, snapshot?.thread.id, status.phase])
 
   useEffect(() => {
     window.localStorage.setItem('cody.railCollapsed', String(railCollapsed))
@@ -304,6 +346,15 @@ export function App() {
         void refreshThread(envelope.thread_id)
       } else if (envelope.event.type === 'file_changed') {
         setAnnouncement(`Changed ${envelope.event.path}`)
+      } else if (envelope.event.type === 'thread_updated') {
+        const title = envelope.event.title
+        setThreads((current) => current.map((thread) =>
+          thread.id === envelope.thread_id ? { ...thread, title } : thread
+        ))
+        setSnapshot((current) => current?.thread.id === envelope.thread_id
+          ? { ...current, thread: { ...current.thread, title } }
+          : current)
+        setAnnouncement(`Thread named ${title}`)
       } else if (TERMINAL_EVENTS.has(envelope.event.type)) {
         setRunningTurns((current) => {
           const next = { ...current }
@@ -331,7 +382,7 @@ export function App() {
             ? 'Live activity was interrupted. Refreshing durable history.'
             : 'Server reconnected. Refreshing durable history.'
         )
-        void bootstrap()
+        void bootstrap(hasHydratedRef.current)
       } else if (nextStatus.phase !== 'connected') {
         setAnnouncement(`Server ${nextStatus.phase}`)
       }
@@ -354,42 +405,49 @@ export function App() {
     : []
   const isRunning = Boolean(activeRunningTurnId)
 
-  const handleCreateThread = async (title: string, directory?: string): Promise<boolean> => {
-    try {
-      const created = await bridge.rpc('thread/create', {
-        title,
-        working_directory: directory
-      })
-      if (created.imported_project) {
-        setProjects((current) => [
-          created.imported_project as Project,
-          ...current.filter((project) => project.id !== created.imported_project?.id)
-        ])
-      }
-      setThreads((current) => [created.thread, ...current.filter((thread) => thread.id !== created.thread.id)])
-      activeThreadRef.current = created.thread.id
-      setActiveThreadId(created.thread.id)
-      setSnapshot({
-        thread: created.thread,
-        workspace: created.workspace,
-        messages: [],
-        turns: [],
-        pending_approvals: []
-      })
-      setDraftReferences([])
-      window.localStorage.setItem('cody.activeThreadId', created.thread.id)
-      setAnnouncement(`Created ${created.thread.title}`)
-      setCreateDirectory(undefined)
-      return true
-    } catch (error) {
-      setAppError(error instanceof Error ? error.message : 'Could not create the Thread.')
-      return false
-    }
-  }
+  const composerDraftKey = activeThreadId ? `thread:${activeThreadId}` : `draft:${draftId}`
+  const composerDraft = composerDrafts[composerDraftKey] ?? EMPTY_COMPOSER_DRAFT
+  const draftReferences = composerDraft.references
+  const setDraftReferences = useCallback((
+    update: ContextReference[] | ((current: ContextReference[]) => ContextReference[])
+  ): void => {
+    setComposerDrafts((current) => {
+      const existing = current[composerDraftKey] ?? EMPTY_COMPOSER_DRAFT
+      const references = typeof update === 'function' ? update(existing.references) : update
+      return { ...current, [composerDraftKey]: { ...existing, references } }
+    })
+  }, [composerDraftKey])
+  const setComposerMessage = useCallback((message: string): void => {
+    setComposerDrafts((current) => {
+      const existing = current[composerDraftKey] ?? EMPTY_COMPOSER_DRAFT
+      return { ...current, [composerDraftKey]: { ...existing, message } }
+    })
+  }, [composerDraftKey])
 
-  const handleImportProject = async (): Promise<void> => {
+  const beginDraft = useCallback((workingDirectory?: string): void => {
+    preferDraftRef.current = true
+    if (!activeThreadRef.current && !startTurnRef.current) {
+      requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('#composer-message')?.focus())
+      setAnnouncement('The new conversation is ready')
+      return
+    }
+    loadRequestRef.current += 1
+    activeThreadRef.current = undefined
+    setActiveThreadId(undefined)
+    setSnapshot(undefined)
+    setDraftWorkingDirectory(workingDirectory)
+    const nextDraftId = crypto.randomUUID()
+    draftIdRef.current = nextDraftId
+    setDraftId(nextDraftId)
+    setLoadingThread(false)
+    setAppError('')
+    window.localStorage.removeItem('cody.activeThreadId')
+    setAnnouncement('Ready for a new conversation')
+  }, [])
+
+  const handleImportProject = useCallback(async (): Promise<void> => {
     try {
-      const path = await bridge.pickDirectory()
+      const path = await bridge.pickDirectory('project')
       if (!path) return
       const imported = await bridge.rpc('project/import', { path })
       setProjects((current) => [imported, ...current.filter((project) => project.id !== imported.id)])
@@ -397,14 +455,9 @@ export function App() {
     } catch (error) {
       setAppError(error instanceof Error ? error.message : 'Could not import the Project.')
     }
-  }
+  }, [bridge])
 
   const addProjectContext = (project: Project): void => {
-    if (!snapshot) {
-      setCreateDirectory(project.root)
-      setCreateOpen(true)
-      return
-    }
     const reference: ContextReference = {
       kind: 'project',
       project_id: project.id,
@@ -422,10 +475,52 @@ export function App() {
     message: string,
     references: ContextReference[]
   ): Promise<boolean> => {
-    if (!snapshot || !provider || startTurnRef.current || isRunning) return false
+    if (!provider || startTurnRef.current || isRunning) return false
     startTurnRef.current = true
     setAppError('')
     try {
+      if (!snapshot) {
+        const requestDraftId = draftId
+        const started = await bridge.rpc('thread/create-and-start', {
+          client_request_id: requestDraftId,
+          message,
+          references,
+          provider,
+          working_directory: draftWorkingDirectory
+        })
+        if (started.imported_project) {
+          setProjects((current) => [
+            started.imported_project as Project,
+            ...current.filter((project) => project.id !== started.imported_project?.id)
+          ])
+        }
+        setThreads((current) => [
+          started.thread,
+          ...current.filter((thread) => thread.id !== started.thread.id)
+        ])
+        setRunningTurns((current) => ({ ...current, [started.thread.id]: started.turn.id }))
+        const shouldActivate = !activeThreadRef.current && draftIdRef.current === requestDraftId
+        if (shouldActivate) {
+          preferDraftRef.current = false
+          activeThreadRef.current = started.thread.id
+          setActiveThreadId(started.thread.id)
+          setSnapshot({
+            thread: { ...started.thread, status: 'running', updated_at: started.turn.created_at },
+            workspace: started.workspace,
+            messages: [optimisticMessage(started.thread.id, started.turn, message, references)],
+            turns: [started.turn],
+            pending_approvals: []
+          })
+          setDraftWorkingDirectory(undefined)
+          window.localStorage.setItem('cody.activeThreadId', started.thread.id)
+          setAnnouncement('Thread created. Cody is starting the first turn.')
+        } else {
+          setAnnouncement('Thread created and running in the background')
+        }
+        void refreshThread(started.thread.id)
+        return true
+      }
+      if (snapshot.thread.id !== activeThreadRef.current || loadingThread) return false
       const turn = await bridge.rpc('turn/start', {
         thread_id: snapshot.thread.id,
         message,
@@ -446,7 +541,7 @@ export function App() {
       void refreshThread(snapshot.thread.id)
       return true
     } catch (error) {
-      setAppError(error instanceof Error ? error.message : 'Could not start the Turn.')
+      setAppError(error instanceof Error ? error.message : 'Could not start the conversation.')
       return false
     } finally {
       startTurnRef.current = false
@@ -506,8 +601,7 @@ export function App() {
 
   useEffect(() => bridge.onCommand((command) => {
     if (command === 'new-thread') {
-      setCreateDirectory(undefined)
-      setCreateOpen(true)
+      beginDraft()
       return
     }
     if (command === 'import-project') {
@@ -530,12 +624,17 @@ export function App() {
     } else {
       setInspectorCollapsed((current) => !current)
     }
-  }), [bridge])
+  }), [beginDraft, bridge, handleImportProject])
 
   const emptyDisconnected = status.phase !== 'connected' && !snapshot
+  const selectedProjectIds = new Set(
+    [...(snapshot?.thread.default_references ?? []), ...draftReferences]
+      .filter((reference): reference is Extract<ContextReference, { kind: 'project' }> => reference.kind === 'project')
+      .map((reference) => reference.project_id)
+  )
 
   return (
-    <div className={`app-shell${railCollapsed ? ' app-shell--rail-collapsed' : ''}${inspectorCollapsed ? ' app-shell--inspector-collapsed' : ''}${snapshot ? '' : ' app-shell--no-inspector'}${bridge.platform === 'darwin' ? ' app-shell--darwin' : ''}`}>
+    <div className={`app-shell${railCollapsed ? ' app-shell--rail-collapsed' : ''}${inspectorCollapsed ? ' app-shell--inspector-collapsed' : ''}${bridge.platform === 'darwin' ? ' app-shell--darwin' : ''}`}>
       <a className="skip-link" href="#main-content">Skip to conversation</a>
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {announcement}
@@ -543,19 +642,13 @@ export function App() {
 
       <AssetRail
         threads={threads}
-        projects={projects}
         activeThreadId={activeThreadId}
         status={status}
         open={railOpen}
         onClose={() => setRailOpen(false)}
         onCollapse={() => setRailCollapsed(true)}
-        onNewThread={() => {
-          setCreateDirectory(undefined)
-          setCreateOpen(true)
-        }}
-        onImportProject={() => void handleImportProject()}
+        onNewThread={() => beginDraft()}
         onSelectThread={(threadId) => void selectThread(threadId)}
-        onAddProject={addProjectContext}
       />
 
       {(railOpen || inspectorOpen) ? (
@@ -577,11 +670,13 @@ export function App() {
           platform={bridge.platform}
           darkTheme={darkTheme}
           railCollapsed={railCollapsed}
+          showInspector={Boolean(snapshot)}
           onOpenRail={() => {
             setRailCollapsed(false)
             setRailOpen(true)
           }}
           onOpenInspector={() => {
+            setInspectorCollapsed(false)
             if (window.matchMedia('(max-width: 72rem)').matches) setInspectorOpen(true)
             else setInspectorCollapsed(false)
           }}
@@ -623,25 +718,6 @@ export function App() {
               <h2>Opening Cody</h2>
               <p>Connecting to the local agent runtime…</p>
             </section>
-          ) : threads.length === 0 && !snapshot ? (
-            <section className="first-run">
-              <div className="first-run__constellation" aria-hidden="true"><span /><span /><span /><strong>C</strong></div>
-              <p className="eyebrow">A fresh Cody workspace</p>
-              <h2>Start with a conversation or a code asset</h2>
-              <p>
-                Threads keep the durable working record. Projects stay reusable and can be mentioned from any Thread.
-              </p>
-              <div className="first-run__actions">
-                <button className="start-card start-card--thread" type="button" onClick={() => setCreateOpen(true)}>
-                  <MessageCirclePlus aria-hidden="true" size={20} />
-                  <span><strong>Create a Thread</strong><small>Start without choosing a Project</small></span>
-                </button>
-                <button className="start-card start-card--project" type="button" onClick={() => void handleImportProject()}>
-                  <FolderPlus aria-hidden="true" size={20} />
-                  <span><strong>Import a Project</strong><small>Add a folder or Git repository</small></span>
-                </button>
-              </div>
-            </section>
           ) : loadingThread && !snapshot ? (
             <section className="loading-state" role="status">
               <LoaderCircle className="spin" aria-hidden="true" size={23} />
@@ -669,48 +745,74 @@ export function App() {
                   providers={providers}
                   provider={provider}
                   running={isRunning}
-                  unavailable={status.phase !== 'connected'}
+                  message={composerDraft.message}
+                  unavailable={status.phase !== 'connected' || loadingThread || snapshot.thread.id !== activeThreadId}
                   onReferencesChange={setDraftReferences}
                   onProviderChange={setProvider}
+                  onMessageChange={setComposerMessage}
                   onSend={handleStartTurn}
                   onCancel={handleCancelTurn}
                 />
               </div>
             </>
           ) : (
-            <section className="loading-state">
-              <PanelLeftOpen aria-hidden="true" size={23} />
-              <h2>Select a Thread</h2>
-              <p>Choose a durable conversation from the asset rail.</p>
-            </section>
+            <>
+              <DraftConversation />
+              <div className="composer-dock">
+                <Composer
+                  key={draftId}
+                  threads={threads}
+                  projects={projects}
+                  references={draftReferences}
+                  providers={providers}
+                  provider={provider}
+                  running={false}
+                  message={composerDraft.message}
+                  draft
+                  workingDirectory={draftWorkingDirectory}
+                  unavailable={status.phase !== 'connected'}
+                  onReferencesChange={setDraftReferences}
+                  onProviderChange={setProvider}
+                  onMessageChange={setComposerMessage}
+                  onPickWorkingDirectory={async () => {
+                    const path = await bridge.pickDirectory('working-directory')
+                    if (path) setDraftWorkingDirectory(path)
+                  }}
+                  onClearWorkingDirectory={() => setDraftWorkingDirectory(undefined)}
+                  onSend={handleStartTurn}
+                  onCancel={async () => undefined}
+                />
+              </div>
+            </>
           )}
           {loadingThread && snapshot ? <div className="thread-loading-overlay" role="status">Refreshing Thread…</div> : null}
         </main>
       </section>
 
-      {snapshot ? (
-        <Inspector
-          snapshot={snapshot}
-          threads={threads}
+      <div className="right-rail">
+        {snapshot ? (
+          <Inspector
+            snapshot={snapshot}
+            threads={threads}
+            projects={projects}
+            draftReferences={draftReferences}
+            events={activeEvents}
+            open={inspectorOpen}
+            onClose={() => {
+              if (window.matchMedia('(max-width: 72rem)').matches) setInspectorOpen(false)
+              else setInspectorCollapsed(true)
+            }}
+            onCopyText={copyText}
+          />
+        ) : null}
+        <ProjectShelf
           projects={projects}
-          draftReferences={draftReferences}
-          events={activeEvents}
-          open={inspectorOpen}
-          onClose={() => {
-            if (window.matchMedia('(max-width: 72rem)').matches) setInspectorOpen(false)
-            else setInspectorCollapsed(true)
-          }}
-          onCopyText={copyText}
+          selectedProjectIds={selectedProjectIds}
+          unavailable={status.phase !== 'connected'}
+          onImportProject={handleImportProject}
+          onAddProject={addProjectContext}
         />
-      ) : null}
-
-      <CreateThreadDialog
-        open={createOpen}
-        initialDirectory={createDirectory}
-        onOpenChange={setCreateOpen}
-        onPickDirectory={() => bridge.pickDirectory()}
-        onCreate={handleCreateThread}
-      />
+      </div>
     </div>
   )
 }

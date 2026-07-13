@@ -52,6 +52,9 @@ pub enum AgentEvent {
         project_id: Option<ProjectId>,
         path: String,
     },
+    ThreadUpdated {
+        title: String,
+    },
     TurnCompleted {
         final_text: String,
     },

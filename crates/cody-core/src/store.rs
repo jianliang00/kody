@@ -41,6 +41,13 @@ pub trait StateStore: Send + Sync {
     async fn get_thread(&self, id: ThreadId) -> Result<Thread>;
     async fn list_threads(&self) -> Result<Vec<Thread>>;
     async fn update_thread(&self, thread: Thread) -> Result<Thread>;
+    /// Atomically replaces a placeholder title without carrying a stale
+    /// snapshot of unrelated Thread fields such as status.
+    async fn update_thread_title_if_default(
+        &self,
+        id: ThreadId,
+        title: String,
+    ) -> Result<Option<Thread>>;
     async fn transition_thread_status(
         &self,
         id: ThreadId,
@@ -695,6 +702,29 @@ impl StateStore for InMemoryStore {
         Ok(thread)
     }
 
+    async fn update_thread_title_if_default(
+        &self,
+        id: ThreadId,
+        title: String,
+    ) -> Result<Option<Thread>> {
+        if title.trim().is_empty() {
+            return Err(CodyError::InvalidInput(
+                "thread title cannot be empty".into(),
+            ));
+        }
+        let mut state = self.inner.write().await;
+        let thread = state
+            .threads
+            .get_mut(&id)
+            .ok_or(CodyError::ThreadNotFound(id))?;
+        if !crate::title::is_default_thread_title(&thread.title) {
+            return Ok(None);
+        }
+        thread.title = title;
+        thread.updated_at = chrono::Utc::now();
+        Ok(Some(thread.clone()))
+    }
+
     async fn transition_thread_status(
         &self,
         id: ThreadId,
@@ -1126,6 +1156,18 @@ impl StateStore for JsonFileStore {
 
     async fn update_thread(&self, thread: Thread) -> Result<Thread> {
         persistent_mutation!(self, candidate, candidate.update_thread(thread).await)
+    }
+
+    async fn update_thread_title_if_default(
+        &self,
+        id: ThreadId,
+        title: String,
+    ) -> Result<Option<Thread>> {
+        persistent_mutation!(
+            self,
+            candidate,
+            candidate.update_thread_title_if_default(id, title).await
+        )
     }
 
     async fn transition_thread_status(
@@ -1671,6 +1713,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn default_title_cas_preserves_concurrent_thread_status() {
+        let store = InMemoryStore::new();
+        let (mut thread, workspace) = thread_and_workspace(1, 2, 1);
+        thread.title = crate::title::DEFAULT_THREAD_TITLE.into();
+        store
+            .insert_thread_with_workspace(thread.clone(), workspace)
+            .await
+            .unwrap();
+        store
+            .transition_thread_status(thread.id, ThreadStatus::Idle, ThreadStatus::Running)
+            .await
+            .unwrap();
+
+        let titled = store
+            .update_thread_title_if_default(thread.id, "Generated title".into())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(titled.title, "Generated title");
+        assert_eq!(titled.status, ThreadStatus::Running);
+        assert!(store
+            .update_thread_title_if_default(thread.id, "Overwrite".into())
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
     async fn only_one_concurrent_turn_claim_succeeds() {
         let store = InMemoryStore::new();
         let (thread, _) = seed_thread(&store, 1, 2, 1).await;
@@ -1806,6 +1876,31 @@ mod tests {
         let raw: serde_json::Value =
             serde_json::from_slice(&tokio::fs::read(path).await.unwrap()).unwrap();
         assert_eq!(raw["version"], JSON_SNAPSHOT_VERSION);
+    }
+
+    #[tokio::test]
+    async fn json_store_persists_default_title_cas() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.json");
+        let store = JsonFileStore::open(&path).await.unwrap();
+        let (mut thread, workspace) = thread_and_workspace(1, 2, 1);
+        thread.title = crate::title::DEFAULT_THREAD_TITLE.into();
+        store
+            .insert_thread_with_workspace(thread.clone(), workspace)
+            .await
+            .unwrap();
+        store
+            .update_thread_title_if_default(thread.id, "Durable title".into())
+            .await
+            .unwrap()
+            .unwrap();
+
+        drop(store);
+        let reopened = JsonFileStore::open(path).await.unwrap();
+        assert_eq!(
+            reopened.get_thread(thread.id).await.unwrap().title,
+            "Durable title"
+        );
     }
 
     #[tokio::test]

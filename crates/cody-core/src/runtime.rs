@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::{oneshot, Mutex};
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 use crate::{
     context::ContextBuilder,
@@ -28,6 +29,10 @@ use crate::{
         ProviderRegistry, ToolDefinition as ProviderToolDefinition,
     },
     store::StateStore,
+    title::{
+        is_default_thread_title, normalize_title_candidate, FallbackThreadTitleGenerator,
+        LocalThreadTitleGenerator, ThreadTitleGenerator, ThreadTitleRequest,
+    },
     tools::{ToolCall, ToolContext, ToolRegistry, ToolResult},
 };
 
@@ -73,12 +78,19 @@ fn default_provider() -> String {
     "echo".into()
 }
 
+struct PersistedTurnOutcome {
+    turn: Turn,
+    event: AgentEvent,
+    error: Option<CodyError>,
+}
+
 pub struct AgentRuntime {
     store: Arc<dyn StateStore>,
     providers: Arc<ProviderRegistry>,
     tools: Arc<ToolRegistry>,
     events: EventHub,
     context_builder: Arc<dyn ContextBuilder>,
+    title_generator: Arc<dyn ThreadTitleGenerator>,
     config: AgentRuntimeConfig,
     active_threads: Mutex<HashSet<ThreadId>>,
     approvals: ApprovalBroker,
@@ -94,12 +106,58 @@ impl AgentRuntime {
         context_builder: Arc<dyn ContextBuilder>,
         config: AgentRuntimeConfig,
     ) -> Self {
+        Self::new_with_resolved_title_generator(
+            store,
+            providers,
+            tools,
+            events,
+            context_builder,
+            Arc::new(LocalThreadTitleGenerator),
+            config,
+        )
+    }
+
+    /// Builds a runtime with an application- or provider-backed title
+    /// generator. Its output is normalized and failures fall back to the
+    /// deterministic local generator.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_title_generator(
+        store: Arc<dyn StateStore>,
+        providers: Arc<ProviderRegistry>,
+        tools: Arc<ToolRegistry>,
+        events: EventHub,
+        context_builder: Arc<dyn ContextBuilder>,
+        title_generator: Arc<dyn ThreadTitleGenerator>,
+        config: AgentRuntimeConfig,
+    ) -> Self {
+        Self::new_with_resolved_title_generator(
+            store,
+            providers,
+            tools,
+            events,
+            context_builder,
+            Arc::new(FallbackThreadTitleGenerator::new(title_generator)),
+            config,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_resolved_title_generator(
+        store: Arc<dyn StateStore>,
+        providers: Arc<ProviderRegistry>,
+        tools: Arc<ToolRegistry>,
+        events: EventHub,
+        context_builder: Arc<dyn ContextBuilder>,
+        title_generator: Arc<dyn ThreadTitleGenerator>,
+        config: AgentRuntimeConfig,
+    ) -> Self {
         Self {
             store,
             providers,
             tools,
             events,
             context_builder,
+            title_generator,
             config,
             active_threads: Mutex::new(HashSet::new()),
             approvals: ApprovalBroker::default(),
@@ -245,19 +303,37 @@ impl AgentRuntime {
             Ok(outcome) => outcome,
             Err(payload) => Err(CodyError::AgentPanic(panic_message(payload))),
         };
-        let result =
-            std::panic::AssertUnwindSafe(self.finish_turn(&turn, outcome, cancellation, &emitter))
+        let persisted =
+            std::panic::AssertUnwindSafe(self.finish_turn(&turn, outcome, cancellation))
                 .catch_unwind()
                 .await
                 .unwrap_or_else(|payload| Err(CodyError::AgentPanic(panic_message(payload))));
 
-        // No return path after a successful claim skips this cleanup.
+        // No return path after a successful claim skips this cleanup. Terminal
+        // events are deliberately withheld until the durable Thread is Idle,
+        // so an event-triggered read cannot observe a stale Running status.
         let idle_result = self.mark_thread_idle(turn.thread_id).await;
         self.release_thread(turn.thread_id).await;
-        match (result, idle_result) {
-            (result, Ok(())) => result,
-            (Ok(_), Err(cleanup_error)) => Err(cleanup_error),
-            (Err(original), Err(_cleanup_error)) => Err(original),
+        match (persisted, idle_result) {
+            (Ok(outcome), Ok(())) => {
+                let completed_text = match &outcome.event {
+                    AgentEvent::TurnCompleted { final_text } => Some(final_text.clone()),
+                    _ => None,
+                };
+                emitter.emit(outcome.event);
+                if let Some(final_text) = completed_text {
+                    self.schedule_thread_title(turn, final_text, emitter);
+                }
+                match outcome.error {
+                    Some(error) => Err(error),
+                    None => Ok(outcome.turn),
+                }
+            }
+            (Ok(outcome), Err(cleanup_error)) => match outcome.error {
+                Some(original) => Err(original),
+                None => Err(cleanup_error),
+            },
+            (Err(original), _) => Err(original),
         }
     }
 
@@ -266,15 +342,18 @@ impl AgentRuntime {
         turn: &Turn,
         outcome: Result<String>,
         cancellation: CancellationToken,
-        emitter: &TurnEmitter,
-    ) -> Result<Turn> {
+    ) -> Result<PersistedTurnOutcome> {
         match outcome {
             Ok(_) if cancellation.is_cancelled() => {
-                self.store
+                let terminal = self
+                    .store
                     .transition_turn_status(turn.id, TurnStatus::Running, TurnStatus::Cancelled)
                     .await?;
-                emitter.emit(AgentEvent::TurnCancelled);
-                Err(CodyError::Cancelled)
+                Ok(PersistedTurnOutcome {
+                    turn: terminal,
+                    event: AgentEvent::TurnCancelled,
+                    error: Some(CodyError::Cancelled),
+                })
             }
             Ok(final_text) => {
                 let mut terminal = self
@@ -283,15 +362,22 @@ impl AgentRuntime {
                     .await?;
                 terminal.error = None;
                 let terminal = self.store.update_turn(terminal).await?;
-                emitter.emit(AgentEvent::TurnCompleted { final_text });
-                Ok(terminal)
+                Ok(PersistedTurnOutcome {
+                    turn: terminal,
+                    event: AgentEvent::TurnCompleted { final_text },
+                    error: None,
+                })
             }
             Err(CodyError::Cancelled) => {
-                self.store
+                let terminal = self
+                    .store
                     .transition_turn_status(turn.id, TurnStatus::Running, TurnStatus::Cancelled)
                     .await?;
-                emitter.emit(AgentEvent::TurnCancelled);
-                Err(CodyError::Cancelled)
+                Ok(PersistedTurnOutcome {
+                    turn: terminal,
+                    event: AgentEvent::TurnCancelled,
+                    error: Some(CodyError::Cancelled),
+                })
             }
             Err(error) => {
                 let message = error.to_string();
@@ -300,9 +386,12 @@ impl AgentRuntime {
                     .transition_turn_status(turn.id, TurnStatus::Running, TurnStatus::Failed)
                     .await?;
                 terminal.error = Some(message.clone());
-                self.store.update_turn(terminal).await?;
-                emitter.emit(AgentEvent::TurnFailed { error: message });
-                Err(error)
+                let terminal = self.store.update_turn(terminal).await?;
+                Ok(PersistedTurnOutcome {
+                    turn: terminal,
+                    event: AgentEvent::TurnFailed { error: message },
+                    error: Some(error),
+                })
             }
         }
     }
@@ -522,6 +611,90 @@ impl AgentRuntime {
 
     async fn release_thread(&self, thread_id: ThreadId) {
         self.active_threads.lock().await.remove(&thread_id);
+    }
+
+    fn schedule_thread_title(&self, turn: Turn, assistant_response: String, emitter: TurnEmitter) {
+        let store = self.store.clone();
+        let generator = self.title_generator.clone();
+        tokio::spawn(async move {
+            match generate_first_completed_turn_title(
+                store.as_ref(),
+                generator.as_ref(),
+                &turn,
+                assistant_response,
+            )
+            .await
+            {
+                Ok(Some(title)) => emitter.emit(AgentEvent::ThreadUpdated { title }),
+                Ok(None) => {}
+                Err(error) => {
+                    // Title generation is presentation metadata. A completed turn
+                    // must stay completed even when enrichment or persistence
+                    // fails.
+                    warn!(
+                        thread_id = %turn.thread_id,
+                        turn_id = %turn.id,
+                        %error,
+                        "background thread title generation failed"
+                    );
+                }
+            }
+        });
+    }
+}
+
+async fn generate_first_completed_turn_title(
+    store: &dyn StateStore,
+    generator: &dyn ThreadTitleGenerator,
+    turn: &Turn,
+    assistant_response: String,
+) -> Result<Option<String>> {
+    let thread = store.get_thread(turn.thread_id).await?;
+    if !is_default_thread_title(&thread.title) {
+        return Ok(None);
+    }
+
+    let turns = store.list_turns(turn.thread_id).await?;
+    let first_completed = turns
+        .iter()
+        .filter(|candidate| candidate.status == TurnStatus::Completed)
+        .min_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+    if first_completed.map(|candidate| candidate.id) != Some(turn.id) {
+        return Ok(None);
+    }
+
+    let input = store.get_message(turn.input_message_id).await?;
+    let request = ThreadTitleRequest {
+        thread_id: turn.thread_id,
+        turn_id: turn.id,
+        user_message: input.text(),
+        assistant_response,
+        provider: turn.provider.clone(),
+        model: turn.model.clone(),
+    };
+    let Some(candidate) = generator.generate(&request).await? else {
+        return Ok(None);
+    };
+    let Some(title) = normalize_title_candidate(&candidate) else {
+        return Ok(None);
+    };
+    if is_default_thread_title(&title) {
+        return Ok(None);
+    }
+
+    // The store-level CAS changes only the title. A later Turn may transition
+    // status while a provider-backed generator is running, and that unrelated
+    // state must neither make title enrichment fail nor be overwritten.
+    match store
+        .update_thread_title_if_default(turn.thread_id, title.clone())
+        .await?
+    {
+        Some(_) => Ok(Some(title)),
+        None => Ok(None),
     }
 }
 

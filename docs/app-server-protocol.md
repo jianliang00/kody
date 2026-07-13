@@ -19,13 +19,35 @@ HTTP requires `Authorization: Bearer <token>` and `Content-Type: application/jso
 | `project/import` | Import an existing directory/Git repository |
 | `project/get`, `project/list` | Read Project state |
 | `thread/create` | Create a Thread and its Workspace; optional `working_directory` auto-imports a Project |
+| `thread/create-and-start` | Idempotently create a Thread/Workspace and prepare its first Turn from one draft request |
 | `thread/get`, `thread/list`, `thread/messages` | Read Thread state/history; `thread/get` also returns current pending approvals |
 | `thread/reference/add` | Add a persistent default Thread or Project reference |
 | `turn/start`, `turn/get`, `turn/cancel` | Run and control an Agent Turn |
 | `approval/respond` | Resolve a pending Shell approval |
 | `thread/subscribe`, `thread/unsubscribe` | WebSocket-only event subscription controls |
 
-Dot aliases such as `turn.start` are accepted for application methods. WebSocket `turn/start`, `thread/get`, and `thread/messages` implicitly subscribe that connection to the Thread.
+Dot aliases such as `turn.start` are accepted for application methods. WebSocket `thread/create-and-start` subscribes before the prepared Turn begins; `turn/start`, `thread/get`, and `thread/messages` also implicitly subscribe that connection to the Thread.
+
+## Draft-first Thread creation
+
+Desktop clients should keep a new conversation entirely local until the first message. Send that message with a stable `client_request_id`:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "start-draft",
+  "method": "thread/create-and-start",
+  "params": {
+    "client_request_id": "LOCAL_DRAFT_UUID",
+    "message": "Implement OAuth login",
+    "provider": "openai",
+    "working_directory": "/absolute/path/to/repo",
+    "references": []
+  }
+}
+```
+
+The result contains `thread`, `workspace`, optional `imported_project`, and `turn`. Concurrent retries with the same request ID and payload return the same entities in their latest durable state and do not execute another Turn; reusing the ID with another payload is rejected. If Turn preparation fails, entities created by this request are compensated before the error is returned. The process-local idempotency record is intentionally not a cross-restart transaction log. The placeholder title is replaced after the first completed Turn; `thread_updated` announces the generated title.
 
 ## References
 
@@ -78,6 +100,7 @@ Event types currently include:
 - `model_started`, `model_output_delta`, `model_completed`
 - `approval_requested`, `approval_resolved`
 - `tool_started`, `tool_completed`, `file_changed`
+- `thread_updated`
 - `turn_completed`, `turn_failed`, `turn_cancelled`
 
 When `approval_requested` arrives, respond with:

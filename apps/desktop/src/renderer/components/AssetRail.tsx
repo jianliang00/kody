@@ -1,8 +1,4 @@
 import {
-  Folder,
-  FolderGit2,
-  FolderPlus,
-  Eye,
   MessageCircle,
   PanelLeftClose,
   Plus,
@@ -10,20 +6,17 @@ import {
   X
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import type { Project, ServerStatus, Thread } from '@shared/protocol'
+import type { ServerStatus, Thread } from '@shared/protocol'
 
 interface AssetRailProps {
   threads: Thread[]
-  projects: Project[]
   activeThreadId?: string
   status: ServerStatus
   open: boolean
   onClose: () => void
   onCollapse: () => void
   onNewThread: () => void
-  onImportProject: () => void
   onSelectThread: (threadId: string) => void
-  onAddProject: (project: Project) => void
 }
 
 function relativeTime(value: string): string {
@@ -37,26 +30,19 @@ function relativeTime(value: string): string {
 
 export function AssetRail({
   threads,
-  projects,
   activeThreadId,
   status,
   open,
   onClose,
   onCollapse,
   onNewThread,
-  onImportProject,
-  onSelectThread,
-  onAddProject
+  onSelectThread
 }: AssetRailProps) {
   const [query, setQuery] = useState('')
   const normalizedQuery = query.trim().toLocaleLowerCase()
   const visibleThreads = useMemo(
     () => threads.filter((thread) => thread.title.toLocaleLowerCase().includes(normalizedQuery)),
     [threads, normalizedQuery]
-  )
-  const visibleProjects = useMemo(
-    () => projects.filter((project) => `${project.name} ${project.root}`.toLocaleLowerCase().includes(normalizedQuery)),
-    [projects, normalizedQuery]
   )
 
   return (
@@ -82,10 +68,6 @@ export function AssetRail({
           <Plus aria-hidden="true" size={16} />
           <span>New Thread</span>
         </button>
-        <button className="secondary-action" type="button" onClick={onImportProject}>
-          <FolderPlus aria-hidden="true" size={16} />
-          <span>Import Project</span>
-        </button>
       </div>
 
       <label className="asset-search">
@@ -97,12 +79,12 @@ export function AssetRail({
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Threads and Projects"
+            placeholder="Threads"
           />
         </span>
       </label>
 
-      <nav className="asset-navigation" aria-label="Threads and Projects">
+      <nav className="asset-navigation" aria-label="Threads">
         <section className="asset-section" aria-labelledby="thread-list-title">
           <header className="asset-section__header">
             <h2 id="thread-list-title">Threads</h2>
@@ -137,48 +119,6 @@ export function AssetRail({
                       </span>
                     </span>
                     <span className={`thread-state thread-state--${thread.status}`} aria-label={thread.status} />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        <section className="asset-section" aria-labelledby="project-list-title">
-          <header className="asset-section__header">
-            <h2 id="project-list-title">Projects</h2>
-            <span>{visibleProjects.length}</span>
-          </header>
-          {visibleProjects.length === 0 ? (
-            <p className="asset-list-empty">{query ? 'No matching Projects' : 'No Projects imported'}</p>
-          ) : (
-            <ul className="asset-list">
-              {visibleProjects.map((project) => (
-                <li key={project.id}>
-                  <button
-                    className="asset-row asset-row--project"
-                    type="button"
-                    onClick={() => {
-                      onAddProject(project)
-                      onClose()
-                    }}
-                    title={`Add ${project.name} as read-only context`}
-                  >
-                    <span className="asset-row__icon asset-row__icon--project">
-                      {project.kind === 'git' ? (
-                        <FolderGit2 aria-hidden="true" size={15} />
-                      ) : (
-                        <Folder aria-hidden="true" size={15} />
-                      )}
-                    </span>
-                    <span className="asset-row__body">
-                      <strong>{project.name}</strong>
-                      <span>{project.git?.branch || project.root}</span>
-                    </span>
-                    <span className="asset-row__add">
-                      <Eye aria-hidden="true" size={13} />
-                      <span>Add read-only</span>
-                    </span>
                   </button>
                 </li>
               ))}

@@ -165,6 +165,168 @@ async fn websocket_rejects_a_disallowed_origin() -> Result<()> {
 }
 
 #[tokio::test]
+async fn create_and_start_rolls_back_when_turn_preparation_fails() -> Result<()> {
+    let server = TestServer::start().await?;
+    let project_root = tempfile::tempdir()?;
+    let client = reqwest::Client::builder().no_proxy().build()?;
+    let failed = client
+        .post(server.rpc_url())
+        .bearer_auth(TOKEN)
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": "create-failure",
+            "method": "thread/create-and-start",
+            "params": {
+                "client_request_id": "rollback-request",
+                "message": "this must not leave an empty thread",
+                "provider": "missing-provider",
+                "working_directory": project_root.path(),
+            }
+        }))
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
+    assert_eq!(failed["error"]["code"], -32004);
+
+    for (method, collection) in [("thread/list", "threads"), ("project/list", "projects")] {
+        let listed = client
+            .post(server.rpc_url())
+            .bearer_auth(TOKEN)
+            .json(&json!({
+                "jsonrpc": "2.0",
+                "id": method,
+                "method": method,
+                "params": {}
+            }))
+            .send()
+            .await?
+            .json::<Value>()
+            .await?;
+        assert_eq!(
+            listed["result"][collection].as_array().map(Vec::len),
+            Some(0)
+        );
+    }
+
+    let workspace_root = server._state_root.path().join("state/workspaces");
+    let mut entries = tokio::fs::read_dir(workspace_root).await?;
+    assert!(entries.next_entry().await?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn websocket_create_and_start_is_idempotent_and_streams_from_the_first_event() -> Result<()> {
+    let server = TestServer::start().await?;
+    let mut request = server.ws_url.clone().into_client_request()?;
+    request.headers_mut().insert(
+        "Authorization",
+        HeaderValue::from_str(&format!("Bearer {TOKEN}"))?,
+    );
+    let (mut socket, _) = connect_async(request).await?;
+    let create = |id: &str| {
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "thread/create-and-start",
+            "params": {
+                "client_request_id": "stable-draft-request",
+                "message": "Explain the provider neutral agent loop",
+                "references": [],
+                "provider": "echo"
+            }
+        })
+    };
+    send_json(&mut socket, create("create-first")).await?;
+
+    let mut thread_id = None;
+    let mut turn_id = None;
+    let mut event_types = Vec::new();
+    let mut last_sequence = 0_u64;
+    for _ in 0..48 {
+        let message = receive_json(&mut socket).await?;
+        if message["id"] == "create-first" {
+            thread_id = message["result"]["thread"]["id"]
+                .as_str()
+                .map(str::to_owned);
+            turn_id = message["result"]["turn"]["id"].as_str().map(str::to_owned);
+            continue;
+        }
+        if message["method"] != "turn/event" {
+            continue;
+        }
+        let sequence = message["params"]["sequence"]
+            .as_u64()
+            .context("turn/event had no sequence")?;
+        assert!(sequence > last_sequence);
+        last_sequence = sequence;
+        if let Some(event_type) = message["params"]["event"]["type"].as_str() {
+            event_types.push(event_type.to_owned());
+        }
+        if event_types.iter().any(|event| event == "thread_updated") && thread_id.is_some() {
+            break;
+        }
+    }
+    let thread_id = thread_id.context("create-and-start returned no Thread")?;
+    let turn_id = turn_id.context("create-and-start returned no Turn")?;
+    assert_eq!(
+        event_types.first().map(String::as_str),
+        Some("turn_started")
+    );
+    assert!(event_types.iter().any(|event| event == "turn_completed"));
+    assert!(event_types.iter().any(|event| event == "thread_updated"));
+
+    send_json(&mut socket, create("create-retry")).await?;
+    let retried = receive_json(&mut socket).await?;
+    assert_eq!(retried["id"], "create-retry");
+    assert_eq!(retried["result"]["thread"]["id"], thread_id);
+    assert_eq!(retried["result"]["turn"]["id"], turn_id);
+    assert_eq!(retried["result"]["thread"]["status"], "idle");
+    assert_eq!(
+        retried["result"]["thread"]["title"],
+        "Explain the provider neutral agent loop"
+    );
+    assert_eq!(retried["result"]["turn"]["status"], "completed");
+
+    send_json(
+        &mut socket,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "create-conflicting-retry",
+            "method": "thread/create-and-start",
+            "params": {
+                "client_request_id": "stable-draft-request",
+                "message": "A different draft must not reuse the cached entities",
+                "references": [],
+                "provider": "echo"
+            }
+        }),
+    )
+    .await?;
+    let conflict = receive_json(&mut socket).await?;
+    assert_eq!(conflict["id"], "create-conflicting-retry");
+    assert_eq!(conflict["error"]["code"], -32009);
+
+    send_json(
+        &mut socket,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "list-after-retry",
+            "method": "thread/list",
+            "params": {}
+        }),
+    )
+    .await?;
+    let listed = receive_json(&mut socket).await?;
+    assert_eq!(
+        listed["result"]["threads"].as_array().map(Vec::len),
+        Some(1)
+    );
+    socket.close(None).await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn authorized_websocket_runs_echo_turn_and_streams_subscribed_events() -> Result<()> {
     let server = TestServer::start().await?;
     let mut request = server.ws_url.clone().into_client_request()?;
@@ -198,7 +360,7 @@ async fn authorized_websocket_runs_echo_turn_and_streams_subscribed_events() -> 
             "jsonrpc": "2.0",
             "id": "create-thread",
             "method": "thread/create",
-            "params": { "title": "Network integration" }
+            "params": {}
         }),
     )
     .await?;
@@ -208,7 +370,7 @@ async fn authorized_websocket_runs_echo_turn_and_streams_subscribed_events() -> 
         .as_str()
         .context("thread/create response did not contain a thread id")?
         .to_owned();
-    assert_eq!(created["result"]["thread"]["title"], "Network integration");
+    assert_eq!(created["result"]["thread"]["title"], "New thread");
 
     send_json(
         &mut socket,
@@ -283,6 +445,39 @@ async fn authorized_websocket_runs_echo_turn_and_streams_subscribed_events() -> 
     let turn = receive_json(&mut socket).await?;
     assert_eq!(turn["id"], "get-turn");
     assert_eq!(turn["result"]["status"], "completed");
+
+    // Title enrichment is intentionally outside the terminal turn path, so
+    // poll the durable Thread snapshot rather than delaying turn completion.
+    let generated_title = timeout(Duration::from_secs(2), async {
+        loop {
+            send_json(
+                &mut socket,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": "get-thread-title",
+                    "method": "thread/get",
+                    "params": { "thread_id": thread_id }
+                }),
+            )
+            .await?;
+            let snapshot = loop {
+                let message = receive_json(&mut socket).await?;
+                if message["id"] == "get-thread-title" {
+                    break message;
+                }
+            };
+            let title = snapshot["result"]["thread"]["title"]
+                .as_str()
+                .context("thread/get response did not contain a title")?;
+            if title != "New thread" {
+                break Ok::<_, anyhow::Error>(title.to_owned());
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .context("timed out waiting for the generated thread title")??;
+    assert_eq!(generated_title, "echo across the network");
 
     socket.close(None).await?;
     Ok(())

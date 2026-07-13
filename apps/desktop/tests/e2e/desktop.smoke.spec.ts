@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test'
-import { access, mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -7,6 +7,14 @@ import { fileURLToPath } from 'node:url'
 const testDirectory = dirname(fileURLToPath(import.meta.url))
 const desktopRoot = resolve(testDirectory, '../..')
 const workspaceRoot = resolve(desktopRoot, '../..')
+
+interface PersistedState {
+  projects: Array<{ id: string; name: string; root: string }>
+  threads: Array<{ id: string; title: string; workspace_id: string }>
+  workspaces: Array<{ id: string; thread_id: string; root: string }>
+  messages: Array<{ id: string; thread_id: string; role: string }>
+  turns: Array<{ id: string; thread_id: string; status: string }>
+}
 
 function isolatedEnvironment(): Record<string, string> {
   const environment = Object.fromEntries(
@@ -23,9 +31,13 @@ function isolatedEnvironment(): Record<string, string> {
   return environment
 }
 
-test('uses the real preload bridge and creates an isolated Thread Workspace', async () => {
+test('creates the first Thread through one idempotent draft request', async () => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), 'cody-electron-e2e-'))
   const userDataRoot = join(temporaryRoot, 'profile')
+  const selectedProjectRoot = join(temporaryRoot, 'selected-project')
+  await mkdir(selectedProjectRoot)
+  await writeFile(join(selectedProjectRoot, 'README.md'), '# Isolated E2E project\n')
+  const canonicalProjectRoot = await realpath(selectedProjectRoot)
   let application: ElectronApplication | undefined
 
   try {
@@ -42,7 +54,6 @@ test('uses the real preload bridge and creates an isolated Thread Workspace', as
     const page = await application.firstWindow()
     await page.waitForLoadState('domcontentloaded')
     expect(page.url()).toMatch(/^file:/)
-
     await expect(page.getByLabel('Local server connected')).toBeVisible({ timeout: 30_000 })
 
     const bridgeProbe = await page.evaluate(async () => {
@@ -52,19 +63,161 @@ test('uses the real preload bridge and creates an isolated Thread Workspace', as
       return {
         platform: window.cody.platform,
         status,
-        serverName: initialized.server_info.name
+        serverName: initialized.server_info.name,
+        capabilities: initialized.capabilities
       }
     })
     expect(bridgeProbe).not.toBeNull()
     expect(bridgeProbe?.status.phase).toBe('connected')
     expect(bridgeProbe?.serverName).toBe('cody-app-server')
     expect(bridgeProbe?.platform).toBe(process.platform)
+    expect(bridgeProbe?.capabilities.thread_create_and_start).toBe(true)
 
-    await expect(
-      page.getByRole('heading', { name: 'Start with a conversation or a code asset' })
-    ).toBeVisible()
+    await expect(page.getByRole('heading', { level: 1, name: 'New conversation' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'What should Cody work on?' })).toBeVisible()
+    await expect(page.getByRole('form', { name: 'Message composer' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Working directory', exact: true })).toBeVisible()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
     await expect(page.getByText('No Threads yet', { exact: true })).toBeVisible()
 
+    const emptyBackend = await page.evaluate(async () => {
+      if (!window.cody) throw new Error('preload bridge is unavailable')
+      const [{ threads }, { projects }] = await Promise.all([
+        window.cody.rpc('thread/list', {}),
+        window.cody.rpc('project/list', {})
+      ])
+      return { threads, projects }
+    })
+    expect(emptyBackend.threads).toHaveLength(0)
+    expect(emptyBackend.projects).toHaveLength(0)
+    expect(await readdir(join(actualUserDataRoot, 'engine', 'workspaces'))).toHaveLength(0)
+
+    const projectShelf = page.locator('#project-shelf')
+    await expect(projectShelf).toBeVisible()
+    await expect(projectShelf.getByRole('heading', { name: 'Projects 0' })).toBeVisible()
+    await expect(projectShelf.getByText('No Projects yet.', { exact: true })).toBeVisible()
+    const initialShelfBox = await projectShelf.boundingBox()
+    const viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
+    expect(initialShelfBox).not.toBeNull()
+    expect(initialShelfBox?.x ?? 0).toBeGreaterThan(viewport.width / 2)
+    expect(initialShelfBox?.y ?? 0).toBeGreaterThan(viewport.height / 2)
+    expect(Math.abs((initialShelfBox?.y ?? 0) + (initialShelfBox?.height ?? 0) - viewport.height)).toBeLessThan(3)
+    expect(Math.abs((initialShelfBox?.x ?? 0) + (initialShelfBox?.width ?? 0) - viewport.width)).toBeLessThan(3)
+
+    // Stub only the native picker. The renderer still traverses the real preload and IPC boundary.
+    await application.evaluate(({ dialog }, directory) => {
+      Object.defineProperty(dialog, 'showOpenDialog', {
+        configurable: true,
+        value: async () => ({ canceled: false, filePaths: [directory] })
+      })
+    }, selectedProjectRoot)
+    await page.getByRole('button', { name: 'Working directory', exact: true }).click()
+    const workingDirectoryChip = page.locator('.working-directory-chip')
+    await expect(workingDirectoryChip).toBeVisible()
+    await expect(workingDirectoryChip).toContainText(selectedProjectRoot)
+    await expect(workingDirectoryChip.getByRole('button', { name: 'Clear working directory' })).toBeVisible()
+
+    const stagedOnly = await page.evaluate(async () => {
+      if (!window.cody) throw new Error('preload bridge is unavailable')
+      const [{ threads }, { projects }] = await Promise.all([
+        window.cody.rpc('thread/list', {}),
+        window.cody.rpc('project/list', {})
+      ])
+      return { threadCount: threads.length, projectCount: projects.length }
+    })
+    expect(stagedOnly).toEqual({ threadCount: 0, projectCount: 0 })
+    expect(await readdir(join(actualUserDataRoot, 'engine', 'workspaces'))).toHaveLength(0)
+
+    const prompt = 'Explain the provider neutral agent loop'
+    const composer = page.getByRole('combobox', { name: 'Message' })
+    await composer.fill(prompt)
+    await page.getByLabel('Provider').selectOption('echo')
+
+    // Two synchronous clicks exercise both renderer guarding and server request idempotency.
+    await page.getByRole('button', { name: 'Send', exact: true }).evaluate((button) => {
+      ;(button as HTMLButtonElement).click()
+      ;(button as HTMLButtonElement).click()
+    })
+
+    await expect(page.locator('.message--user').filter({ hasText: prompt })).toBeVisible()
+    await expect(
+      page.locator('.message--assistant:not(.message--live)').filter({ hasText: prompt })
+    ).toBeVisible({ timeout: 20_000 })
+    await expect(page.getByRole('heading', { level: 1, name: prompt })).toBeVisible({ timeout: 20_000 })
+
+    const durable = await page.evaluate(async () => {
+      if (!window.cody) throw new Error('preload bridge is unavailable')
+      const [{ threads }, { projects }] = await Promise.all([
+        window.cody.rpc('thread/list', {}),
+        window.cody.rpc('project/list', {})
+      ])
+      const [thread] = threads
+      if (threads.length !== 1 || !thread) throw new Error(`expected one Thread, received ${threads.length}`)
+      const snapshot = await window.cody.rpc('thread/get', { thread_id: thread.id })
+      return { threads, projects, snapshot }
+    })
+    expect(durable.threads).toHaveLength(1)
+    expect(durable.projects).toHaveLength(1)
+    expect(durable.snapshot.turns).toHaveLength(1)
+    expect(durable.snapshot.turns[0]?.status).toBe('completed')
+    expect(durable.snapshot.messages).toHaveLength(2)
+    expect(durable.snapshot.messages.map((message) => message.role)).toEqual(['user', 'assistant'])
+    expect(durable.snapshot.thread.title).toBe(prompt)
+    expect(durable.snapshot.workspace.thread_id).toBe(durable.snapshot.thread.id)
+    expect(durable.snapshot.workspace.root).toContain(join(actualUserDataRoot, 'engine', 'workspaces'))
+    expect(durable.projects[0]?.root).toBe(canonicalProjectRoot)
+    expect(durable.snapshot.thread.default_references).toEqual([
+      { kind: 'project', project_id: durable.projects[0]?.id, access: 'read_write' }
+    ])
+    await access(join(durable.snapshot.workspace.root, 'artifacts'))
+    await access(join(durable.snapshot.workspace.root, 'tmp'))
+    expect(await readdir(join(actualUserDataRoot, 'engine', 'workspaces'))).toEqual([
+      durable.snapshot.thread.id
+    ])
+
+    await expect(projectShelf.getByRole('heading', { name: 'Projects 1' })).toBeVisible()
+    await expect(projectShelf.getByText(durable.projects[0]?.name ?? '', { exact: true })).toBeVisible()
+    await expect(projectShelf.getByTitle(canonicalProjectRoot)).toBeVisible()
+    await expect(projectShelf.getByText('Added', { exact: true })).toBeVisible()
+    const populatedShelfBox = await projectShelf.boundingBox()
+    expect(populatedShelfBox).not.toBeNull()
+    expect(populatedShelfBox?.x ?? 0).toBeGreaterThan(viewport.width / 2)
+    expect(populatedShelfBox?.y ?? 0).toBeGreaterThan(viewport.height / 2)
+    expect(Math.abs((populatedShelfBox?.y ?? 0) + (populatedShelfBox?.height ?? 0) - viewport.height)).toBeLessThan(3)
+
+    const threadNavigation = page.getByRole('navigation', { name: 'Threads' })
+    const durableThreadRow = threadNavigation.getByRole('button', { name: new RegExp(prompt) })
+    await expect(durableThreadRow).toBeVisible()
+    const persisted = JSON.parse(
+      await readFile(join(actualUserDataRoot, 'engine', 'state.json'), 'utf8')
+    ) as PersistedState
+    expect(persisted.projects).toHaveLength(1)
+    expect(persisted.threads).toHaveLength(1)
+    expect(persisted.workspaces).toHaveLength(1)
+    expect(persisted.turns).toHaveLength(1)
+    expect(persisted.messages).toHaveLength(2)
+    expect(persisted.threads[0]?.title).toBe(prompt)
+    expect(persisted.threads[0]?.id).toBe(durable.snapshot.thread.id)
+    expect(persisted.workspaces[0]?.thread_id).toBe(durable.snapshot.thread.id)
+
+    // Opening and abandoning another draft must not leave an empty Thread or Workspace.
+    await page.getByRole('button', { name: 'New Thread', exact: true }).click()
+    await expect(page.getByRole('heading', { level: 1, name: 'New conversation' })).toBeVisible()
+    await page.getByRole('combobox', { name: 'Message' }).fill('This draft must not be persisted')
+    await durableThreadRow.click()
+    await expect(page.getByRole('heading', { level: 1, name: prompt })).toBeVisible()
+    const afterAbandonedDraft = await page.evaluate(async (threadId) => {
+      if (!window.cody) throw new Error('preload bridge is unavailable')
+      const { threads } = await window.cody.rpc('thread/list', {})
+      const snapshot = await window.cody.rpc('thread/get', { thread_id: threadId })
+      return { threadCount: threads.length, turnCount: snapshot.turns.length, messageCount: snapshot.messages.length }
+    }, durable.snapshot.thread.id)
+    expect(afterAbandonedDraft).toEqual({ threadCount: 1, turnCount: 1, messageCount: 2 })
+    expect(await readdir(join(actualUserDataRoot, 'engine', 'workspaces'))).toEqual([
+      durable.snapshot.thread.id
+    ])
+
+    // Keep a compact responsive smoke for both independent drawers.
     await application.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.setSize(700, 700)
     })
@@ -77,25 +230,6 @@ test('uses the real preload bridge and creates an isolated Thread Workspace', as
     await expect(assetRail).toBeHidden()
     await expect(openAssetDrawer).toBeFocused()
 
-    const title = `Electron smoke ${Date.now()}`
-    await page.locator('.start-card--thread').click()
-    const dialog = page.getByRole('dialog', { name: 'New Thread' })
-    await expect(dialog).toBeVisible()
-    await dialog.getByLabel('Thread title').fill(title)
-    await dialog.getByRole('button', { name: 'Create Thread', exact: true }).click()
-    await expect(dialog).toBeHidden()
-
-    await expect(page.getByRole('heading', { level: 1, name: title })).toBeVisible()
-    await expect(page.getByLabel('Conversation')).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'What should Cody work on?' })).toBeVisible()
-    await expect(page.getByRole('form', { name: 'Message composer' })).toBeVisible()
-    await openAssetDrawer.click()
-    await expect(
-      page.getByRole('navigation', { name: 'Threads and Projects' }).getByRole('button', { name: new RegExp(title) })
-    ).toBeVisible()
-    await page.keyboard.press('Escape')
-    await expect(assetRail).toBeHidden()
-
     const inspector = page.getByLabel('Thread context and activity')
     const openInspector = page.getByRole('button', { name: 'Open context inspector' })
     await expect(inspector).toBeHidden()
@@ -105,34 +239,6 @@ test('uses the real preload bridge and creates an isolated Thread Workspace', as
     await page.keyboard.press('Escape')
     await expect(inspector).toBeHidden()
     await expect(openInspector).toBeFocused()
-    await application.evaluate(({ BrowserWindow }) => {
-      BrowserWindow.getAllWindows()[0]?.setSize(1380, 880)
-    })
-
-    const durableSnapshot = await page.evaluate(async (threadTitle) => {
-      if (!window.cody) throw new Error('preload bridge is unavailable')
-      const { threads } = await window.cody.rpc('thread/list', {})
-      const thread = threads.find((candidate) => candidate.title === threadTitle)
-      if (!thread) throw new Error('created Thread was not returned by the app server')
-      return window.cody.rpc('thread/get', { thread_id: thread.id })
-    }, title)
-    expect(durableSnapshot.workspace.root).toContain(join(actualUserDataRoot, 'engine', 'workspaces'))
-    await expect(page.locator('.workspace-card code')).toHaveText(durableSnapshot.workspace.root)
-    await access(join(durableSnapshot.workspace.root, 'artifacts'))
-    await access(join(durableSnapshot.workspace.root, 'tmp'))
-
-    const message = 'Hello from the isolated Electron smoke test.'
-    await page.getByRole('combobox', { name: 'Message' }).fill(message)
-    await page.getByLabel('Provider').selectOption('echo')
-    await page.getByRole('button', { name: 'Send', exact: true }).click()
-    await expect(page.locator('.message--user').filter({ hasText: message })).toBeVisible()
-    await expect(
-      page.locator('.message--assistant:not(.message--live)').filter({ hasText: message })
-    ).toBeVisible({ timeout: 20_000 })
-
-    const state = await readFile(join(actualUserDataRoot, 'engine', 'state.json'), 'utf8')
-    expect(state).toContain(title)
-    expect(state).toContain(durableSnapshot.thread.id)
   } finally {
     await application?.close().catch(() => undefined)
     await rm(temporaryRoot, { recursive: true, force: true })

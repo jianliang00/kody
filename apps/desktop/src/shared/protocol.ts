@@ -140,6 +140,7 @@ export type AgentEvent =
       metadata?: unknown
     }
   | { type: 'file_changed'; project_id?: EntityId; path: string }
+  | { type: 'thread_updated'; title: string }
   | { type: 'turn_completed'; final_text: string }
   | { type: 'turn_failed'; error: string }
   | { type: 'turn_cancelled' }
@@ -153,6 +154,10 @@ export interface CreatedThread {
   thread: Thread
   workspace: Workspace
   imported_project?: Project
+}
+
+export interface StartedThread extends CreatedThread {
+  turn: Turn
 }
 
 export interface StartTurnInput {
@@ -172,6 +177,17 @@ export interface RpcMethodMap {
   'thread/create': {
     params: { title: string; working_directory?: string }
     result: CreatedThread
+  }
+  'thread/create-and-start': {
+    params: {
+      client_request_id: string
+      message: string
+      references: ContextReference[]
+      provider: string
+      model?: string
+      working_directory?: string
+    }
+    result: StartedThread
   }
   'thread/get': { params: { thread_id: EntityId }; result: ThreadSnapshot }
   'thread/reference/add': {

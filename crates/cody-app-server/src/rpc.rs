@@ -1,12 +1,14 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use cody_core::{
     ApprovalId, CodyEngine, CodyError, ContextReference, ProjectId, StartTurn, ThreadId, TurnId,
+    DEFAULT_THREAD_TITLE,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
+use tokio_util::sync::CancellationToken;
 
-use crate::server::AppState;
+use crate::server::{AppState, CreateRequestRecord};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RpcRequest {
@@ -216,6 +218,17 @@ impl RpcDispatcher {
                     "imported_project": project,
                 }))
             }
+            "thread/create-and-start" | "thread.create-and-start" => {
+                let (value, prepared) = self.create_and_prepare_thread(params).await?;
+                if let Some((turn_id, cancellation)) = prepared {
+                    self.state.turns.execute_prepared(
+                        self.state.engine.runtime().clone(),
+                        turn_id,
+                        cancellation,
+                    );
+                }
+                Ok(value)
+            }
             "thread/list" | "thread.list" => {
                 let threads = self
                     .state
@@ -318,6 +331,142 @@ impl RpcDispatcher {
             _ => Err(RpcError::method_not_found(method)),
         }
     }
+
+    /// Creates the durable Thread unit and prepares its first Turn while the
+    /// caller decides when execution begins. WebSocket callers subscribe to
+    /// the new Thread before starting execution so no early events are lost.
+    pub(crate) async fn create_and_prepare_thread(
+        &self,
+        params: Value,
+    ) -> Result<(Value, Option<(TurnId, CancellationToken)>), RpcError> {
+        let params: CreateThreadAndStartParams = parse_params(params)?;
+        let request_id = params.client_request_id.trim().to_owned();
+        if request_id.is_empty() || request_id.len() > 256 {
+            return Err(RpcError::invalid_params(
+                "client_request_id must be between 1 and 256 characters",
+            ));
+        }
+        let fingerprint = create_request_fingerprint(&params)?;
+
+        // Holding this small process-local lock serializes only first-message
+        // creation and makes concurrent retries with one request ID idempotent.
+        let mut requests = self.state.create_requests.lock().await;
+        if let Some(existing) = requests.get(&request_id).cloned() {
+            if existing.fingerprint != fingerprint {
+                return Err(RpcError::from(CodyError::Conflict(format!(
+                    "client_request_id '{request_id}' was already used with different parameters"
+                ))));
+            }
+            let value =
+                hydrate_create_response(self.state.engine.store().as_ref(), &existing).await?;
+            return Ok((value, None));
+        }
+
+        let store = self.state.engine.store();
+        let existing_projects = store
+            .list_projects()
+            .await
+            .map_err(RpcError::from)?
+            .into_iter()
+            .map(|project| project.id)
+            .collect::<HashSet<_>>();
+        let (thread, workspace, imported_project) = self
+            .state
+            .engine
+            .create_thread(DEFAULT_THREAD_TITLE, params.working_directory)
+            .await
+            .map_err(RpcError::from)?;
+        let start = StartTurn {
+            thread_id: thread.id,
+            message: params.message,
+            references: params.references,
+            provider: params.provider,
+            model: params.model,
+            temperature: None,
+            max_output_tokens: None,
+        };
+        let (turn, cancellation) = match self
+            .state
+            .turns
+            .prepare(self.state.engine.runtime().clone(), start)
+            .await
+        {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let _ = store.delete_thread(thread.id).await;
+                let _ = tokio::fs::remove_dir_all(&workspace.root).await;
+                if let Some(project) = &imported_project {
+                    if !existing_projects.contains(&project.id) {
+                        let _ = store.delete_project(project.id).await;
+                    }
+                }
+                return Err(RpcError::from(error));
+            }
+        };
+        let record = CreateRequestRecord {
+            fingerprint,
+            thread_id: thread.id,
+            workspace_id: workspace.id,
+            turn_id: turn.id,
+            project_id: imported_project.as_ref().map(|project| project.id),
+        };
+        let value = hydrate_create_response(store.as_ref(), &record).await?;
+        requests.insert(request_id, record);
+        Ok((value, Some((turn.id, cancellation))))
+    }
+}
+
+#[derive(Serialize)]
+struct CreateRequestFingerprint<'a> {
+    message: &'a str,
+    references: &'a [ContextReference],
+    provider: &'a str,
+    model: &'a Option<String>,
+    working_directory: &'a Option<PathBuf>,
+}
+
+fn create_request_fingerprint(params: &CreateThreadAndStartParams) -> Result<String, RpcError> {
+    serde_json::to_string(&CreateRequestFingerprint {
+        message: &params.message,
+        references: &params.references,
+        provider: &params.provider,
+        model: &params.model,
+        working_directory: &params.working_directory,
+    })
+    .map_err(RpcError::invalid_params)
+}
+
+async fn hydrate_create_response(
+    store: &dyn cody_core::StateStore,
+    record: &CreateRequestRecord,
+) -> Result<Value, RpcError> {
+    let thread = store
+        .get_thread(record.thread_id)
+        .await
+        .map_err(RpcError::from)?;
+    let workspace = store
+        .get_workspace(record.workspace_id)
+        .await
+        .map_err(RpcError::from)?;
+    let turn = store
+        .get_turn(record.turn_id)
+        .await
+        .map_err(RpcError::from)?;
+    let imported_project = match record.project_id {
+        Some(project_id) => Some(
+            store
+                .get_project(project_id)
+                .await
+                .map_err(RpcError::from)?,
+        ),
+        None => None,
+    };
+    Ok(json!({
+        "thread": thread,
+        "workspace": workspace,
+        "imported_project": imported_project,
+        "turn": turn,
+    }))
 }
 
 fn parse_params<T: DeserializeOwned>(params: Value) -> Result<T, RpcError> {
@@ -336,6 +485,8 @@ fn initialize_result() -> Value {
             "event_notification": "turn/event",
             "thread_references": true,
             "project_references": true,
+            "thread_create_and_start": true,
+            "thread_auto_titles": true,
             "turn_cancellation": true,
             "tool_approvals": true,
             "thread_event_subscriptions": true,
@@ -364,8 +515,21 @@ struct ThreadCreateParams {
     working_directory: Option<PathBuf>,
 }
 
+#[derive(Debug, Deserialize)]
+struct CreateThreadAndStartParams {
+    client_request_id: String,
+    message: String,
+    #[serde(default)]
+    references: Vec<ContextReference>,
+    provider: String,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    working_directory: Option<PathBuf>,
+}
+
 fn default_thread_title() -> String {
-    "New thread".into()
+    DEFAULT_THREAD_TITLE.into()
 }
 
 #[derive(Debug, Deserialize)]

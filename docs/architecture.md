@@ -38,6 +38,7 @@ The important ownership rules are:
 3. References are stored on the user message where they were mentioned. Later turns fold earlier references into the Thread context. A Project supplied during `thread/create` is stored in `Thread.default_references`.
 4. Referenced Thread messages are resolved at prompt-build time and remain owned by their source Thread.
 5. A Thread has at most one active Turn. Store-level compare-and-set transitions enforce this independently of the server task map.
+6. A desktop draft is not a domain entity. `thread/create-and-start` materializes Thread, Workspace, optional Project, user Message, and first Turn only on Send; its client request ID is process-locally idempotent.
 
 ## Agent loop
 
@@ -56,6 +57,8 @@ flowchart TD
 ```
 
 Every model/tool/terminal transition emits a sequenced `EventEnvelope`. Cancellation is checked before provider calls, after provider responses, while waiting for approval, and inside built-in tools. Provider and tool panics inside the loop are converted into a failed Turn; terminal cleanup releases the Thread reservation.
+
+After the first successful Turn, title enrichment runs outside the terminal path. `ThreadTitleGenerator` is replaceable by a provider-backed implementation, while the deterministic local generator is always available as fallback. A title failure never changes the completed Turn result.
 
 ## Provider abstraction
 

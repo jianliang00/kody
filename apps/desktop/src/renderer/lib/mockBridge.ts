@@ -152,6 +152,7 @@ function createMockStore() {
   const timers = new Map<string, number[]>()
   const approvals = new Map<string, PendingApproval>()
   const sequence = new Map<string, number>()
+  const startedRequests = new Map<string, RpcMethodMap['thread/create-and-start']['result']>()
 
   for (const thread of threads) {
     snapshots.set(thread.id, {
@@ -202,6 +203,18 @@ function createMockStore() {
     turn.completed_at = new Date().toISOString()
     snapshot.thread.status = 'idle'
     snapshot.thread.updated_at = turn.completed_at
+    let generatedTitle: string | undefined
+    if (snapshot.thread.title === 'New thread') {
+      const firstPrompt = snapshot.messages
+        .find((message) => message.role === 'user')
+        ?.parts.find((part) => part.type === 'text')
+      if (firstPrompt?.type === 'text') {
+        generatedTitle = Array.from(firstPrompt.text.trim().split(/\r?\n/, 1)[0] ?? '')
+          .slice(0, 60)
+          .join('') || 'New thread'
+        snapshot.thread.title = generatedTitle
+      }
+    }
     snapshot.messages.push({
       id: id('message'),
       thread_id: threadId,
@@ -214,6 +227,9 @@ function createMockStore() {
     emit(threadId, turnId, { type: 'model_output_delta', delta: response })
     emit(threadId, turnId, { type: 'model_completed', stop_reason: 'end_turn' })
     emit(threadId, turnId, { type: 'turn_completed', final_text: response })
+    if (generatedTitle && generatedTitle !== 'New thread') {
+      emit(threadId, turnId, { type: 'thread_updated', title: generatedTitle })
+    }
     clearTurnTimers(turnId)
   }
 
@@ -349,6 +365,25 @@ function createMockStore() {
           workspace: clone(snapshot.workspace),
           imported_project: importedProject ? clone(importedProject) : undefined
         } as RpcMethodMap[M]['result']
+      }
+      case 'thread/create-and-start': {
+        const input = params as RpcMethodMap['thread/create-and-start']['params']
+        const existing = startedRequests.get(input.client_request_id)
+        if (existing) return clone(existing) as RpcMethodMap[M]['result']
+        const created = await rpc('thread/create', {
+          title: 'New thread',
+          working_directory: input.working_directory
+        })
+        const turn = await rpc('turn/start', {
+          thread_id: created.thread.id,
+          message: input.message,
+          references: input.references,
+          provider: input.provider,
+          model: input.model
+        })
+        const started = { ...created, turn }
+        startedRequests.set(input.client_request_id, clone(started))
+        return clone(started) as RpcMethodMap[M]['result']
       }
       case 'thread/get': {
         const input = params as RpcMethodMap['thread/get']['params']
