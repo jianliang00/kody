@@ -93,7 +93,14 @@ jobs:
           asc notarization submit --file "$DMG_PATH" --wait --poll-interval 15s --timeout 2h --output table
           xcrun stapler staple "$DMG_PATH"
           xcrun stapler validate "$DMG_PATH"
-          spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG_PATH"
+          MOUNT_DIR="$RUNNER_TEMP/kody-dmg-${{ matrix.arch }}"
+          mkdir -p "$MOUNT_DIR"
+          trap 'hdiutil detach "$MOUNT_DIR" -quiet 2>/dev/null || true' EXIT
+          hdiutil attach "$DMG_PATH" -nobrowse -readonly -mountpoint "$MOUNT_DIR" -quiet
+          codesign --verify --deep --strict --verbose=2 "$MOUNT_DIR/Kody.app"
+          spctl --assess --type execute --verbose=4 "$MOUNT_DIR/Kody.app"
+          hdiutil detach "$MOUNT_DIR" -quiet
+          trap - EXIT
       - uses: actions/upload-artifact@v7
         with:
           name: kody-macos-${{ matrix.arch }}

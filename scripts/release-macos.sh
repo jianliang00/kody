@@ -43,6 +43,20 @@ asc notarization submit \
 
 xcrun stapler staple "$DMG_PATH"
 xcrun stapler validate "$DMG_PATH"
-spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG_PATH"
+
+# electron-builder deliberately leaves the outer DMG unsigned because signing
+# the container conflicts with notarization workflows. Gatekeeper must assess
+# the signed, notarized app from inside the stapled disk image.
+MOUNT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/kody-dmg.XXXXXX")"
+cleanup_mount() {
+  hdiutil detach "$MOUNT_DIR" -quiet 2>/dev/null || true
+  rmdir "$MOUNT_DIR" 2>/dev/null || true
+}
+trap cleanup_mount EXIT
+hdiutil attach "$DMG_PATH" -nobrowse -readonly -mountpoint "$MOUNT_DIR" -quiet
+codesign --verify --deep --strict --verbose=2 "$MOUNT_DIR/Kody.app"
+spctl --assess --type execute --verbose=4 "$MOUNT_DIR/Kody.app"
+cleanup_mount
+trap - EXIT
 
 echo "Release DMG: $DMG_PATH"

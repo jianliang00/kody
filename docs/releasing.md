@@ -20,7 +20,8 @@ npm run release:mac
 ```
 
 The script signs `Kody.app`, submits the DMG with `asc notarization submit`,
-staples the accepted ticket, and runs Gatekeeper validation.
+staples the accepted ticket, mounts the DMG read-only, and asks Gatekeeper to
+validate the notarized app inside it.
 
 ## GitHub Actions secrets
 
