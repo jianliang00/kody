@@ -1,6 +1,12 @@
 import { AtSign, FolderOpen, Send, Square, X } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
-import type { ContextReference, Project, Thread } from '@shared/protocol'
+import type {
+  ContextReference,
+  ModelDescriptor,
+  Project,
+  ProviderDescriptor,
+  Thread
+} from '@shared/protocol'
 import {
   createCandidates,
   filterCandidates,
@@ -19,19 +25,28 @@ interface ComposerProps {
   threads: Thread[]
   projects: Project[]
   references: ContextReference[]
-  providers: string[]
-  provider: string
+  providers: ProviderDescriptor[]
+  providerId: string
+  models: ModelDescriptor[]
+  model: string
+  modelsLoading?: boolean
   running: boolean
   message: string
   draft?: boolean
   workingDirectory?: string
   unavailable?: boolean
   onReferencesChange: (references: ContextReference[]) => void
-  onProviderChange: (provider: string) => void
+  onProviderChange: (providerId: string) => void
+  onModelChange: (model: string) => void
   onMessageChange: (message: string) => void
   onPickWorkingDirectory?: () => Promise<void>
   onClearWorkingDirectory?: () => void
-  onSend: (message: string, references: ContextReference[]) => Promise<boolean>
+  onSend: (
+    message: string,
+    references: ContextReference[],
+    providerId: string,
+    model: string
+  ) => Promise<boolean>
   onCancel: () => Promise<void>
 }
 
@@ -41,7 +56,10 @@ export function Composer({
   projects,
   references,
   providers,
-  provider,
+  providerId,
+  models,
+  model,
+  modelsLoading = false,
   running,
   message,
   draft = false,
@@ -49,6 +67,7 @@ export function Composer({
   unavailable = false,
   onReferencesChange,
   onProviderChange,
+  onModelChange,
   onMessageChange,
   onPickWorkingDirectory,
   onClearWorkingDirectory,
@@ -76,6 +95,22 @@ export function Composer({
     () => filterCandidates(candidates, paletteQuery, references),
     [candidates, paletteQuery, references]
   )
+  const selectedProvider = providers.find((item) => item.id === providerId)
+  const modelOptions = useMemo(() => {
+    const byId = new Map<string, ModelDescriptor>()
+    if (selectedProvider?.default_model) {
+      byId.set(selectedProvider.default_model, {
+        id: selectedProvider.default_model,
+        display_name: selectedProvider.default_model
+      })
+    }
+    for (const item of models) byId.set(item.id, item)
+    if (model && !byId.has(model)) byId.set(model, { id: model, display_name: model })
+    return [...byId.values()]
+  }, [model, models, selectedProvider?.default_model])
+  const usesCodexAgentLoop = selectedProvider
+    ? selectedProvider.kind === 'codex' || selectedProvider.id === 'codex'
+    : false
 
   const closePalette = (restore: 'composer' | 'button' = 'composer'): void => {
     setPaletteOpen(false)
@@ -132,12 +167,16 @@ export function Composer({
       textareaRef.current?.focus()
       return
     }
+    if (!providerId || !model) {
+      setValidationError('Choose a provider and model before starting a turn.')
+      return
+    }
     if (running || submittingRef.current || unavailable) return
     submittingRef.current = true
     setSubmitting(true)
     setValidationError('')
     try {
-      const sent = await onSend(trimmed, references)
+      const sent = await onSend(trimmed, references, providerId, model)
       if (sent) {
         onMessageChange('')
         onReferencesChange([])
@@ -211,17 +250,37 @@ export function Composer({
           <label htmlFor="composer-provider">Provider</label>
           <select
             id="composer-provider"
-            value={provider}
+            value={providerId}
             onChange={(event) => onProviderChange(event.target.value)}
             disabled={running || unavailable || providers.length === 0}
           >
             {providers.length === 0 ? <option>Unavailable</option> : null}
+            {providers.length > 0 && !providerId ? <option value="">No configured provider</option> : null}
             {providers.map((item) => (
-              <option value={item} key={item}>{item}</option>
+              <option value={item.id} key={item.id} disabled={item.auth === 'missing'}>
+                {item.display_name}{item.auth === 'missing' ? ' · setup required' : ''}
+              </option>
+            ))}
+          </select>
+          <label htmlFor="composer-model">Model</label>
+          <select
+            id="composer-model"
+            value={model}
+            onChange={(event) => onModelChange(event.target.value)}
+            disabled={running || unavailable || !providerId || modelOptions.length === 0}
+          >
+            {modelsLoading ? <option value="">Loading models…</option> : null}
+            {!modelsLoading && modelOptions.length === 0 ? <option value="">Unavailable</option> : null}
+            {modelOptions.map((item) => (
+              <option value={item.id} key={item.id}>{item.display_name}</option>
             ))}
           </select>
         </div>
       </div>
+
+      {usesCodexAgentLoop ? (
+        <p className="composer__hint">Uses the Codex agent loop and tools for this Turn.</p>
+      ) : null}
 
       {references.length > 0 ? (
         <div className="composer__references">
@@ -322,7 +381,7 @@ export function Composer({
           <button
             className="turn-button"
             type="submit"
-            disabled={unavailable || submitting || providers.length === 0}
+            disabled={unavailable || submitting || !providerId || !model}
             aria-describedby={unavailable ? 'composer-unavailable' : undefined}
           >
             <Send aria-hidden="true" size={15} />

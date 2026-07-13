@@ -2,7 +2,10 @@ use async_trait::async_trait;
 
 use crate::error::Result;
 
-use super::{emit_response, ModelDeltaSink, ModelProvider, ModelRequest, ModelResponse, ModelRole};
+use super::{
+    emit_response, AuthState, ModelDeltaSink, ModelProvider, ModelRequest, ModelResponse,
+    ModelRole, ProviderCapabilities, ProviderDescriptor,
+};
 
 /// Deterministic provider that returns the most recent user message's text.
 /// It is useful for smoke tests and for running the app server without model
@@ -32,6 +35,20 @@ impl ModelProvider for EchoProvider {
 
     fn default_model(&self) -> Option<&str> {
         Some("echo")
+    }
+
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderDescriptor {
+            id: self.id.clone(),
+            display_name: "Echo".into(),
+            kind: "echo".into(),
+            auth: AuthState::NotRequired,
+            capabilities: ProviderCapabilities {
+                custom_models: false,
+                ..ProviderCapabilities::default()
+            },
+            default_model: Some("echo".into()),
+        }
     }
 
     async fn complete(

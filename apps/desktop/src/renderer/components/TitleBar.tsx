@@ -6,6 +6,7 @@ import {
   PanelLeftOpen,
   PanelRightOpen,
   RefreshCcw,
+  Settings2,
   Sun,
   X
 } from 'lucide-react'
@@ -24,6 +25,7 @@ interface TitleBarProps {
   onOpenRail: () => void
   onOpenInspector: () => void
   onRetry: () => void
+  onOpenSettings: () => void
   onToggleTheme: () => void
   onWindowAction: (action: 'minimize' | 'maximize' | 'close') => void
 }
@@ -41,6 +43,7 @@ export function TitleBar({
   onOpenRail,
   onOpenInspector,
   onRetry,
+  onOpenSettings,
   onToggleTheme,
   onWindowAction
 }: TitleBarProps) {
@@ -87,6 +90,9 @@ export function TitleBar({
             <RefreshCcw aria-hidden="true" size={12} />
           </button>
         )}
+        <button className="icon-button" type="button" onClick={onOpenSettings} aria-label="Open model settings">
+          <Settings2 aria-hidden="true" size={17} />
+        </button>
         <button className="icon-button" type="button" onClick={onToggleTheme} aria-label={`Use ${darkTheme ? 'light' : 'dark'} theme`}>
           {darkTheme ? <Sun aria-hidden="true" size={17} /> : <Moon aria-hidden="true" size={17} />}
         </button>

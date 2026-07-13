@@ -18,6 +18,11 @@ import type {
 const HEALTH_TIMEOUT_MS = 15_000
 const RPC_TIMEOUT_MS = 60_000
 const RECONNECT_MAX_DELAY_MS = 5_000
+const CODEX_AUTH_HOSTS = ['openai.com', 'chatgpt.com'] as const
+const SECRET_NAME_PATTERN = /(?:^|_)(?:API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|AUTH|BEARER|COOKIE|SESSION|PAT|JWT|DSN)(?:_|$)/
+const SECRET_SUFFIX_PATTERN = /(?:PASSWORD|PASSWD|TOKEN|SECRET|CREDENTIALS?|PRIVATEKEY)$/
+const CONNECTION_NAME_PATTERN = /(?:^|_)(?:DATABASE|DB|REDIS|MONGO(?:DB)?|POSTGRES(?:QL)?|MYSQL|AMQP|KAFKA|ELASTIC(?:SEARCH)?|SENTRY)_(?:URL|URI|DSN|CONNECTION_STRING)$/
+const PROXY_NAMES = new Set(['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY'])
 
 interface PendingRequest {
   resolve(value: unknown): void
@@ -41,6 +46,7 @@ interface ServerManagerOptions {
   onProcessEvent(event: ProcessEventEnvelope): void
   onStatus(status: ServerStatus): void
   onLog?(line: string): void
+  onConnected?(rpc: (method: string, params: unknown) => Promise<unknown>): Promise<void>
 }
 
 interface LaunchCommand {
@@ -83,8 +89,11 @@ export class CodyServerManager {
 
   async start(): Promise<void> {
     if (this.closed) throw new Error('Cody server manager is shutting down')
-    if (this.socket?.readyState === WebSocket.OPEN) return
     if (this.startPromise) return this.startPromise
+    // A WebSocket becomes OPEN before initialize, provider reconciliation, and
+    // subscription restoration finish. Concurrent RPCs must wait for that
+    // complete bootstrap barrier rather than observing a half-synced server.
+    if (this.socket?.readyState === WebSocket.OPEN) return
 
     this.clearReconnectTimer()
     const operation = this.hasLiveChild() && this.token && this.port
@@ -135,6 +144,12 @@ export class CodyServerManager {
     return result
   }
 
+  /** Main-process-only RPC path for privileged configuration and auth calls. */
+  async controlRpc<T>(method: string, params: unknown): Promise<T> {
+    await this.start()
+    return this.sendRpc<T>(method, params)
+  }
+
   async stop(): Promise<void> {
     if (this.closed && !this.child && !this.socket) return
     this.closed = true
@@ -164,7 +179,7 @@ export class CodyServerManager {
     const child = spawn(launch.command, launch.args, {
       cwd: launch.cwd,
       env: {
-        ...process.env,
+        ...sanitizedChildEnvironment(process.env),
         CODY_BIND: `127.0.0.1:${port}`,
         CODY_SERVER_TOKEN: token,
         CODY_HOME: this.options.stateRoot
@@ -207,7 +222,11 @@ export class CodyServerManager {
     try {
       await this.openSocket(port, token)
       await this.sendRpc('initialize', {})
+      await this.options.onConnected?.((method, params) => this.sendRpc(method, params))
       await this.restoreSubscriptions()
+      if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+        throw new Error('Cody RPC connection closed during bootstrap')
+      }
     } catch (error) {
       this.closeSocket()
       this.rejectPending(new Error('Could not establish the Cody RPC connection'))
@@ -422,6 +441,65 @@ export class CodyServerManager {
   private updateStatus(status: ServerStatus): void {
     this.status = { ...status }
     this.options.onStatus(this.getStatus())
+  }
+}
+
+/**
+ * Preserve the user's development environment without forwarding ambient
+ * credentials into the agent server and every process it may later spawn.
+ * Provider credentials are synced over the authenticated control channel.
+ */
+export function sanitizedChildEnvironment(
+  environment: NodeJS.ProcessEnv
+): NodeJS.ProcessEnv {
+  const sanitized: NodeJS.ProcessEnv = {}
+  for (const [name, value] of Object.entries(environment)) {
+    if (value === undefined) continue
+    const upper = name.toUpperCase()
+    if (
+      SECRET_NAME_PATTERN.test(upper)
+      || SECRET_SUFFIX_PATTERN.test(upper)
+      || CONNECTION_NAME_PATTERN.test(upper)
+      || upper.startsWith('OPENAI_')
+      || upper.startsWith('ANTHROPIC_')
+      || upper.startsWith('CODY_OPENAI_')
+      || upper === 'CODY_SERVER_TOKEN'
+      || (PROXY_NAMES.has(upper) && proxyContainsCredentials(value))
+    ) continue
+    sanitized[name] = value
+  }
+  return sanitized
+}
+
+/**
+ * Accept only official Codex sign-in origins before handing a URL to the
+ * operating system. Query parameters are preserved because OAuth state and
+ * PKCE challenges are expected there; embedded URL credentials are not.
+ */
+export function trustedCodexAuthUrl(rawUrl: string): string {
+  let url: URL
+  try {
+    url = new URL(rawUrl)
+  } catch {
+    throw new Error('Codex returned an invalid login URL')
+  }
+  const trustedHost = CODEX_AUTH_HOSTS.some(
+    (domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`)
+  )
+  if (url.protocol !== 'https:' || url.username || url.password || !trustedHost) {
+    throw new Error('Codex returned an untrusted login URL')
+  }
+  return url.toString()
+}
+
+function proxyContainsCredentials(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return Boolean(url.username || url.password || url.search || url.hash)
+  } catch {
+    // Proxy variables also commonly use host:port or user:pass@host:port.
+    // Preserve the former and drop the latter when URL parsing is impossible.
+    return value.includes('@')
   }
 }
 

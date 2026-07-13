@@ -30,12 +30,12 @@ async fn main() -> anyhow::Result<()> {
             .register(Arc::new(OpenAiCompatibleProvider::new(provider)?))?;
         info!(%provider_id, "registered OpenAI-compatible provider");
     }
+    // Provider adapters retain credentials in private memory. Remove ambient
+    // copies before tools, managed processes, or the Codex sidecar can spawn.
+    std::env::remove_var("CODY_OPENAI_API_KEY");
+    std::env::remove_var("OPENAI_API_KEY");
 
     let state = AppState::new(engine);
-    info!(
-        token = state.auth_token(),
-        "app server authentication token"
-    );
     let router = app(state.clone());
     let bind = std::env::var("CODY_BIND").unwrap_or_else(|_| "127.0.0.1:8765".into());
     let address: SocketAddr = bind.parse()?;
@@ -113,4 +113,5 @@ async fn perform_shutdown(state: AppState) {
     if let Err(error) = state.engine.shutdown().await {
         warn!(%error, "managed process shutdown reported an error");
     }
+    state.codex.shutdown().await;
 }

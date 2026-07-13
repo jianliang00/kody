@@ -1985,6 +1985,7 @@ mod tests {
                 status: ThreadStatus::Idle,
                 default_references: Vec::new(),
                 summary: None,
+                external_thread_ids: Default::default(),
                 created_at: timestamp(created_at),
                 updated_at: timestamp(created_at),
             },

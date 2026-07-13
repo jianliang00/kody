@@ -345,6 +345,7 @@ impl CodyEngine {
                 })
                 .collect(),
             summary: None,
+            external_thread_ids: Default::default(),
             created_at: now,
             updated_at: now,
         };

@@ -8,8 +8,9 @@ use serde_json::Value;
 use crate::error::{CodyError, Result};
 
 use super::{
-    emit_response, FinishReason, ModelContent, ModelDeltaSink, ModelMessage, ModelProvider,
-    ModelRequest, ModelResponse, ModelRole, ModelUsage, ToolDefinition,
+    emit_response, AuthState, FinishReason, ModelContent, ModelDeltaSink, ModelMessage,
+    ModelProvider, ModelRequest, ModelResponse, ModelRole, ModelUsage, ProviderCapabilities,
+    ProviderDescriptor, ToolDefinition,
 };
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
@@ -21,9 +22,11 @@ const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 #[derive(Clone)]
 pub struct OpenAiCompatibleConfig {
     pub id: String,
+    pub display_name: String,
     pub base_url: String,
     pub api_key: Option<String>,
     pub default_model: Option<String>,
+    pub configured_models: Vec<String>,
     pub organization: Option<String>,
     pub project: Option<String>,
     pub timeout: Duration,
@@ -34,9 +37,11 @@ impl fmt::Debug for OpenAiCompatibleConfig {
         formatter
             .debug_struct("OpenAiCompatibleConfig")
             .field("id", &self.id)
+            .field("display_name", &self.display_name)
             .field("base_url", &self.base_url)
             .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
             .field("default_model", &self.default_model)
+            .field("configured_models", &self.configured_models)
             .field("organization", &self.organization)
             .field("project", &self.project)
             .field("timeout", &self.timeout)
@@ -48,9 +53,11 @@ impl Default for OpenAiCompatibleConfig {
     fn default() -> Self {
         Self {
             id: "openai".into(),
+            display_name: "OpenAI compatible".into(),
             base_url: DEFAULT_BASE_URL.into(),
             api_key: None,
             default_model: None,
+            configured_models: Vec::new(),
             organization: None,
             project: None,
             timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
@@ -60,8 +67,10 @@ impl Default for OpenAiCompatibleConfig {
 
 impl OpenAiCompatibleConfig {
     pub fn new(id: impl Into<String>, base_url: impl Into<String>) -> Self {
+        let id = id.into();
         Self {
-            id: id.into(),
+            display_name: id.clone(),
+            id,
             base_url: base_url.into(),
             ..Self::default()
         }
@@ -128,13 +137,16 @@ impl OpenAiCompatibleConfig {
             ));
         }
 
+        let id = id.unwrap_or_else(|| "openai".into());
         Ok(Some(Self {
-            id: id.unwrap_or_else(|| "openai".into()),
+            display_name: id.clone(),
+            id,
             base_url: cody_base_url
                 .or(standard_base_url)
                 .unwrap_or_else(|| DEFAULT_BASE_URL.into()),
             api_key: cody_api_key.or(standard_api_key),
             default_model: cody_model.or(standard_model),
+            configured_models: Vec::new(),
             organization: cody_organization.or(standard_organization),
             project: cody_project.or(standard_project),
             timeout: Duration::from_secs(timeout),
@@ -198,6 +210,31 @@ impl OpenAiCompatibleProvider {
                 )
             })
     }
+
+    /// Removes the configured credential from any provider-controlled error
+    /// text before it can enter logs, events, or an RPC response.
+    fn redact(&self, value: &str) -> String {
+        match self
+            .config
+            .api_key
+            .as_deref()
+            .filter(|secret| !secret.is_empty())
+        {
+            Some(secret) => value.replace(secret, "[REDACTED]"),
+            None => value.to_owned(),
+        }
+    }
+
+    fn provider_error(&self, message: impl Into<String>) -> CodyError {
+        CodyError::Provider(self.redact(&message.into()))
+    }
+
+    fn redact_error(&self, error: CodyError) -> CodyError {
+        match error {
+            CodyError::Provider(message) => self.provider_error(message),
+            other => other,
+        }
+    }
 }
 
 #[async_trait]
@@ -208,6 +245,44 @@ impl ModelProvider for OpenAiCompatibleProvider {
 
     fn default_model(&self) -> Option<&str> {
         self.config.default_model.as_deref()
+    }
+
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderDescriptor {
+            id: self.config.id.clone(),
+            display_name: self.config.display_name.clone(),
+            kind: "openai_chat_completions".into(),
+            auth: if self.config.api_key.is_some() {
+                AuthState::Configured
+            } else {
+                AuthState::Unknown
+            },
+            capabilities: ProviderCapabilities {
+                streaming: false,
+                reasoning: false,
+                tools: true,
+                model_catalog: false,
+                custom_models: true,
+            },
+            default_model: self.config.default_model.clone(),
+        }
+    }
+
+    async fn list_models(&self) -> Result<Vec<super::ModelDescriptor>> {
+        let mut models = self.config.configured_models.clone();
+        if let Some(default) = self.config.default_model.as_ref() {
+            models.push(default.clone());
+        }
+        models.retain(|model| !model.trim().is_empty());
+        models.sort();
+        models.dedup();
+        Ok(models
+            .into_iter()
+            .map(|model| {
+                let is_default = self.config.default_model.as_deref() == Some(model.as_str());
+                super::ModelDescriptor::new(model).with_default(is_default)
+            })
+            .collect())
     }
 
     async fn complete(
@@ -241,7 +316,7 @@ impl ModelProvider for OpenAiCompatibleProvider {
         }
 
         let mut http_response = builder.send().await.map_err(|error| {
-            CodyError::Provider(format!(
+            self.provider_error(format!(
                 "OpenAI-compatible request to {} failed: {error}",
                 self.endpoint
             ))
@@ -257,7 +332,7 @@ impl ModelProvider for OpenAiCompatibleProvider {
         }
         let mut body = Vec::new();
         while let Some(chunk) = http_response.chunk().await.map_err(|error| {
-            CodyError::Provider(format!(
+            self.provider_error(format!(
                 "failed to read OpenAI-compatible response body: {error}"
             ))
         })? {
@@ -269,26 +344,28 @@ impl ModelProvider for OpenAiCompatibleProvider {
             body.extend_from_slice(&chunk);
         }
         let body = String::from_utf8(body).map_err(|error| {
-            CodyError::Provider(format!(
+            self.provider_error(format!(
                 "OpenAI-compatible response is not valid UTF-8: {error}"
             ))
         })?;
 
         if !status.is_success() {
-            return Err(CodyError::Provider(format!(
+            return Err(self.provider_error(format!(
                 "OpenAI-compatible API returned {status}: {}",
                 api_error_message(&body)
             )));
         }
 
         let wire_response: OpenAiResponse = serde_json::from_str(&body).map_err(|error| {
-            CodyError::Provider(format!(
+            self.provider_error(format!(
                 "invalid OpenAI-compatible response: {error}; body: {}",
                 truncate(&body, 2_000)
             ))
         })?;
-        let response = decode_response(wire_response)?;
-        emit_response(delta_sink, &response).await?;
+        let response = decode_response(wire_response).map_err(|error| self.redact_error(error))?;
+        emit_response(delta_sink, &response)
+            .await
+            .map_err(|error| self.redact_error(error))?;
         Ok(response)
     }
 }
@@ -695,6 +772,75 @@ fn truncate(value: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+        task::JoinHandle,
+    };
+
+    async fn spawn_mock_response(
+        status: u16,
+        reason: &str,
+        body: String,
+    ) -> (String, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let reason = reason.to_owned();
+        let task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_http_request(&mut socket).await;
+            let response = format!(
+                "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        (format!("http://{address}/v1"), task)
+    }
+
+    async fn read_http_request(socket: &mut tokio::net::TcpStream) {
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4_096];
+        let mut expected = None;
+        loop {
+            let read = socket.read(&mut buffer).await.unwrap();
+            if read == 0 {
+                return;
+            }
+            request.extend_from_slice(&buffer[..read]);
+            if expected.is_none() {
+                if let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&request[..header_end]);
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())
+                                .flatten()
+                        })
+                        .unwrap_or_default();
+                    expected = Some(header_end + 4 + content_length);
+                }
+            }
+            if expected.is_some_and(|length| request.len() >= length) {
+                return;
+            }
+        }
+    }
+
+    fn provider_for_test(base_url: String, secret: &str) -> OpenAiCompatibleProvider {
+        let mut config = OpenAiCompatibleConfig::new("compatible-test", base_url);
+        config.api_key = Some(secret.into());
+        config.default_model = Some("test-model".into());
+        OpenAiCompatibleProvider::new(config).unwrap()
+    }
+
+    fn assert_secret_redacted(error: &CodyError, secret: &str) {
+        let error = error.to_string();
+        assert!(error.contains("[REDACTED]"), "{error}");
+        assert!(!error.contains(secret), "{error}");
+    }
 
     #[test]
     fn appends_chat_completions_to_base_url() {
@@ -774,5 +920,52 @@ mod tests {
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].tool_call_id.as_deref(), Some("one"));
         assert_eq!(messages[1].tool_call_id.as_deref(), Some("two"));
+    }
+
+    #[tokio::test]
+    async fn redacts_api_key_echoed_by_an_http_error() {
+        let secret = "sk-compatible-http-canary";
+        let body = json!({
+            "error": {
+                "message": format!("credential {secret} was rejected")
+            }
+        })
+        .to_string();
+        let (base_url, server) = spawn_mock_response(401, "Unauthorized", body).await;
+        let provider = provider_for_test(base_url, secret);
+
+        let error = provider
+            .complete(ModelRequest::new("test-model", Vec::new()), None)
+            .await
+            .unwrap_err();
+
+        assert_secret_redacted(&error, secret);
+        assert!(!format!("{provider:?}").contains(secret));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn redacts_api_key_echoed_by_a_malformed_success_body() {
+        let secret = "sk-compatible-decode-canary";
+        let body = format!("{{\"choices\":[{{\"credential\":\"{secret}\"");
+        let (base_url, server) = spawn_mock_response(200, "OK", body).await;
+        let provider = provider_for_test(base_url, secret);
+
+        let error = provider
+            .complete(ModelRequest::new("test-model", Vec::new()), None)
+            .await
+            .unwrap_err();
+
+        assert_secret_redacted(&error, secret);
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn redacts_api_key_from_provider_errors_used_by_transport_paths() {
+        let secret = "sk-compatible-transport-canary";
+        let provider = provider_for_test("http://127.0.0.1:1/v1".into(), secret);
+        let error = provider.provider_error(format!("transport failed for bearer {secret}"));
+
+        assert_secret_redacted(&error, secret);
     }
 }

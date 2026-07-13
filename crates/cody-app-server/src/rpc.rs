@@ -1,8 +1,12 @@
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use cody_core::{
-    ApprovalId, CodyEngine, CodyError, ContextReference, ProcessId, ProjectId, StartTurn, ThreadId,
-    TurnId, DEFAULT_THREAD_TITLE,
+    provider::{
+        OpenAiCompatibleConfig, OpenAiCompatibleProvider, OpenAiResponsesConfig,
+        OpenAiResponsesProvider,
+    },
+    ApprovalId, CodyEngine, CodyError, ContextReference, InteractionId, ProcessId, ProjectId,
+    StartTurn, ThreadId, TurnId, UserInputAnswers, DEFAULT_THREAD_TITLE,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -157,9 +161,204 @@ impl RpcDispatcher {
                     .state
                     .engine
                     .providers()
-                    .ids()
+                    .descriptors()
                     .map_err(RpcError::from)?;
                 Ok(json!({ "providers": providers }))
+            }
+            "provider/models" | "provider.models" => {
+                let params: ProviderIdParams = parse_params(params)?;
+                let provider = self
+                    .state
+                    .engine
+                    .providers()
+                    .get(&params.provider_id)
+                    .map_err(RpcError::from)?;
+                let models = provider.list_models().await.map_err(RpcError::from)?;
+                Ok(json!({ "models": models }))
+            }
+            "provider/health" | "provider.health" => {
+                let params: ProviderIdParams = parse_params(params)?;
+                let provider = self
+                    .state
+                    .engine
+                    .providers()
+                    .get(&params.provider_id)
+                    .map_err(RpcError::from)?;
+                let health = provider.health().await.map_err(RpcError::from)?;
+                serde_json::to_value(health).map_err(RpcError::invalid_params)
+            }
+            // These mutation methods are intended for the authenticated
+            // Electron main process. The renderer IPC allowlist deliberately
+            // does not expose them, so API keys never cross into web content.
+            "provider/configure" | "provider.configure" => {
+                let params: ConfigureProviderParams = parse_params(params)?;
+                if params.id == "echo" || params.id == "codex" {
+                    return Err(RpcError::from(CodyError::Conflict(format!(
+                        "built-in provider '{}' cannot be replaced",
+                        params.id
+                    ))));
+                }
+                let provider: Arc<dyn cody_core::ModelProvider> = match params.kind.as_str() {
+                    "openai" => {
+                        let mut config = OpenAiResponsesConfig::new(
+                            params.id.clone(),
+                            params
+                                .base_url
+                                .unwrap_or_else(|| "https://api.openai.com/v1".into()),
+                        );
+                        config.display_name = params.display_name;
+                        config.api_key = params.api_key;
+                        config.require_api_key = true;
+                        config.default_model = Some(params.default_model);
+                        config.configured_models = params.custom_models;
+                        Arc::new(OpenAiResponsesProvider::new(config).map_err(RpcError::from)?)
+                    }
+                    "openai-compatible" => {
+                        let mut config = OpenAiCompatibleConfig::new(
+                            params.id.clone(),
+                            params.base_url.ok_or_else(|| {
+                                RpcError::invalid_params(
+                                    "base_url is required for an OpenAI-compatible provider",
+                                )
+                            })?,
+                        );
+                        config.display_name = params.display_name;
+                        config.api_key = params.api_key;
+                        config.default_model = Some(params.default_model);
+                        config.configured_models = params.custom_models;
+                        Arc::new(OpenAiCompatibleProvider::new(config).map_err(RpcError::from)?)
+                    }
+                    unsupported => {
+                        return Err(RpcError::invalid_params(format!(
+                            "provider kind '{unsupported}' is not supported by this runtime"
+                        )))
+                    }
+                };
+                self.state
+                    .engine
+                    .providers()
+                    .replace(provider.clone())
+                    .map_err(RpcError::from)?;
+                serde_json::to_value(provider.descriptor()).map_err(RpcError::invalid_params)
+            }
+            "provider/remove" | "provider.remove" => {
+                let params: ProviderIdParams = parse_params(params)?;
+                if params.provider_id == "echo" || params.provider_id == "codex" {
+                    return Err(RpcError::from(CodyError::Conflict(format!(
+                        "built-in provider '{}' cannot be removed",
+                        params.provider_id
+                    ))));
+                }
+                let removed = self
+                    .state
+                    .engine
+                    .providers()
+                    .remove(&params.provider_id)
+                    .map_err(RpcError::from)?
+                    .is_some();
+                Ok(json!({ "removed": removed }))
+            }
+            "codex/account/read" | "codex.account.read" => match self.state.codex.client().await {
+                Ok(client) => match self.state.codex.account_read().await {
+                    Ok(account) => Ok(json!({
+                        "state": if account.account.is_some() { "signed_in" } else { "signed_out" },
+                        "account": account.account.map(|account| json!({
+                            "account_type": account.account_type,
+                            "email": account.email,
+                            "plan_type": account.plan_type,
+                        })),
+                        "requires_openai_auth": account.requires_openai_auth,
+                        "binary": {
+                            "path": client.binary().path(),
+                            "version": client.binary().version(),
+                        }
+                    })),
+                    Err(error) => Ok(json!({
+                        "state": "unavailable",
+                        "detail": error.to_string(),
+                    })),
+                },
+                Err(error) => Ok(json!({
+                    "state": "unavailable",
+                    "detail": error.to_string(),
+                })),
+            },
+            "codex/account/rate-limits" | "codex.account.rate-limits" => {
+                let limits = self
+                    .state
+                    .codex
+                    .client()
+                    .await
+                    .map_err(|error| RpcError::from(CodyError::Provider(error.to_string())))?
+                    .rate_limits_read()
+                    .await
+                    .map_err(|error| RpcError::from(CodyError::Provider(error.to_string())))?;
+                serde_json::to_value(limits).map_err(RpcError::invalid_params)
+            }
+            "codex/account/login/start" | "codex.account.login.start" => {
+                let params: CodexLoginParams = parse_params(params)?;
+                let client = self
+                    .state
+                    .codex
+                    .client()
+                    .await
+                    .map_err(|error| RpcError::from(CodyError::Provider(error.to_string())))?;
+                match params.mode.as_str() {
+                    "browser" => {
+                        let login = client.login_chatgpt().await.map_err(|error| {
+                            RpcError::from(CodyError::Provider(error.to_string()))
+                        })?;
+                        Ok(json!({
+                            "mode": "browser",
+                            "login_id": login.login_id,
+                            "auth_url": login.auth_url,
+                        }))
+                    }
+                    "device_code" => {
+                        let login = client.login_device_code().await.map_err(|error| {
+                            RpcError::from(CodyError::Provider(error.to_string()))
+                        })?;
+                        Ok(json!({
+                            "mode": "device_code",
+                            "login_id": login.login_id,
+                            "user_code": login.user_code,
+                            "verification_url": login.verification_url,
+                        }))
+                    }
+                    _ => Err(RpcError::invalid_params(
+                        "Codex login mode must be 'browser' or 'device_code'",
+                    )),
+                }
+            }
+            "codex/account/login/cancel" | "codex.account.login.cancel" => {
+                let params: CodexCancelLoginParams = parse_params(params)?;
+                let result = self
+                    .state
+                    .codex
+                    .client()
+                    .await
+                    .map_err(|error| RpcError::from(CodyError::Provider(error.to_string())))?
+                    .cancel_login(params.login_id)
+                    .await
+                    .map_err(|error| RpcError::from(CodyError::Provider(error.to_string())))?;
+                Ok(json!({
+                    "status": match result.status {
+                        crate::codex::CancelLoginStatus::Canceled => "canceled",
+                        crate::codex::CancelLoginStatus::NotFound => "not_found",
+                    }
+                }))
+            }
+            "codex/account/logout" | "codex.account.logout" => {
+                self.state
+                    .codex
+                    .client()
+                    .await
+                    .map_err(|error| RpcError::from(CodyError::Provider(error.to_string())))?
+                    .logout()
+                    .await
+                    .map_err(|error| RpcError::from(CodyError::Provider(error.to_string())))?;
+                self.state.codex.mark_signed_out();
+                Ok(json!({ "signed_out": true }))
             }
             "tool/list" | "tool.list" => Ok(json!({
                 "tools": self.state.engine.tools().definitions()
@@ -263,6 +462,13 @@ impl RpcDispatcher {
                     .approvals()
                     .list(Some(thread.id))
                     .await;
+                let pending_user_inputs = self
+                    .state
+                    .engine
+                    .runtime()
+                    .user_inputs()
+                    .list(Some(thread.id))
+                    .await;
                 let processes = self
                     .state
                     .engine
@@ -276,6 +482,7 @@ impl RpcDispatcher {
                     "messages": messages,
                     "turns": turns,
                     "pending_approvals": pending_approvals,
+                    "pending_user_inputs": pending_user_inputs,
                     "processes": processes,
                 }))
             }
@@ -333,6 +540,17 @@ impl RpcDispatcher {
                     .runtime()
                     .approvals()
                     .respond(params.approval_id, params.approved)
+                    .await
+                    .map_err(RpcError::from)?;
+                Ok(json!({ "resolved": true }))
+            }
+            "user-input/respond" | "user-input.respond" => {
+                let params: UserInputResponseParams = parse_params(params)?;
+                self.state
+                    .engine
+                    .runtime()
+                    .user_inputs()
+                    .respond(params.interaction_id, params.answers, params.cancelled)
                     .await
                     .map_err(RpcError::from)?;
                 Ok(json!({ "resolved": true }))
@@ -548,10 +766,16 @@ fn initialize_result() -> Value {
             "thread_auto_titles": true,
             "turn_cancellation": true,
             "tool_approvals": true,
+            "structured_user_input": true,
             "managed_processes": true,
             "process_output": true,
             "thread_event_subscriptions": true,
             "provider_plugins": true,
+            "provider_model_catalog": true,
+            "provider_configuration": true,
+            "provider_health": true,
+            "codex_chatgpt_auth": true,
+            "codex_external_turn_backend": true,
         }
     })
 }
@@ -561,6 +785,35 @@ struct ProjectPathParams {
     path: PathBuf,
     #[serde(default)]
     name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderIdParams {
+    provider_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConfigureProviderParams {
+    id: String,
+    display_name: String,
+    kind: String,
+    #[serde(default)]
+    base_url: Option<String>,
+    #[serde(default)]
+    api_key: Option<String>,
+    default_model: String,
+    #[serde(default)]
+    custom_models: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexLoginParams {
+    mode: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexCancelLoginParams {
+    login_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -613,6 +866,15 @@ struct TurnGetParams {
 struct ApprovalResponseParams {
     approval_id: ApprovalId,
     approved: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct UserInputResponseParams {
+    interaction_id: InteractionId,
+    #[serde(default)]
+    answers: UserInputAnswers,
+    #[serde(default)]
+    cancelled: bool,
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,4 +1,8 @@
-use std::{future::pending, sync::Arc, time::Duration};
+use std::{
+    future::pending,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -7,9 +11,10 @@ use cody_core::{
         FinishReason, ModelContent, ModelDeltaSink, ModelProvider, ModelRequest, ModelResponse,
         ModelRole, ScriptedProvider,
     },
-    AgentEvent, CodyEngine, ContextReference, EngineConfig, InMemoryStore, Message, MessageId,
-    MessagePart, MessageRole, Result, StartTurn, ThreadReferenceMode, ThreadStatus,
-    ThreadTitleGenerator, ThreadTitleRequest, TurnStatus, DEFAULT_THREAD_TITLE,
+    AgentEvent, CodyEngine, CodyError, ContextReference, EngineConfig, ExternalTurnBackend,
+    InMemoryStore, Message, MessageId, MessagePart, MessageRole, ResolvedContext, Result,
+    StartTurn, ThreadReferenceMode, ThreadStatus, ThreadTitleGenerator, ThreadTitleRequest, Turn,
+    TurnEventEmitter, TurnStatus, DEFAULT_THREAD_TITLE,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -264,6 +269,387 @@ async fn terminal_event_is_emitted_only_after_thread_is_idle() {
         execution.await.unwrap().unwrap().status,
         TurnStatus::Completed
     );
+}
+
+#[derive(Debug, Default)]
+struct SuccessfulExternalBackend {
+    retained_emitter: Mutex<Option<TurnEventEmitter>>,
+}
+
+#[async_trait]
+impl ExternalTurnBackend for SuccessfulExternalBackend {
+    async fn execute(
+        &self,
+        turn: &Turn,
+        _context: ResolvedContext,
+        _cancellation: CancellationToken,
+        events: TurnEventEmitter,
+    ) -> Result<String> {
+        *self.retained_emitter.lock().unwrap() = Some(events.clone());
+        events.emit(AgentEvent::ModelStarted {
+            provider: turn.provider.clone(),
+            model: turn.model.clone(),
+        });
+        events.emit(AgentEvent::ModelOutputDelta {
+            delta: "External answer".into(),
+        });
+        events.emit(AgentEvent::ModelCompleted {
+            stop_reason: "completed".into(),
+        });
+        // External backends cannot forge a terminal state; the runtime emits
+        // the only terminal event after the durable Turn and Thread agree.
+        events.emit(AgentEvent::TurnCompleted {
+            final_text: "forged external terminal".into(),
+        });
+        Ok("External answer".into())
+    }
+}
+
+#[tokio::test]
+async fn external_backend_uses_durable_lifecycle_and_generates_title_after_terminal_event() {
+    let (engine, _state) = engine().await;
+    engine
+        .providers()
+        .register(Arc::new(cody_core::provider::EchoProvider::default()))
+        .unwrap();
+    let (thread, _, _) = engine
+        .create_thread(DEFAULT_THREAD_TITLE, None)
+        .await
+        .unwrap();
+    let turn = engine
+        .runtime()
+        .prepare_turn(StartTurn {
+            thread_id: thread.id,
+            message: "External backend lifecycle".into(),
+            references: Vec::new(),
+            provider: "echo".into(),
+            model: None,
+            temperature: None,
+            max_output_tokens: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(turn.status, TurnStatus::Queued);
+    let mut events = engine.events().subscribe();
+
+    let backend = Arc::new(SuccessfulExternalBackend::default());
+    let completed = engine
+        .runtime()
+        .execute_turn_with_backend(turn.id, CancellationToken::new(), backend.clone())
+        .await
+        .unwrap();
+    assert_eq!(completed.status, TurnStatus::Completed);
+    assert_eq!(
+        engine.store().get_thread(thread.id).await.unwrap().status,
+        ThreadStatus::Idle
+    );
+
+    let mut envelopes = Vec::new();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            let title_updated = matches!(event.event, AgentEvent::ThreadUpdated { .. });
+            envelopes.push(event);
+            if title_updated {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("external turn title event timed out");
+
+    assert!(matches!(envelopes[0].event, AgentEvent::TurnStarted));
+    let terminal_index = envelopes
+        .iter()
+        .position(|event| matches!(event.event, AgentEvent::TurnCompleted { .. }))
+        .expect("missing completed event");
+    let title_index = envelopes
+        .iter()
+        .position(|event| matches!(event.event, AgentEvent::ThreadUpdated { .. }))
+        .expect("missing title event");
+    assert!(terminal_index < title_index);
+    assert_eq!(
+        envelopes
+            .iter()
+            .filter(|event| matches!(event.event, AgentEvent::TurnCompleted { .. }))
+            .count(),
+        1
+    );
+    assert!(matches!(
+        &envelopes[terminal_index].event,
+        AgentEvent::TurnCompleted { final_text } if final_text == "External answer"
+    ));
+    assert!(envelopes
+        .iter()
+        .enumerate()
+        .all(|(index, event)| event.sequence == (index + 1) as u64));
+    assert_eq!(
+        engine.store().get_turn(turn.id).await.unwrap().status,
+        TurnStatus::Completed
+    );
+    assert_eq!(
+        engine.store().get_thread(thread.id).await.unwrap().title,
+        "External backend lifecycle"
+    );
+
+    let messages = engine.store().list_messages(thread.id).await.unwrap();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].role, MessageRole::User);
+    assert_eq!(messages[1].role, MessageRole::Assistant);
+    assert_eq!(messages[1].turn_id, Some(turn.id));
+    assert_eq!(messages[1].text(), "External answer");
+
+    backend
+        .retained_emitter
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .emit(AgentEvent::ModelOutputDelta {
+            delta: "late external output".into(),
+        });
+    assert!(events.try_recv().is_err());
+}
+
+#[derive(Debug)]
+struct FailingExternalBackend;
+
+#[async_trait]
+impl ExternalTurnBackend for FailingExternalBackend {
+    async fn execute(
+        &self,
+        _turn: &Turn,
+        _context: ResolvedContext,
+        _cancellation: CancellationToken,
+        _events: TurnEventEmitter,
+    ) -> Result<String> {
+        Err(CodyError::Provider("external backend unavailable".into()))
+    }
+}
+
+#[tokio::test]
+async fn external_backend_failure_is_terminal_and_releases_the_thread() {
+    let (engine, _state) = engine().await;
+    engine
+        .providers()
+        .register(Arc::new(cody_core::provider::EchoProvider::default()))
+        .unwrap();
+    let (thread, _, _) = engine
+        .create_thread("External failure recovery", None)
+        .await
+        .unwrap();
+    let request = || StartTurn {
+        thread_id: thread.id,
+        message: "Run external backend".into(),
+        references: Vec::new(),
+        provider: "echo".into(),
+        model: None,
+        temperature: None,
+        max_output_tokens: None,
+    };
+    let turn = engine.runtime().prepare_turn(request()).await.unwrap();
+    let mut events = engine.events().subscribe();
+
+    let error = engine
+        .runtime()
+        .execute_turn_with_backend(
+            turn.id,
+            CancellationToken::new(),
+            Arc::new(FailingExternalBackend),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("external backend unavailable"));
+    assert_eq!(
+        engine.store().get_turn(turn.id).await.unwrap().status,
+        TurnStatus::Failed
+    );
+    assert_eq!(
+        engine.store().get_thread(thread.id).await.unwrap().status,
+        ThreadStatus::Idle
+    );
+    assert_eq!(
+        engine.store().list_messages(thread.id).await.unwrap().len(),
+        1
+    );
+    let emitted = std::iter::from_fn(|| events.try_recv().ok()).collect::<Vec<_>>();
+    assert!(matches!(emitted[0].event, AgentEvent::TurnStarted));
+    assert!(matches!(
+        emitted.last().unwrap().event,
+        AgentEvent::TurnFailed { .. }
+    ));
+
+    let recovery = engine.runtime().prepare_turn(request()).await.unwrap();
+    let recovered = engine
+        .runtime()
+        .execute_turn_with_backend(
+            recovery.id,
+            CancellationToken::new(),
+            Arc::new(SuccessfulExternalBackend::default()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(recovered.status, TurnStatus::Completed);
+}
+
+#[derive(Debug)]
+struct CancellableExternalBackend {
+    started: tokio::sync::Semaphore,
+}
+
+impl Default for CancellableExternalBackend {
+    fn default() -> Self {
+        Self {
+            started: tokio::sync::Semaphore::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl ExternalTurnBackend for CancellableExternalBackend {
+    async fn execute(
+        &self,
+        _turn: &Turn,
+        _context: ResolvedContext,
+        _cancellation: CancellationToken,
+        _events: TurnEventEmitter,
+    ) -> Result<String> {
+        self.started.add_permits(1);
+        pending().await
+    }
+}
+
+#[tokio::test]
+async fn external_backend_cancellation_persists_no_answer_and_releases_the_thread() {
+    let (engine, _state) = engine().await;
+    engine
+        .providers()
+        .register(Arc::new(cody_core::provider::EchoProvider::default()))
+        .unwrap();
+    let (thread, _, _) = engine
+        .create_thread("External cancellation", None)
+        .await
+        .unwrap();
+    let turn = engine
+        .runtime()
+        .prepare_turn(StartTurn {
+            thread_id: thread.id,
+            message: "Wait for cancellation".into(),
+            references: Vec::new(),
+            provider: "echo".into(),
+            model: None,
+            temperature: None,
+            max_output_tokens: None,
+        })
+        .await
+        .unwrap();
+    let backend = Arc::new(CancellableExternalBackend::default());
+    let cancellation = CancellationToken::new();
+    let execution = {
+        let runtime = engine.runtime().clone();
+        let backend = backend.clone();
+        let cancellation = cancellation.clone();
+        tokio::spawn(async move {
+            runtime
+                .execute_turn_with_backend(turn.id, cancellation, backend)
+                .await
+        })
+    };
+    backend.started.acquire().await.unwrap().forget();
+    cancellation.cancel();
+
+    assert!(matches!(
+        execution.await.unwrap(),
+        Err(CodyError::Cancelled)
+    ));
+    assert_eq!(
+        engine.store().get_turn(turn.id).await.unwrap().status,
+        TurnStatus::Cancelled
+    );
+    assert_eq!(
+        engine.store().get_thread(thread.id).await.unwrap().status,
+        ThreadStatus::Idle
+    );
+    assert_eq!(
+        engine.store().list_messages(thread.id).await.unwrap().len(),
+        1
+    );
+    engine
+        .runtime()
+        .prepare_turn(StartTurn {
+            thread_id: thread.id,
+            message: "Thread is available again".into(),
+            references: Vec::new(),
+            provider: "echo".into(),
+            model: None,
+            temperature: None,
+            max_output_tokens: None,
+        })
+        .await
+        .expect("cancelled external turn must release its thread reservation");
+}
+
+#[tokio::test]
+async fn queued_turn_keeps_its_provider_lease_across_registry_replace_and_remove() {
+    let (engine, _state) = engine().await;
+    let (thread, _, _) = engine.create_thread("Provider lease", None).await.unwrap();
+    let old_provider = Arc::new(ScriptedProvider::with_responses(
+        "hot-provider",
+        [ModelResponse::text("old provider response")],
+    ));
+    let new_provider = Arc::new(ScriptedProvider::with_responses(
+        "hot-provider",
+        [ModelResponse::text("new provider response")],
+    ));
+    engine.providers().register(old_provider.clone()).unwrap();
+
+    let request = |message: &str| StartTurn {
+        thread_id: thread.id,
+        message: message.into(),
+        references: Vec::new(),
+        provider: "hot-provider".into(),
+        model: None,
+        temperature: None,
+        max_output_tokens: None,
+    };
+    let prepared_before_replace = engine
+        .runtime()
+        .prepare_turn(request("Use the old provider lease"))
+        .await
+        .unwrap();
+    engine.providers().replace(new_provider.clone()).unwrap();
+
+    engine
+        .runtime()
+        .execute_turn(prepared_before_replace.id, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(old_provider.requests().unwrap().len(), 1);
+    assert_eq!(new_provider.requests().unwrap().len(), 0);
+
+    let prepared_before_remove = engine
+        .runtime()
+        .prepare_turn(request("Use the new provider lease"))
+        .await
+        .unwrap();
+    engine.providers().remove("hot-provider").unwrap().unwrap();
+    assert!(matches!(
+        engine.providers().get("hot-provider"),
+        Err(CodyError::ProviderNotFound(_))
+    ));
+
+    engine
+        .runtime()
+        .execute_turn(prepared_before_remove.id, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(old_provider.requests().unwrap().len(), 1);
+    assert_eq!(new_provider.requests().unwrap().len(), 1);
+
+    let messages = engine.store().list_messages(thread.id).await.unwrap();
+    assert_eq!(messages.len(), 4);
+    assert_eq!(messages[1].text(), "old provider response");
+    assert_eq!(messages[3].text(), "new provider response");
 }
 
 #[tokio::test]

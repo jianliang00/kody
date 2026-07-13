@@ -4,7 +4,10 @@ use async_trait::async_trait;
 
 use crate::error::{CodyError, Result};
 
-use super::{emit_response, ModelDeltaSink, ModelProvider, ModelRequest, ModelResponse};
+use super::{
+    emit_response, AuthState, ModelDeltaSink, ModelProvider, ModelRequest, ModelResponse,
+    ProviderCapabilities, ProviderDescriptor,
+};
 
 #[derive(Debug)]
 enum ScriptedStep {
@@ -93,6 +96,17 @@ impl ModelProvider for ScriptedProvider {
 
     fn default_model(&self) -> Option<&str> {
         Some("scripted")
+    }
+
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderDescriptor {
+            id: self.id.clone(),
+            display_name: self.id.clone(),
+            kind: "scripted".into(),
+            auth: AuthState::NotRequired,
+            capabilities: ProviderCapabilities::default(),
+            default_model: Some("scripted".into()),
+        }
     }
 
     async fn complete(

@@ -3,8 +3,8 @@ use std::{collections::BTreeMap, collections::HashSet, sync::Arc, time::Duration
 use anyhow::{bail, Context, Result};
 use cody_app_server::{app, AppState};
 use cody_core::{
-    process::StartProcessRequest, provider::EchoProvider, CodyEngine, EngineConfig, ProcessOrigin,
-    StartTurn,
+    process::StartProcessRequest, provider::EchoProvider, CodyEngine, EngineConfig, InteractionId,
+    PendingUserInput, ProcessOrigin, StartTurn, TurnId, UserInputQuestion,
 };
 use futures_util::{SinkExt, StreamExt};
 use reqwest::{header, StatusCode};
@@ -140,6 +140,85 @@ async fn http_rpc_requires_authentication_and_json_content_type() -> Result<()> 
         initialized["result"]["server_info"]["name"],
         "cody-app-server"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_snapshot_recovers_pending_user_input_and_rpc_resolves_it_without_echoing_secret(
+) -> Result<()> {
+    let server = TestServer::start().await?;
+    let (thread, _, _) = server.engine.create_thread("Input test", None).await?;
+    let interaction_id = InteractionId::new();
+    let receiver = server
+        .engine
+        .runtime()
+        .user_inputs()
+        .register(PendingUserInput {
+            interaction_id,
+            thread_id: thread.id,
+            turn_id: TurnId::new(),
+            item_id: "codex-user-input".into(),
+            questions: vec![UserInputQuestion {
+                id: "token".into(),
+                header: "Token".into(),
+                question: "Enter the temporary token".into(),
+                is_other: false,
+                is_secret: true,
+                options: None,
+            }],
+        })
+        .await?;
+    let client = reqwest::Client::builder().no_proxy().build()?;
+
+    let snapshot = client
+        .post(server.rpc_url())
+        .bearer_auth(TOKEN)
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": "pending-input",
+            "method": "thread/get",
+            "params": { "thread_id": thread.id }
+        }))
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
+    assert_eq!(
+        snapshot["result"]["pending_user_inputs"][0]["interaction_id"],
+        interaction_id.to_string()
+    );
+    assert_eq!(
+        snapshot["result"]["pending_user_inputs"][0]["questions"][0]["is_secret"],
+        true
+    );
+    assert!(snapshot["result"]["pending_user_inputs"][0]
+        .get("answers")
+        .is_none());
+
+    let secret = "never-echo-this-token";
+    let response = client
+        .post(server.rpc_url())
+        .bearer_auth(TOKEN)
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": "resolve-input",
+            "method": "user-input/respond",
+            "params": {
+                "interaction_id": interaction_id,
+                "answers": { "token": { "answers": [secret] } },
+                "cancelled": false
+            }
+        }))
+        .send()
+        .await?
+        .text()
+        .await?;
+    assert!(!response.contains(secret));
+    let response: Value = serde_json::from_str(&response)?;
+    assert_eq!(response["result"]["resolved"], true);
+    let resolution = receiver.await?;
+    assert_eq!(resolution.answers["token"].answers, vec![secret]);
 
     Ok(())
 }

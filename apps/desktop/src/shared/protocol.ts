@@ -6,6 +6,36 @@ export type ProjectAccess = 'read_only' | 'read_write'
 export type ThreadReferenceMode = 'summary' | 'full' | 'messages' | 'artifacts'
 export type ProcessStatus = 'starting' | 'running' | 'stopping' | 'exited' | 'stopped' | 'failed' | 'lost'
 export type ProcessOutputStream = 'stdout' | 'stderr'
+export type ProviderAuthState = 'not_required' | 'configured' | 'missing' | 'unknown'
+
+export interface ProviderCapabilities {
+  streaming: boolean
+  reasoning: boolean
+  tools: boolean
+  model_catalog: boolean
+  custom_models: boolean
+}
+
+/** Public provider metadata. Credentials never cross the app-server boundary. */
+export interface ProviderDescriptor {
+  id: string
+  display_name: string
+  kind: string
+  auth: ProviderAuthState
+  capabilities: ProviderCapabilities
+  default_model?: string
+}
+
+export interface ModelDescriptor {
+  id: string
+  display_name: string
+  owned_by?: string
+  created_at?: number
+  is_default?: boolean
+  description?: string
+  default_reasoning_effort?: string
+  reasoning_efforts?: string[]
+}
 
 export interface GitMetadata {
   remote?: string
@@ -48,6 +78,7 @@ export interface Thread {
   status: ThreadStatus
   default_references: ContextReference[]
   summary?: string
+  external_thread_ids?: Record<string, string>
   created_at: string
   updated_at: string
 }
@@ -166,6 +197,7 @@ export interface ThreadSnapshot {
   messages: ChatMessage[]
   turns: Turn[]
   pending_approvals: PendingApproval[]
+  pending_user_inputs: PendingUserInput[]
   processes: ManagedProcess[]
 }
 
@@ -178,6 +210,35 @@ export interface PendingApproval {
   arguments: unknown
   reason: string
 }
+
+export interface UserInputOption {
+  label: string
+  description: string
+}
+
+export interface UserInputQuestion {
+  id: string
+  header: string
+  question: string
+  is_other: boolean
+  is_secret: boolean
+  options?: UserInputOption[]
+}
+
+/** Reconnectable question metadata. Submitted answers are never stored here. */
+export interface PendingUserInput {
+  interaction_id: EntityId
+  thread_id: EntityId
+  turn_id: EntityId
+  item_id: string
+  questions: UserInputQuestion[]
+}
+
+export interface UserInputAnswer {
+  answers: string[]
+}
+
+export type UserInputAnswers = Record<string, UserInputAnswer>
 
 export interface EventEnvelope {
   id: EntityId
@@ -204,6 +265,13 @@ export type AgentEvent =
       reason: string
     }
   | { type: 'approval_resolved'; approval_id: EntityId; approved: boolean }
+  | {
+      type: 'user_input_requested'
+      interaction_id: EntityId
+      item_id: string
+      questions: UserInputQuestion[]
+    }
+  | { type: 'user_input_resolved'; interaction_id: EntityId; cancelled: boolean }
   | { type: 'tool_started'; tool_call_id: string; name: string; arguments: unknown }
   | {
       type: 'tool_completed'
@@ -244,7 +312,11 @@ export interface StartTurnInput {
 
 export interface RpcMethodMap {
   initialize: { params: Record<string, never>; result: InitializeResult }
-  'provider/list': { params: Record<string, never>; result: { providers: string[] } }
+  'provider/list': { params: Record<string, never>; result: { providers: ProviderDescriptor[] } }
+  'provider/models': {
+    params: { provider_id: string }
+    result: { models: ModelDescriptor[] }
+  }
   'project/list': { params: Record<string, never>; result: { projects: Project[] } }
   'project/import': { params: { path: string; name?: string }; result: Project }
   'thread/list': { params: Record<string, never>; result: { threads: Thread[] } }
@@ -272,6 +344,10 @@ export interface RpcMethodMap {
   'turn/cancel': { params: { turn_id: EntityId }; result: { cancelled: boolean } }
   'approval/respond': {
     params: { approval_id: EntityId; approved: boolean }
+    result: { resolved: boolean }
+  }
+  'user-input/respond': {
+    params: { interaction_id: EntityId; answers: UserInputAnswers; cancelled: boolean }
     result: { resolved: boolean }
   }
   'process/list': {

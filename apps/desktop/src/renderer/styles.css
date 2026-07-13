@@ -218,6 +218,32 @@ kbd { border: 1px solid var(--border); border-bottom-color: var(--border-strong)
 .approval-card dd code { display: block; max-height: 6rem; overflow: auto; padding: .45rem; border-radius: 6px; background: color-mix(in srgb,var(--surface) 65%,transparent); }
 .approval-card > footer { display: flex; justify-content: flex-end; gap: .45rem; }
 .approval-card__resolved { min-height: 2.3rem; display: inline-flex; align-items: center; gap: .35rem; color: var(--muted); }
+.user-input-card { padding: 1rem; border: 1px solid color-mix(in srgb,var(--thread) 42%,var(--border)); border-radius: 12px; background: color-mix(in srgb,var(--thread-soft) 58%,var(--surface)); }
+.user-input-card > header { display: flex; gap: .65rem; margin-block-end: .85rem; }
+.user-input-card__icon { inline-size: 2rem; block-size: 2rem; flex: 0 0 auto; display: grid; place-items: center; border-radius: 8px; background: color-mix(in srgb,var(--thread) 14%,transparent); color: var(--thread); }
+.user-input-card h3 { margin: 0; font-size: .86rem; }
+.user-input-card header p { margin: .08rem 0 0; color: var(--muted); font-size: .72rem; line-height: 1.5; }
+.user-input-card form { display: grid; gap: .8rem; }
+.user-input-card fieldset { min-inline-size: 0; margin: 0; padding: .75rem; border: 1px solid var(--border); border-radius: 9px; }
+.user-input-card legend { padding-inline: .28rem; font-size: .76rem; font-weight: 650; }
+.user-input-card fieldset > p { margin: 0 0 .65rem; color: var(--muted); font-size: .73rem; line-height: 1.5; }
+.user-input-options { display: grid; gap: .42rem; }
+.user-input-options > label { min-block-size: 2.75rem; display: flex; align-items: flex-start; gap: .55rem; padding: .55rem .65rem; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); cursor: pointer; }
+.user-input-options > label:hover,
+.user-input-options > label:focus-within { border-color: color-mix(in srgb,var(--thread) 65%,var(--border)); }
+.user-input-options input[type='radio'] { inline-size: 1rem; block-size: 1rem; min-inline-size: 1rem; min-block-size: 1rem; margin-block-start: .12rem; accent-color: var(--thread); }
+.user-input-options span { display: grid; gap: .12rem; min-inline-size: 0; }
+.user-input-options strong { font-size: .73rem; font-weight: 620; }
+.user-input-options small,
+.user-input-free small { color: var(--muted); font-size: .67rem; line-height: 1.45; }
+.user-input-free { display: grid; gap: .3rem; margin-block-start: .6rem; color: var(--text); font-size: .71rem; font-weight: 590; }
+.user-input-free > input { inline-size: 100%; min-block-size: 2.75rem; padding: .55rem .65rem; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--surface); font: inherit; }
+.user-input-free > input:focus-visible { outline: 2px solid var(--thread); outline-offset: 2px; }
+.user-input-card__error { margin: 0; color: var(--danger); font-size: .72rem; }
+.user-input-card footer { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: .45rem; }
+.user-input-card .secondary-button { min-block-size: 2.75rem; }
+.user-input-submit { min-block-size: 2.75rem; display: inline-flex; align-items: center; gap: .35rem; padding-inline: .75rem; border: 0; border-radius: 7px; color: var(--surface); background: var(--thread); }
+.user-input-card__status { min-block-size: 2.75rem; display: inline-flex; align-items: center; gap: .35rem; color: var(--muted); font-size: .72rem; }
 
 .composer-dock { position: absolute; inset: auto 0 0; z-index: 5; padding: 1rem max(1rem,calc((100% - 48rem)/2)); pointer-events: none; background: linear-gradient(transparent,var(--surface) 38%); }
 .composer { position: relative; pointer-events: auto; padding: .75rem; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--surface-strong); box-shadow: 0 10px 40px rgb(0 0 0 / 10%); }

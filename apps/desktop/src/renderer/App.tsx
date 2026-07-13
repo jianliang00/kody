@@ -5,18 +5,26 @@ import {
   WifiOff
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { CodyDesktopBridge } from '@shared/bridge'
+import type {
+  CodexAccountStatus,
+  CodyDesktopBridge,
+  ProviderProfileUpdate,
+  ProviderSettingsResult
+} from '@shared/bridge'
 import type {
   ChatMessage,
   ContextReference,
   EventEnvelope,
+  ModelDescriptor,
   ProcessEventEnvelope,
   ProcessOutputPage,
   Project,
+  ProviderDescriptor,
   ServerStatus,
   Thread,
   ThreadSnapshot,
-  Turn
+  Turn,
+  UserInputAnswers
 } from '@shared/protocol'
 import { AssetRail } from './components/AssetRail'
 import { Composer } from './components/Composer'
@@ -24,6 +32,10 @@ import { Conversation } from './components/Conversation'
 import { DraftConversation } from './components/DraftConversation'
 import { Inspector } from './components/Inspector'
 import { ProjectShelf } from './components/ProjectShelf'
+import {
+  ProviderSettingsDialog,
+  type ProviderProfileSubmission
+} from './components/ProviderSettings'
 import { ThreadContextCard } from './components/ThreadContextCard'
 import { TitleBar } from './components/TitleBar'
 import { getCodyBridge } from './lib/mockBridge'
@@ -112,23 +124,38 @@ function optimisticMessage(
 interface ComposerDraftState {
   message: string
   references: ContextReference[]
+  providerId: string
+  model: string
 }
 
-const EMPTY_COMPOSER_DRAFT: ComposerDraftState = { message: '', references: [] }
+const EMPTY_COMPOSER_DRAFT: ComposerDraftState = {
+  message: '',
+  references: [],
+  providerId: '',
+  model: ''
+}
 
 export function App() {
   const bridge = useMemo(() => getCodyBridge(), [])
   const [status, setStatus] = useState<ServerStatus>({ phase: 'starting', detail: 'Starting local server…' })
   const [threads, setThreads] = useState<Thread[]>([])
   const [projects, setProjects] = useState<Project[]>([])
-  const [providers, setProviders] = useState<string[]>([])
-  const [provider, setProvider] = useState('')
+  const [providers, setProviders] = useState<ProviderDescriptor[]>([])
+  const [modelsByProvider, setModelsByProvider] = useState<Record<string, ModelDescriptor[]>>({})
+  const [loadingModelProviders, setLoadingModelProviders] = useState<Set<string>>(new Set())
+  const [providerSettingsOpen, setProviderSettingsOpen] = useState(false)
+  const [providerSettings, setProviderSettings] = useState<ProviderSettingsResult>({
+    profiles: [],
+    credentialStorage: { available: false, reason: 'Loading credential storage status…' }
+  })
+  const [codexAccount, setCodexAccount] = useState<CodexAccountStatus>({ state: 'signed-out' })
   const [activeThreadId, setActiveThreadId] = useState<string>()
   const [snapshot, setSnapshot] = useState<ThreadSnapshot>()
   const [composerDrafts, setComposerDrafts] = useState<Record<string, ComposerDraftState>>({})
   const [eventsByThread, setEventsByThread] = useState<Record<string, EventEnvelope[]>>({})
   const [runningTurns, setRunningTurns] = useState<Record<string, string>>({})
   const [resolvingApprovals, setResolvingApprovals] = useState<Set<string>>(new Set())
+  const [resolvingUserInputs, setResolvingUserInputs] = useState<Set<string>>(new Set())
   const [stoppingProcessIds, setStoppingProcessIds] = useState<Set<string>>(new Set())
   const [processOutputCursors, setProcessOutputCursors] = useState<Record<string, number>>({})
   const [loadingThread, setLoadingThread] = useState(false)
@@ -161,7 +188,9 @@ export function App() {
   const startTurnRef = useRef(false)
   const cancelTurnRef = useRef(false)
   const approvalRef = useRef(new Set<string>())
+  const userInputRef = useRef(new Set<string>())
   const processStopRef = useRef(new Set<string>())
+  const modelLoadRef = useRef(new Set<string>())
   const statusRef = useRef<ServerStatus['phase']>('starting')
   const hasHydratedRef = useRef(false)
   const preferDraftRef = useRef(false)
@@ -285,11 +314,6 @@ export function App() {
       setThreads(threadProjectionRef.current.reconcileAll(threadResult.threads))
       setProjects(projectResult.projects)
       setProviders(providerResult.providers)
-      setProvider((current) =>
-        current && providerResult.providers.includes(current)
-          ? current
-          : providerResult.providers[0] ?? ''
-      )
 
       const activeId = activeThreadRef.current
       if (preserveNavigation) {
@@ -330,6 +354,67 @@ export function App() {
       if (!preserveNavigation) setBootstrapping(false)
     }
   }, [applySnapshot, bridge, selectThread])
+
+  const refreshProviderCatalog = useCallback(async (): Promise<void> => {
+    const result = await bridge.rpc('provider/list', {})
+    setProviders(result.providers)
+  }, [bridge])
+
+  const refreshProviderSettings = useCallback(async (): Promise<void> => {
+    const [settings, account] = await Promise.all([
+      bridge.getProviderSettings(),
+      bridge.getCodexAccountStatus()
+    ])
+    setProviderSettings(settings)
+    setCodexAccount(account)
+  }, [bridge])
+
+  const openProviderSettings = useCallback((): void => {
+    setProviderSettingsOpen(true)
+    void refreshProviderSettings().catch((error) => {
+      setAppError(error instanceof Error ? error.message : 'Could not load provider settings.')
+    })
+  }, [refreshProviderSettings])
+
+  useEffect(() => {
+    if (!providerSettingsOpen || codexAccount.state === 'signed-in' || codexAccount.state === 'unavailable') return
+    let cancelled = false
+    let polling = false
+    const poll = async (): Promise<void> => {
+      if (polling) return
+      polling = true
+      try {
+        const account = await bridge.getCodexAccountStatus()
+        if (!cancelled) {
+          setCodexAccount(account)
+          if (account.state === 'signed-in') {
+            setModelsByProvider((current) => {
+              const next = { ...current }
+              delete next.codex
+              return next
+            })
+            void refreshProviderCatalog().catch((error) => {
+              setAppError(error instanceof Error ? error.message : 'Could not refresh providers.')
+            })
+          }
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setCodexAccount({
+            state: 'unavailable',
+            detail: error instanceof Error ? error.message : 'Codex account status is unavailable.'
+          })
+        }
+      } finally {
+        polling = false
+      }
+    }
+    const timer = window.setInterval(() => void poll(), 2_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [bridge, codexAccount.state, providerSettingsOpen, refreshProviderCatalog])
 
   useEffect(() => {
     document.documentElement.dataset.theme = darkTheme ? 'dark' : 'light'
@@ -427,6 +512,19 @@ export function App() {
         setAnnouncement('Cody started working')
       } else if (envelope.event.type === 'approval_requested') {
         setAnnouncement(`Approval required for ${envelope.event.name}`)
+        void refreshThread(envelope.thread_id)
+      } else if (envelope.event.type === 'user_input_requested') {
+        setAnnouncement('Cody needs your input to continue')
+        void refreshThread(envelope.thread_id)
+      } else if (envelope.event.type === 'user_input_resolved') {
+        const interactionId = envelope.event.interaction_id
+        userInputRef.current.delete(interactionId)
+        setResolvingUserInputs((current) => {
+          const next = new Set(current)
+          next.delete(interactionId)
+          return next
+        })
+        setAnnouncement(envelope.event.cancelled ? 'Input request cancelled' : 'Input sent to Cody')
         void refreshThread(envelope.thread_id)
       } else if (envelope.event.type === 'file_changed') {
         setAnnouncement(`Changed ${envelope.event.path}`)
@@ -527,6 +625,8 @@ export function App() {
         processRefreshTimersRef.current.clear()
         processRefreshRequestRef.current.clear()
         setStoppingProcessIds(new Set())
+        setResolvingUserInputs(new Set())
+        userInputRef.current.clear()
         processStopRef.current.clear()
         setProcessOutputCursors({})
         setAnnouncement(`Server ${nextStatus.phase}`)
@@ -554,23 +654,107 @@ export function App() {
   const isRunning = Boolean(activeRunningTurnId)
 
   const composerDraftKey = activeThreadId ? `thread:${activeThreadId}` : `draft:${draftId}`
-  const composerDraft = composerDrafts[composerDraftKey] ?? EMPTY_COMPOSER_DRAFT
+  const latestThreadTurn = snapshot && snapshot.thread.id === activeThreadId
+    ? snapshot.turns.at(-1)
+    : undefined
+  const initialComposerDraft = useMemo<ComposerDraftState>(() => latestThreadTurn ? {
+    ...EMPTY_COMPOSER_DRAFT,
+    providerId: latestThreadTurn.provider,
+    model: latestThreadTurn.model
+  } : EMPTY_COMPOSER_DRAFT, [latestThreadTurn?.model, latestThreadTurn?.provider])
+  useEffect(() => {
+    if (!activeThreadId || !latestThreadTurn) return
+    const threadDraftKey = `thread:${activeThreadId}`
+    setComposerDrafts((current) => {
+      if (current[threadDraftKey]) return current
+      return { ...current, [threadDraftKey]: initialComposerDraft }
+    })
+  }, [activeThreadId, initialComposerDraft, latestThreadTurn])
+  const composerDraft = composerDrafts[composerDraftKey] ?? initialComposerDraft
   const draftReferences = composerDraft.references
+  const composerProvider = providers.find((item) => (
+    item.id === composerDraft.providerId && item.auth !== 'missing'
+  )) ?? providers.find((item) => item.auth !== 'missing')
+  const composerProviderId = composerProvider?.id ?? ''
+  const composerModels = composerProviderId ? modelsByProvider[composerProviderId] ?? [] : []
+  const defaultCatalogModel = composerModels.find((model) => model.is_default) ?? composerModels[0]
+  const composerModel = (
+    composerDraft.providerId === composerProviderId ? composerDraft.model : ''
+  ) || composerProvider?.default_model || defaultCatalogModel?.id || ''
   const setDraftReferences = useCallback((
     update: ContextReference[] | ((current: ContextReference[]) => ContextReference[])
   ): void => {
     setComposerDrafts((current) => {
-      const existing = current[composerDraftKey] ?? EMPTY_COMPOSER_DRAFT
+      const existing = current[composerDraftKey] ?? initialComposerDraft
       const references = typeof update === 'function' ? update(existing.references) : update
       return { ...current, [composerDraftKey]: { ...existing, references } }
     })
-  }, [composerDraftKey])
+  }, [composerDraftKey, initialComposerDraft])
   const setComposerMessage = useCallback((message: string): void => {
     setComposerDrafts((current) => {
-      const existing = current[composerDraftKey] ?? EMPTY_COMPOSER_DRAFT
+      const existing = current[composerDraftKey] ?? initialComposerDraft
       return { ...current, [composerDraftKey]: { ...existing, message } }
     })
-  }, [composerDraftKey])
+  }, [composerDraftKey, initialComposerDraft])
+  const setComposerProvider = useCallback((providerId: string): void => {
+    const descriptor = providers.find((item) => item.id === providerId)
+    const catalog = modelsByProvider[providerId] ?? []
+    const model = descriptor?.default_model ?? catalog.find((item) => item.is_default)?.id ?? catalog[0]?.id ?? ''
+    setComposerDrafts((current) => {
+      const existing = current[composerDraftKey] ?? initialComposerDraft
+      return { ...current, [composerDraftKey]: { ...existing, providerId, model } }
+    })
+  }, [composerDraftKey, initialComposerDraft, modelsByProvider, providers])
+  const setComposerModel = useCallback((model: string): void => {
+    setComposerDrafts((current) => {
+      const existing = current[composerDraftKey] ?? initialComposerDraft
+      return {
+        ...current,
+        [composerDraftKey]: { ...existing, providerId: composerProviderId, model }
+      }
+    })
+  }, [composerDraftKey, composerProviderId, initialComposerDraft])
+
+  useEffect(() => {
+    if (
+      !composerProviderId
+      || !composerProvider?.capabilities.model_catalog
+      || Object.prototype.hasOwnProperty.call(modelsByProvider, composerProviderId)
+      || modelLoadRef.current.has(composerProviderId)
+    ) return
+    let cancelled = false
+    modelLoadRef.current.add(composerProviderId)
+    setLoadingModelProviders((current) => new Set(current).add(composerProviderId))
+    void bridge.rpc('provider/models', { provider_id: composerProviderId })
+      .then((result) => {
+        if (!cancelled) {
+          setModelsByProvider((current) => ({ ...current, [composerProviderId]: result.models }))
+          // Some catalogs (notably Codex) discover authentication while the
+          // sidecar is being initialized. Refresh the public descriptor so a
+          // signed-out provider cannot remain selectable as `unknown`.
+          void refreshProviderCatalog().catch((error) => {
+            setAppError(error instanceof Error ? error.message : 'Could not refresh providers.')
+          })
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setModelsByProvider((current) => ({ ...current, [composerProviderId]: [] }))
+          setAnnouncement(error instanceof Error ? error.message : 'Could not load provider models.')
+        }
+      })
+      .finally(() => {
+        modelLoadRef.current.delete(composerProviderId)
+        setLoadingModelProviders((current) => {
+          const next = new Set(current)
+          next.delete(composerProviderId)
+          return next
+        })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [bridge, composerProvider, composerProviderId, modelsByProvider, refreshProviderCatalog])
 
   const beginDraft = useCallback((workingDirectory?: string): void => {
     preferDraftRef.current = true
@@ -628,9 +812,11 @@ export function App() {
 
   const handleStartTurn = async (
     message: string,
-    references: ContextReference[]
+    references: ContextReference[],
+    providerId: string,
+    model: string
   ): Promise<boolean> => {
-    if (!provider || startTurnRef.current || isRunning) return false
+    if (!providerId || !model || startTurnRef.current || isRunning) return false
     startTurnRef.current = true
     setAppError('')
     try {
@@ -640,7 +826,8 @@ export function App() {
           client_request_id: requestDraftId,
           message,
           references,
-          provider,
+          provider: providerId,
+          model,
           working_directory: draftWorkingDirectory
         })
         if (started.imported_project) {
@@ -650,6 +837,15 @@ export function App() {
           ])
         }
         const reconciledThread = threadProjectionRef.current.reconcile(started.thread)
+        setComposerDrafts((current) => ({
+          ...current,
+          [`thread:${started.thread.id}`]: {
+            message: '',
+            references: [],
+            providerId,
+            model
+          }
+        }))
         setThreads((current) => [
           reconciledThread,
           ...current.filter((thread) => thread.id !== started.thread.id)
@@ -666,6 +862,7 @@ export function App() {
             messages: [optimisticMessage(started.thread.id, started.turn, message, references)],
             turns: [started.turn],
             pending_approvals: [],
+            pending_user_inputs: [],
             processes: []
           })
           setDraftWorkingDirectory(undefined)
@@ -682,7 +879,8 @@ export function App() {
         thread_id: snapshot.thread.id,
         message,
         references,
-        provider
+        provider: providerId,
+        model
       })
       setRunningTurns((current) => ({ ...current, [snapshot.thread.id]: turn.id }))
       setSnapshot((current) => {
@@ -735,6 +933,41 @@ export function App() {
       setResolvingApprovals((current) => {
         const next = new Set(current)
         next.delete(approvalId)
+        return next
+      })
+    }
+  }
+
+  const handleUserInput = async (
+    interactionId: string,
+    answers: UserInputAnswers,
+    cancelled: boolean
+  ): Promise<void> => {
+    if (userInputRef.current.has(interactionId)) return
+    userInputRef.current.add(interactionId)
+    setResolvingUserInputs((current) => new Set(current).add(interactionId))
+    try {
+      const result = await bridge.rpc('user-input/respond', {
+        interaction_id: interactionId,
+        answers,
+        cancelled
+      })
+      if (!result.resolved) throw new Error('This input request was already resolved.')
+      setSnapshot((current) => current ? {
+        ...current,
+        pending_user_inputs: (current.pending_user_inputs ?? []).filter(
+          (request) => request.interaction_id !== interactionId
+        )
+      } : current)
+      setAnnouncement(cancelled ? 'Input request cancelled' : 'Input sent. Cody is continuing.')
+      if (activeThreadRef.current) void refreshThread(activeThreadRef.current)
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : 'Could not respond to Cody.')
+    } finally {
+      userInputRef.current.delete(interactionId)
+      setResolvingUserInputs((current) => {
+        const next = new Set(current)
+        next.delete(interactionId)
         return next
       })
     }
@@ -803,6 +1036,56 @@ export function App() {
     throw new Error('Clipboard access is unavailable.')
   }
 
+  const handleSaveProvider = async (profile: ProviderProfileSubmission): Promise<void> => {
+    const saved = await bridge.upsertProviderProfile(profile as ProviderProfileUpdate)
+    setProviderSettings((current) => ({
+      ...current,
+      profiles: [saved, ...current.profiles.filter((item) => item.id !== saved.id)]
+    }))
+    setModelsByProvider((current) => {
+      const next = { ...current }
+      delete next[saved.id]
+      return next
+    })
+    void refreshProviderCatalog().catch((error) => {
+      setAppError(error instanceof Error ? error.message : 'Could not refresh providers.')
+    })
+  }
+
+  const handleDeleteProvider = async (profileId: string): Promise<void> => {
+    await bridge.deleteProviderProfile(profileId)
+    setProviderSettings((current) => ({
+      ...current,
+      profiles: current.profiles.filter((item) => item.id !== profileId)
+    }))
+    setModelsByProvider((current) => {
+      const next = { ...current }
+      delete next[profileId]
+      return next
+    })
+    void refreshProviderCatalog().catch((error) => {
+      setAppError(error instanceof Error ? error.message : 'Could not refresh providers.')
+    })
+  }
+
+  const handleConnectCodexAccount = async (): Promise<void> => {
+    const result = await bridge.connectCodexAccount()
+    setCodexAccount({
+      state: 'signed-out',
+      detail: result.mode === 'device_code' && result.userCode
+        ? `Enter code ${result.userCode} in the opened browser. Waiting for sign-in…`
+        : 'Continue sign-in in the opened browser. Waiting for completion…'
+    })
+  }
+
+  const handleDisconnectCodexAccount = async (): Promise<void> => {
+    await bridge.disconnectCodexAccount()
+    setCodexAccount(await bridge.getCodexAccountStatus())
+    void refreshProviderCatalog().catch((error) => {
+      setAppError(error instanceof Error ? error.message : 'Could not refresh providers.')
+    })
+  }
+
   useEffect(() => bridge.onCommand((command) => {
     if (command === 'new-thread') {
       beginDraft()
@@ -818,6 +1101,10 @@ export function App() {
       requestAnimationFrame(() => document.querySelector<HTMLInputElement>('#asset-filter')?.focus())
       return
     }
+    if (command === 'open-settings') {
+      openProviderSettings()
+      return
+    }
     if (command === 'toggle-rail') {
       if (railIsNarrow) setRailOpen((current) => !current)
       else setRailCollapsed((current) => !current)
@@ -828,7 +1115,14 @@ export function App() {
     } else {
       setInspectorCollapsed((current) => !current)
     }
-  }), [beginDraft, bridge, handleImportProject, inspectorIsNarrow, railIsNarrow])
+  }), [
+    beginDraft,
+    bridge,
+    handleImportProject,
+    inspectorIsNarrow,
+    openProviderSettings,
+    railIsNarrow
+  ])
 
   const emptyDisconnected = status.phase !== 'connected' && !snapshot
   const selectedProjectIds = new Set(
@@ -909,6 +1203,7 @@ export function App() {
             setRailOpen(true)
           }}
           onOpenInspector={openInspector}
+          onOpenSettings={openProviderSettings}
           onRetry={() => void bootstrap()}
           onToggleTheme={() => setDarkTheme((current) => !current)}
           onWindowAction={(action) => void bridge.windowAction(action)}
@@ -960,9 +1255,12 @@ export function App() {
                 projects={projects}
                 events={conversationEvents}
                 pendingApprovals={snapshot.pending_approvals}
+                pendingUserInputs={snapshot.pending_user_inputs ?? []}
                 running={isRunning}
                 resolvingApprovals={resolvingApprovals}
+                resolvingUserInputs={resolvingUserInputs}
                 onApproval={handleApproval}
+                onUserInput={handleUserInput}
               />
               <div className="composer-dock">
                 <Composer
@@ -972,12 +1270,16 @@ export function App() {
                   projects={projects}
                   references={draftReferences}
                   providers={providers}
-                  provider={provider}
+                  providerId={composerProviderId}
+                  models={composerModels}
+                  model={composerModel}
+                  modelsLoading={loadingModelProviders.has(composerProviderId)}
                   running={isRunning}
                   message={composerDraft.message}
                   unavailable={status.phase !== 'connected' || loadingThread || snapshot.thread.id !== activeThreadId}
                   onReferencesChange={setDraftReferences}
-                  onProviderChange={setProvider}
+                  onProviderChange={setComposerProvider}
+                  onModelChange={setComposerModel}
                   onMessageChange={setComposerMessage}
                   onSend={handleStartTurn}
                   onCancel={handleCancelTurn}
@@ -994,14 +1296,18 @@ export function App() {
                   projects={projects}
                   references={draftReferences}
                   providers={providers}
-                  provider={provider}
+                  providerId={composerProviderId}
+                  models={composerModels}
+                  model={composerModel}
+                  modelsLoading={loadingModelProviders.has(composerProviderId)}
                   running={false}
                   message={composerDraft.message}
                   draft
                   workingDirectory={draftWorkingDirectory}
                   unavailable={status.phase !== 'connected'}
                   onReferencesChange={setDraftReferences}
-                  onProviderChange={setProvider}
+                  onProviderChange={setComposerProvider}
+                  onModelChange={setComposerModel}
                   onMessageChange={setComposerMessage}
                   onPickWorkingDirectory={async () => {
                     const path = await bridge.pickDirectory('working-directory')
@@ -1062,6 +1368,18 @@ export function App() {
           onAddProject={addProjectContext}
         />
       </div>
+
+      <ProviderSettingsDialog
+        open={providerSettingsOpen}
+        profiles={providerSettings.profiles}
+        credentialStorage={providerSettings.credentialStorage}
+        codexAccount={codexAccount}
+        onClose={() => setProviderSettingsOpen(false)}
+        onSave={handleSaveProvider}
+        onDelete={handleDeleteProvider}
+        onConnectCodexAccount={handleConnectCodexAccount}
+        onDisconnectCodexAccount={handleDisconnectCodexAccount}
+      />
     </div>
   )
 }

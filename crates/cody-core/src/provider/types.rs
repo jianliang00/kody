@@ -297,6 +297,11 @@ pub enum ModelDelta {
     Text {
         text: String,
     },
+    /// Transient provider reasoning or reasoning summary. It is intentionally
+    /// not part of durable `ModelResponse::content`.
+    Reasoning {
+        text: String,
+    },
     ToolCall {
         id: String,
         name: String,

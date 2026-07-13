@@ -1,4 +1,4 @@
-use std::{fmt, path::PathBuf, str::FromStr};
+use std::{collections::BTreeMap, fmt, path::PathBuf, str::FromStr};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -48,6 +48,7 @@ id_type!(TurnId);
 id_type!(MessageId);
 id_type!(EventId);
 id_type!(ApprovalId);
+id_type!(InteractionId);
 id_type!(ProcessId);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,6 +108,10 @@ pub struct Thread {
     pub default_references: Vec<ContextReference>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// Durable IDs assigned by external agent runtimes. Keys identify the
+    /// backend (for example `codex`) and values are opaque to Cody.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub external_thread_ids: BTreeMap<String, String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

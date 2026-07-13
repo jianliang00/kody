@@ -4,8 +4,9 @@ use serde_json::Value;
 use tokio::sync::broadcast;
 
 use crate::domain::{
-    ApprovalId, EventId, ProcessId, ProcessOutputStream, ProjectId, ThreadId, TurnId,
+    ApprovalId, EventId, InteractionId, ProcessId, ProcessOutputStream, ProjectId, ThreadId, TurnId,
 };
+use crate::user_input::UserInputQuestion;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -37,6 +38,17 @@ pub enum AgentEvent {
     ApprovalResolved {
         approval_id: ApprovalId,
         approved: bool,
+    },
+    UserInputRequested {
+        interaction_id: InteractionId,
+        item_id: String,
+        questions: Vec<UserInputQuestion>,
+    },
+    /// Signals completion without carrying answer contents. In particular,
+    /// secret answers can never enter the public event stream.
+    UserInputResolved {
+        interaction_id: InteractionId,
+        cancelled: bool,
     },
     ToolStarted {
         tool_call_id: String,

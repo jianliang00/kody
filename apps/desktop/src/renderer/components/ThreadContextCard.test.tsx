@@ -29,6 +29,7 @@ describe('ThreadContextCard', () => {
       messages: [],
       turns: [],
       pending_approvals: [],
+      pending_user_inputs: [],
       processes: [
         {
           ...managedProcess('process-api', 'npm run api'),

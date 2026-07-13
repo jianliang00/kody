@@ -1,6 +1,15 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
-import type { CodyDesktopBridge, DesktopCommand, DirectoryPickerPurpose } from '../shared/bridge'
+import type {
+  CodexAccountStatus,
+  CodexConnectResult,
+  CodyDesktopBridge,
+  DesktopCommand,
+  DirectoryPickerPurpose,
+  ProviderProfileRecord,
+  ProviderProfileUpdate,
+  ProviderSettingsResult
+} from '../shared/bridge'
 import type {
   EventEnvelope,
   ProcessEventEnvelope,
@@ -21,6 +30,24 @@ const bridge: CodyDesktopBridge = Object.freeze({
   },
   getServerStatus() {
     return ipcRenderer.invoke('cody:server-status') as Promise<ServerStatus>
+  },
+  getProviderSettings() {
+    return ipcRenderer.invoke('cody:provider-settings:get') as Promise<ProviderSettingsResult>
+  },
+  upsertProviderProfile(profile: ProviderProfileUpdate) {
+    return ipcRenderer.invoke('cody:provider-settings:upsert', profile) as Promise<ProviderProfileRecord>
+  },
+  deleteProviderProfile(profileId: string) {
+    return ipcRenderer.invoke('cody:provider-settings:delete', profileId) as Promise<void>
+  },
+  getCodexAccountStatus() {
+    return ipcRenderer.invoke('cody:codex-account:get') as Promise<CodexAccountStatus>
+  },
+  connectCodexAccount() {
+    return ipcRenderer.invoke('cody:codex-account:connect') as Promise<CodexConnectResult>
+  },
+  disconnectCodexAccount() {
+    return ipcRenderer.invoke('cody:codex-account:disconnect') as Promise<void>
   },
   onEvent(listener: (event: EventEnvelope) => void) {
     const handler = (_event: Electron.IpcRendererEvent, envelope: EventEnvelope): void => listener(envelope)

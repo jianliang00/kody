@@ -55,6 +55,14 @@ function eventCopy(event: EventEnvelope['event']): { label: string; detail?: str
       return { label: 'Approval requested', detail: event.name, kind: 'approval' }
     case 'approval_resolved':
       return { label: event.approved ? 'Access allowed' : 'Access denied', kind: 'approval' }
+    case 'user_input_requested':
+      return {
+        label: 'User input requested',
+        detail: event.questions.map((question) => question.header).join(', '),
+        kind: 'input'
+      }
+    case 'user_input_resolved':
+      return { label: event.cancelled ? 'Input request cancelled' : 'User input received', kind: 'input' }
     case 'tool_started':
       return { label: `${event.name} started`, detail: toolDetail(event.arguments), kind: 'tool' }
     case 'tool_completed':

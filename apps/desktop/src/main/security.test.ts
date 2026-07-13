@@ -32,4 +32,28 @@ describe('renderer RPC allowlist', () => {
       grace_ms: 1
     })).toThrow(/unsupported/)
   })
+
+  it('accepts bounded structured user input and rejects extra or oversized values', () => {
+    expect(() => validateRpcInvocation('user-input/respond', {
+      interaction_id: 'interaction-1',
+      answers: { approach: { answers: ['Recommended'] } },
+      cancelled: false
+    })).not.toThrow()
+    expect(() => validateRpcInvocation('user-input/respond', {
+      interaction_id: 'interaction-1',
+      answers: {},
+      cancelled: true
+    })).not.toThrow()
+    expect(() => validateRpcInvocation('user-input/respond', {
+      interaction_id: 'interaction-1',
+      answers: { secret: { answers: ['x'.repeat(32_769)] } },
+      cancelled: false
+    })).toThrow(/answer/)
+    expect(() => validateRpcInvocation('user-input/respond', {
+      interaction_id: 'interaction-1',
+      answers: {},
+      cancelled: false,
+      unexpected: true
+    })).toThrow(/unsupported/)
+  })
 })

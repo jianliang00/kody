@@ -7,15 +7,19 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-trait.workspace = true
 axum.workspace = true
+chrono.workspace = true
 cody-core = { path = "../cody-core" }
 futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+regex = "1"
 
 [dev-dependencies]
 reqwest.workspace = true

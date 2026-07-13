@@ -6,14 +6,25 @@ import {
   BrowserWindow,
   dialog,
   Menu,
+  safeStorage,
   screen,
   session,
+  shell,
   type MenuItemConstructorOptions
 } from 'electron'
 
-import type { DesktopCommand } from '../shared/bridge'
+import type {
+  CodexAccountStatus,
+  CodexConnectResult,
+  DesktopCommand
+} from '../shared/bridge'
 import { registerIpcHandlers } from './ipc'
-import { CodyServerManager } from './server-manager'
+import {
+  configureStoredProvider,
+  ProviderSettingsStore,
+  reconcileStoredProviders
+} from './provider-settings'
+import { CodyServerManager, trustedCodexAuthUrl } from './server-manager'
 import { hardenRendererSession, hardenWebContents } from './security'
 
 let mainWindow: BrowserWindow | null = null
@@ -53,7 +64,7 @@ function installApplicationMenu(): void {
           submenu: [
             { role: 'about' as const },
             { type: 'separator' as const },
-            { label: 'Settings…', accelerator: 'CmdOrCtrl+,', enabled: false },
+            { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => sendCommand('open-settings') },
             { type: 'separator' as const },
             { role: 'services' as const },
             { type: 'separator' as const },
@@ -70,6 +81,7 @@ function installApplicationMenu(): void {
       submenu: [
         { label: 'New Thread', accelerator: 'CmdOrCtrl+N', click: () => sendCommand('new-thread') },
         { label: 'Import Project…', accelerator: 'CmdOrCtrl+O', click: () => sendCommand('import-project') },
+        ...(!isMac ? [{ label: 'Settings…', accelerator: 'Ctrl+,', click: () => sendCommand('open-settings') }] : []),
         { type: 'separator' },
         isMac ? { role: 'close' } : { role: 'quit' }
       ]
@@ -209,6 +221,10 @@ function createMainWindow(): BrowserWindow {
 
 void app.whenReady().then(() => {
   hardenRendererSession(session.defaultSession, rendererUrl, Boolean(process.env.ELECTRON_RENDERER_URL))
+  const providerSettings = new ProviderSettingsStore({
+    filePath: join(app.getPath('userData'), 'model-providers.json'),
+    safeStorage
+  })
   server = new CodyServerManager({
     appPath: app.getAppPath(),
     isPackaged: app.isPackaged,
@@ -217,9 +233,50 @@ void app.whenReady().then(() => {
     onEvent: (event) => broadcast('cody:turn-event', event),
     onProcessEvent: (event) => broadcast('cody:process-event', event),
     onStatus: (status) => broadcast('cody:server-status-changed', status),
-    onLog: app.isPackaged ? undefined : (line) => console.info(`[cody-app-server] ${line}`)
+    onLog: app.isPackaged ? undefined : (line) => console.info(`[cody-app-server] ${line}`),
+    onConnected: async (rpc) => {
+      await reconcileStoredProviders(providerSettings, rpc, (profile, error) => {
+        console.error(`Could not activate model provider '${profile.id}':`, safeMessage(error))
+      })
+    }
   })
-  registerIpcHandlers({ getWindow: () => mainWindow, rendererUrl, server })
+  const currentServer = server
+  let activeCodexLoginId: string | undefined
+  registerIpcHandlers({
+    getWindow: () => mainWindow,
+    rendererUrl,
+    server: currentServer,
+    providerSettings,
+    configureProvider: (profile) => configureStoredProvider(
+      providerSettings,
+      profile,
+      (method, params) => currentServer.controlRpc(method, params)
+    ),
+    removeProvider: async (profileId) => {
+      await currentServer.controlRpc('provider/remove', { provider_id: profileId })
+    },
+    getCodexAccountStatus: async () => {
+      const status = await readCodexAccountStatus(currentServer)
+      if (status.state === 'signed-in') activeCodexLoginId = undefined
+      return status
+    },
+    connectCodexAccount: async () => {
+      if (activeCodexLoginId) {
+        await cancelCodexLogin(currentServer, activeCodexLoginId).catch(() => undefined)
+        activeCodexLoginId = undefined
+      }
+      const login = await connectCodexAccount(currentServer)
+      activeCodexLoginId = login.loginId
+      return login.result
+    },
+    disconnectCodexAccount: async () => {
+      if (activeCodexLoginId) {
+        await cancelCodexLogin(currentServer, activeCodexLoginId).catch(() => undefined)
+        activeCodexLoginId = undefined
+      }
+      await currentServer.controlRpc('codex/account/logout', {})
+    }
+  })
   mainWindow = createMainWindow()
   installApplicationMenu()
   void server.start().catch((error) => console.error('Failed to start Cody engine:', error))
@@ -229,6 +286,115 @@ void app.whenReady().then(() => {
     void server?.start().catch((error) => console.error('Failed to reconnect Cody engine:', error))
   })
 })
+
+interface CodexAccountWire {
+  state?: 'signed_in' | 'signed_out' | 'unavailable'
+  account?: { email?: string; plan_type?: string; account_type?: string } | null
+  detail?: string
+  binary?: { version?: string }
+}
+
+async function readCodexAccountStatus(manager: CodyServerManager): Promise<CodexAccountStatus> {
+  const value = await manager.controlRpc<CodexAccountWire>('codex/account/read', {})
+  if (value.state === 'unavailable') {
+    return { state: 'unavailable', detail: value.detail ?? 'Codex is unavailable.' }
+  }
+  if (value.state !== 'signed_in' || !value.account) {
+    return {
+      state: 'signed-out',
+      detail: value.binary?.version
+        ? `Codex ${value.binary.version} is ready. Sign in with ChatGPT to use plan quota.`
+        : 'Sign in with ChatGPT to use Codex plan quota.'
+    }
+  }
+  const label = value.account.email ?? value.account.account_type ?? 'ChatGPT account'
+  const details = [value.account.plan_type, value.binary?.version].filter(Boolean).join(' · ')
+  try {
+    const limits = await manager.controlRpc<unknown>('codex/account/rate-limits', {})
+    const summary = rateLimitSummary(limits)
+    return { state: 'signed-in', accountLabel: label, detail: [details, summary].filter(Boolean).join(' · ') }
+  } catch {
+    return { state: 'signed-in', accountLabel: label, detail: details || undefined }
+  }
+}
+
+async function connectCodexAccount(
+  manager: CodyServerManager
+): Promise<{ loginId: string; result: CodexConnectResult }> {
+  const login = await manager.controlRpc<unknown>('codex/account/login/start', { mode: 'browser' })
+  if (!isRecord(login)) throw new Error('Codex returned an invalid login response')
+  if (
+    typeof login.login_id !== 'string'
+    || !login.login_id
+    || login.login_id.length > 256
+  ) {
+    throw new Error('Codex returned an invalid login identifier')
+  }
+  const loginId = login.login_id
+  try {
+    if (login.mode === 'browser' && typeof login.auth_url === 'string' && login.auth_url.length <= 16_384) {
+      await openTrustedAuthUrl(login.auth_url)
+      return { loginId, result: { mode: 'browser' } }
+    }
+    if (
+      login.mode === 'device_code'
+      && typeof login.verification_url === 'string'
+      && login.verification_url.length <= 16_384
+      && (login.user_code === undefined || (
+        typeof login.user_code === 'string'
+        && login.user_code.length <= 256
+      ))
+    ) {
+      await openTrustedAuthUrl(login.verification_url)
+      return {
+        loginId,
+        result: {
+          mode: 'device_code',
+          userCode: login.user_code
+        }
+      }
+    }
+    throw new Error('Codex did not return a usable login URL')
+  } catch (error) {
+    await cancelCodexLogin(manager, loginId).catch(() => undefined)
+    throw error
+  }
+}
+
+async function cancelCodexLogin(manager: CodyServerManager, loginId: string): Promise<void> {
+  await manager.controlRpc('codex/account/login/cancel', { login_id: loginId })
+}
+
+async function openTrustedAuthUrl(rawUrl: string): Promise<void> {
+  const trustedUrl = trustedCodexAuthUrl(rawUrl)
+  try {
+    await shell.openExternal(trustedUrl, { activate: true })
+  } catch {
+    throw new Error('Cody could not open the Codex sign-in page')
+  }
+}
+
+function rateLimitSummary(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined
+  const limits = isRecord(value.rateLimits)
+    ? value.rateLimits
+    : isRecord(value.rate_limits)
+      ? value.rate_limits
+      : undefined
+  if (!limits) return undefined
+  const primary = isRecord(limits.primary) ? limits.primary : undefined
+  const used = primary?.usedPercent ?? primary?.used_percent
+  if (typeof used !== 'number') return undefined
+  return `${Math.max(0, Math.min(100, used))}% of the current Codex window used`
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function safeMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

@@ -8,7 +8,7 @@ import {
   Sparkles,
   X
 } from 'lucide-react'
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type {
@@ -18,7 +18,9 @@ import type {
   PendingApproval,
   Project,
   Thread,
-  ThreadSnapshot
+  ThreadSnapshot,
+  PendingUserInput,
+  UserInputAnswers
 } from '@shared/protocol'
 import { ReferenceChips } from './ReferenceChips'
 
@@ -28,9 +30,16 @@ interface ConversationProps {
   projects: Project[]
   events: EventEnvelope[]
   pendingApprovals: PendingApproval[]
+  pendingUserInputs: PendingUserInput[]
   running: boolean
   resolvingApprovals: Set<string>
+  resolvingUserInputs: Set<string>
   onApproval: (approvalId: string, approved: boolean) => Promise<void>
+  onUserInput: (
+    interactionId: string,
+    answers: UserInputAnswers,
+    cancelled: boolean
+  ) => Promise<void>
 }
 
 function formatTime(value: string): string {
@@ -183,15 +192,153 @@ function ApprovalCard({
   )
 }
 
+type DraftAnswer = { mode: 'option' | 'free'; value: string }
+
+function UserInputCard({
+  request,
+  resolving,
+  onRespond
+}: {
+  request: PendingUserInput
+  resolving: boolean
+  onRespond: ConversationProps['onUserInput']
+}) {
+  const [drafts, setDrafts] = useState<Record<string, DraftAnswer>>({})
+  const [error, setError] = useState('')
+  const formId = `user-input-${request.interaction_id}`
+
+  const updateDraft = (questionId: string, draft: DraftAnswer): void => {
+    setDrafts((current) => ({ ...current, [questionId]: draft }))
+    setError('')
+  }
+
+  const submit = (event: FormEvent<HTMLFormElement>): void => {
+    event.preventDefault()
+    const answers: UserInputAnswers = {}
+    for (const question of request.questions) {
+      const draft = drafts[question.id]
+      if (!draft || draft.value.trim().length === 0) {
+        setError(`Answer “${question.header}” before continuing.`)
+        return
+      }
+      answers[question.id] = { answers: [draft.value] }
+    }
+    setDrafts({})
+    void onRespond(request.interaction_id, answers, false)
+  }
+
+  return (
+    <section className="user-input-card" aria-labelledby={`${formId}-title`}>
+      <header>
+        <span className="user-input-card__icon"><MessageCircle aria-hidden="true" size={17} /></span>
+        <div>
+          <h3 id={`${formId}-title`}>Cody needs your input</h3>
+          <p>The current Turn is paused until you answer or cancel this request.</p>
+        </div>
+      </header>
+      <form onSubmit={submit} aria-describedby={error ? `${formId}-error` : undefined}>
+        {request.questions.map((question, questionIndex) => {
+          const inputId = `${formId}-question-${questionIndex}`
+          const descriptionId = `${inputId}-description`
+          // Secret prompts always use a protected free-text control, even if
+          // an upstream backend also supplied option metadata.
+          const options = question.is_secret ? [] : question.options ?? []
+          const draft = drafts[question.id]
+          return (
+            <fieldset key={question.id} disabled={resolving}>
+              <legend>{question.header}</legend>
+              <p id={descriptionId}>{question.question}</p>
+              {options.length > 0 ? (
+                <div className="user-input-options" aria-describedby={descriptionId}>
+                  {options.map((option, optionIndex) => (
+                    <label key={`${question.id}-${option.label}`}>
+                      <input
+                        type="radio"
+                        name={`${inputId}-choice`}
+                        value={option.label}
+                        checked={draft?.mode === 'option' && draft.value === option.label}
+                        onChange={() => updateDraft(question.id, { mode: 'option', value: option.label })}
+                      />
+                      <span>
+                        <strong>{option.label}</strong>
+                        {option.description ? <small>{option.description}</small> : null}
+                      </span>
+                    </label>
+                  ))}
+                  {question.is_other ? (
+                    <label>
+                      <input
+                        type="radio"
+                        name={`${inputId}-choice`}
+                        value="other"
+                        checked={draft?.mode === 'free'}
+                        onChange={() => updateDraft(question.id, { mode: 'free', value: '' })}
+                      />
+                      <span><strong>Other</strong><small>Provide a different answer.</small></span>
+                    </label>
+                  ) : null}
+                </div>
+              ) : null}
+              {options.length === 0 || (question.is_other && draft?.mode === 'free') ? (
+                <label className="user-input-free" htmlFor={`${inputId}-free`}>
+                  <span>{options.length > 0 ? 'Other answer' : 'Your answer'}</span>
+                  <input
+                    id={`${inputId}-free`}
+                    type={question.is_secret ? 'password' : 'text'}
+                    autoComplete="off"
+                    spellCheck={!question.is_secret}
+                    aria-describedby={descriptionId}
+                    value={draft?.mode === 'free' ? draft.value : ''}
+                    onChange={(event) => updateDraft(question.id, { mode: 'free', value: event.target.value })}
+                  />
+                  {question.is_secret ? <small>Hidden while typing and never added to public activity.</small> : null}
+                </label>
+              ) : null}
+            </fieldset>
+          )
+        })}
+        {error ? <p id={`${formId}-error`} className="user-input-card__error" role="alert">{error}</p> : null}
+        <footer>
+          {resolving ? (
+            <span className="user-input-card__status" role="status">
+              <LoaderCircle className="spin" aria-hidden="true" size={15} /> Sending response…
+            </span>
+          ) : (
+            <>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => {
+                  setDrafts({})
+                  setError('')
+                  void onRespond(request.interaction_id, {}, true)
+                }}
+              >
+                <X aria-hidden="true" size={15} /> Cancel request
+              </button>
+              <button className="user-input-submit" type="submit">
+                <Check aria-hidden="true" size={15} /> Continue
+              </button>
+            </>
+          )}
+        </footer>
+      </form>
+    </section>
+  )
+}
+
 export function Conversation({
   snapshot,
   threads,
   projects,
   events,
   pendingApprovals,
+  pendingUserInputs,
   running,
   resolvingApprovals,
-  onApproval
+  resolvingUserInputs,
+  onApproval,
+  onUserInput
 }: ConversationProps) {
   const endRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -309,6 +456,15 @@ export function Conversation({
             projects={projects}
             resolving={resolvingApprovals.has(approval.approval_id)}
             onApproval={onApproval}
+          />
+        ))}
+
+        {pendingUserInputs.map((request) => (
+          <UserInputCard
+            key={request.interaction_id}
+            request={request}
+            resolving={resolvingUserInputs.has(request.interaction_id)}
+            onRespond={onUserInput}
           />
         ))}
 

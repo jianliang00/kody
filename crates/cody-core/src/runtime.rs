@@ -1,9 +1,6 @@
 use std::{
-    collections::HashSet,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex as StdMutex},
 };
 
 use async_trait::async_trait;
@@ -16,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::{
-    context::ContextBuilder,
+    context::{ContextBuilder, ResolvedContext},
     domain::{
         ApprovalId, ContextReference, Message, MessageId, MessagePart, MessageRole, ProjectId,
         ThreadId, ThreadStatus, Turn, TurnId, TurnStatus,
@@ -25,8 +22,8 @@ use crate::{
     error::{CodyError, Result},
     event::{AgentEvent, EventEnvelope, EventHub},
     provider::{
-        FinishReason, ModelContent, ModelDelta, ModelDeltaSink, ModelRequest, ModelResponse,
-        ProviderRegistry, ToolDefinition as ProviderToolDefinition,
+        FinishReason, ModelContent, ModelDelta, ModelDeltaSink, ModelProvider, ModelRequest,
+        ModelResponse, ProviderRegistry, ToolDefinition as ProviderToolDefinition,
     },
     store::StateStore,
     title::{
@@ -34,6 +31,7 @@ use crate::{
         LocalThreadTitleGenerator, ThreadTitleGenerator, ThreadTitleRequest,
     },
     tools::{ToolCall, ToolContext, ToolRegistry, ToolResult},
+    user_input::UserInputBroker,
 };
 
 #[derive(Debug, Clone)]
@@ -74,6 +72,23 @@ pub struct StartTurn {
     pub max_output_tokens: Option<u32>,
 }
 
+/// Executes a prepared Turn through an agent runtime that owns its own loop.
+///
+/// This boundary is intentionally separate from [`ModelProvider`]: backends
+/// such as Codex App Server already plan, call tools, and handle approvals.
+/// Treating them as one model completion would nest two agent loops and make
+/// cancellation, tools, and durable state ambiguous.
+#[async_trait]
+pub trait ExternalTurnBackend: std::fmt::Debug + Send + Sync {
+    async fn execute(
+        &self,
+        turn: &Turn,
+        context: ResolvedContext,
+        cancellation: CancellationToken,
+        events: TurnEventEmitter,
+    ) -> Result<String>;
+}
+
 fn default_provider() -> String {
     "echo".into()
 }
@@ -93,7 +108,9 @@ pub struct AgentRuntime {
     title_generator: Arc<dyn ThreadTitleGenerator>,
     config: AgentRuntimeConfig,
     active_threads: Mutex<HashSet<ThreadId>>,
+    provider_leases: Mutex<HashMap<TurnId, Arc<dyn ModelProvider>>>,
     approvals: ApprovalBroker,
+    user_inputs: UserInputBroker,
 }
 
 impl AgentRuntime {
@@ -160,12 +177,22 @@ impl AgentRuntime {
             title_generator,
             config,
             active_threads: Mutex::new(HashSet::new()),
+            provider_leases: Mutex::new(HashMap::new()),
             approvals: ApprovalBroker::default(),
+            user_inputs: UserInputBroker::default(),
         }
     }
 
     pub fn approvals(&self) -> &ApprovalBroker {
         &self.approvals
+    }
+
+    pub fn user_inputs(&self) -> &UserInputBroker {
+        &self.user_inputs
+    }
+
+    pub fn store(&self) -> &Arc<dyn StateStore> {
+        &self.store
     }
 
     /// Validate and persist a queued turn. This reserves the thread so that
@@ -217,6 +244,9 @@ impl AgentRuntime {
         }
 
         let result = self.persist_queued_turn(&thread, request, model).await;
+        if let Ok(turn) = &result {
+            self.provider_leases.lock().await.insert(turn.id, provider);
+        }
         if result.is_err() {
             let _ = self.mark_thread_idle(thread.id).await;
             self.release_thread(thread.id).await;
@@ -290,13 +320,16 @@ impl AgentRuntime {
             .store
             .transition_turn_status(turn_id, TurnStatus::Queued, TurnStatus::Running)
             .await?;
-        let emitter = TurnEmitter::new(self.events.clone(), turn.thread_id, turn.id);
+        let provider = match self.provider_leases.lock().await.remove(&turn.id) {
+            Some(provider) => Ok(provider),
+            None => self.providers.get(&turn.provider),
+        };
+        let emitter = TurnEventEmitter::new(self.events.clone(), turn.thread_id, turn.id);
         emitter.emit(AgentEvent::TurnStarted);
-        let execution = std::panic::AssertUnwindSafe(self.execute_loop(
-            &turn,
-            cancellation.clone(),
-            emitter.clone(),
-        ))
+        let execution = std::panic::AssertUnwindSafe(async {
+            self.execute_loop(&turn, cancellation.clone(), emitter.clone(), provider?)
+                .await
+        })
         .catch_unwind()
         .await;
         let outcome = match execution {
@@ -308,6 +341,7 @@ impl AgentRuntime {
                 .catch_unwind()
                 .await
                 .unwrap_or_else(|payload| Err(CodyError::AgentPanic(panic_message(payload))));
+        self.user_inputs.remove_for_turn(turn.id).await;
 
         // No return path after a successful claim skips this cleanup. Terminal
         // events are deliberately withheld until the durable Thread is Idle,
@@ -320,7 +354,97 @@ impl AgentRuntime {
                     AgentEvent::TurnCompleted { final_text } => Some(final_text.clone()),
                     _ => None,
                 };
-                emitter.emit(outcome.event);
+                emitter.emit_terminal(outcome.event);
+                if let Some(final_text) = completed_text {
+                    self.schedule_thread_title(turn, final_text, emitter);
+                }
+                match outcome.error {
+                    Some(error) => Err(error),
+                    None => Ok(outcome.turn),
+                }
+            }
+            (Ok(outcome), Err(cleanup_error)) => match outcome.error {
+                Some(original) => Err(original),
+                None => Err(cleanup_error),
+            },
+            (Err(original), _) => Err(original),
+        }
+    }
+
+    /// Execute a queued Turn through an external agent backend while keeping
+    /// Cody's durable Turn lifecycle, event ordering, cancellation semantics,
+    /// and automatic first-message title generation authoritative.
+    pub async fn execute_turn_with_backend(
+        &self,
+        turn_id: TurnId,
+        cancellation: CancellationToken,
+        backend: Arc<dyn ExternalTurnBackend>,
+    ) -> Result<Turn> {
+        let turn = self
+            .store
+            .transition_turn_status(turn_id, TurnStatus::Queued, TurnStatus::Running)
+            .await?;
+        // External agent backends do not use the model-completion lease, but
+        // preparation still acquired it to make provider reconfiguration
+        // atomic and to validate the selected model.
+        self.provider_leases.lock().await.remove(&turn.id);
+        let emitter = TurnEventEmitter::new(self.events.clone(), turn.thread_id, turn.id);
+        emitter.emit(AgentEvent::TurnStarted);
+
+        let execution = std::panic::AssertUnwindSafe(async {
+            check_cancelled(&cancellation)?;
+            let context = self
+                .context_builder
+                .build(self.store.as_ref(), &turn)
+                .await?;
+            // Cancellation remains authoritative at the Cody runtime boundary.
+            // A backend receives the token so it can interrupt its remote work,
+            // but correctness must not depend on every implementation polling it.
+            let final_text = tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return Err(CodyError::Cancelled),
+                response = backend.execute(
+                    &turn,
+                    context,
+                    cancellation.clone(),
+                    emitter.clone(),
+                ) => response?,
+            };
+            check_cancelled(&cancellation)?;
+            self.persist_external_response(&turn, final_text.clone())
+                .await?;
+            Ok(final_text)
+        })
+        .catch_unwind()
+        .await;
+        let outcome = match execution {
+            Ok(outcome) => outcome,
+            Err(payload) => Err(CodyError::AgentPanic(panic_message(payload))),
+        };
+        // Once the final assistant message has been written, completion is the
+        // committed result. A cancellation racing after that write must not
+        // leave a durable assistant answer attached to a Cancelled turn.
+        let terminal_cancellation = if outcome.is_ok() {
+            CancellationToken::new()
+        } else {
+            cancellation
+        };
+        let persisted =
+            std::panic::AssertUnwindSafe(self.finish_turn(&turn, outcome, terminal_cancellation))
+                .catch_unwind()
+                .await
+                .unwrap_or_else(|payload| Err(CodyError::AgentPanic(panic_message(payload))));
+        self.user_inputs.remove_for_turn(turn.id).await;
+
+        let idle_result = self.mark_thread_idle(turn.thread_id).await;
+        self.release_thread(turn.thread_id).await;
+        match (persisted, idle_result) {
+            (Ok(outcome), Ok(())) => {
+                let completed_text = match &outcome.event {
+                    AgentEvent::TurnCompleted { final_text } => Some(final_text.clone()),
+                    _ => None,
+                };
+                emitter.emit_terminal(outcome.event);
                 if let Some(final_text) = completed_text {
                     self.schedule_thread_title(turn, final_text, emitter);
                 }
@@ -400,9 +524,9 @@ impl AgentRuntime {
         &self,
         turn: &Turn,
         cancellation: CancellationToken,
-        emitter: TurnEmitter,
+        emitter: TurnEventEmitter,
+        provider: Arc<dyn ModelProvider>,
     ) -> Result<String> {
-        let provider = self.providers.get(&turn.provider)?;
         let tool_definitions = self
             .tools
             .definitions()
@@ -532,7 +656,7 @@ impl AgentRuntime {
         turn: &Turn,
         call: &ToolCall,
         cancellation: &CancellationToken,
-        emitter: &TurnEmitter,
+        emitter: &TurnEventEmitter,
     ) -> Result<bool> {
         let approval_id = ApprovalId::new();
         let reason = self
@@ -590,6 +714,19 @@ impl AgentRuntime {
         Ok(())
     }
 
+    async fn persist_external_response(&self, turn: &Turn, text: String) -> Result<()> {
+        let message = Message {
+            id: MessageId::new(),
+            thread_id: turn.thread_id,
+            turn_id: Some(turn.id),
+            role: MessageRole::Assistant,
+            parts: vec![MessagePart::Text { text }],
+            references: Vec::new(),
+            created_at: Utc::now(),
+        };
+        self.store.append_message(message).await.map(|_| ())
+    }
+
     async fn persist_tool_result(&self, turn: &Turn, result: ToolResult) -> Result<()> {
         let message = Message {
             id: MessageId::new(),
@@ -624,7 +761,12 @@ impl AgentRuntime {
         self.active_threads.lock().await.remove(&thread_id);
     }
 
-    fn schedule_thread_title(&self, turn: Turn, assistant_response: String, emitter: TurnEmitter) {
+    fn schedule_thread_title(
+        &self,
+        turn: Turn,
+        assistant_response: String,
+        emitter: TurnEventEmitter,
+    ) {
         let store = self.store.clone();
         let generator = self.title_generator.clone();
         tokio::spawn(async move {
@@ -636,7 +778,7 @@ impl AgentRuntime {
             )
             .await
             {
-                Ok(Some(title)) => emitter.emit(AgentEvent::ThreadUpdated { title }),
+                Ok(Some(title)) => emitter.emit_thread_updated(title),
                 Ok(None) => {}
                 Err(error) => {
                     // Title generation is presentation metadata. A completed turn
@@ -731,7 +873,7 @@ pub struct ApprovalBroker {
 }
 
 impl ApprovalBroker {
-    async fn register(&self, approval: PendingApproval) -> Result<oneshot::Receiver<bool>> {
+    pub async fn register(&self, approval: PendingApproval) -> Result<oneshot::Receiver<bool>> {
         let (sender, receiver) = oneshot::channel();
         let approval_id = approval.approval_id;
         if self
@@ -782,7 +924,7 @@ impl ApprovalBroker {
         })
     }
 
-    async fn remove(&self, approval_id: ApprovalId) {
+    pub async fn remove(&self, approval_id: ApprovalId) {
         self.pending.lock().await.remove(&approval_id);
     }
 }
@@ -932,7 +1074,7 @@ fn finish_reason_name(reason: &FinishReason) -> String {
     }
 }
 
-fn emit_file_changed(emitter: &TurnEmitter, metadata: &Value) {
+fn emit_file_changed(emitter: &TurnEventEmitter, metadata: &Value) {
     let Some(path) = metadata.get("path").and_then(Value::as_str) else {
         return;
     };
@@ -946,37 +1088,94 @@ fn emit_file_changed(emitter: &TurnEmitter, metadata: &Value) {
     });
 }
 
-#[derive(Clone)]
-struct TurnEmitter {
+#[derive(Debug, Clone)]
+pub struct TurnEventEmitter {
     events: EventHub,
     thread_id: ThreadId,
     turn_id: TurnId,
-    sequence: Arc<AtomicU64>,
+    state: Arc<StdMutex<TurnEventState>>,
 }
 
-impl TurnEmitter {
+#[derive(Debug, Default)]
+struct TurnEventState {
+    sequence: u64,
+    terminal_emitted: bool,
+}
+
+impl TurnEventEmitter {
     fn new(events: EventHub, thread_id: ThreadId, turn_id: TurnId) -> Self {
         Self {
             events,
             thread_id,
             turn_id,
-            sequence: Arc::new(AtomicU64::new(0)),
+            state: Arc::new(StdMutex::new(TurnEventState::default())),
         }
     }
 
-    fn emit(&self, event: AgentEvent) {
-        let sequence = self.sequence.fetch_add(1, Ordering::Relaxed) + 1;
+    /// Emits a non-terminal execution event. Terminal and title events remain
+    /// runtime-owned so an external backend cannot complete a Turn or mutate
+    /// presentation metadata independently of durable state.
+    pub fn emit(&self, event: AgentEvent) {
+        if is_runtime_owned_event(&event) {
+            return;
+        }
+        let mut state = self.lock_state();
+        if state.terminal_emitted {
+            return;
+        }
+        self.publish(&mut state, event);
+    }
+
+    fn emit_terminal(&self, event: AgentEvent) {
+        debug_assert!(is_terminal_event(&event));
+        let mut state = self.lock_state();
+        if state.terminal_emitted || !is_terminal_event(&event) {
+            return;
+        }
+        state.terminal_emitted = true;
+        self.publish(&mut state, event);
+    }
+
+    fn emit_thread_updated(&self, title: String) {
+        let mut state = self.lock_state();
+        if !state.terminal_emitted {
+            return;
+        }
+        self.publish(&mut state, AgentEvent::ThreadUpdated { title });
+    }
+
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, TurnEventState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn publish(&self, state: &mut TurnEventState, event: AgentEvent) {
+        state.sequence += 1;
         self.events.publish(EventEnvelope::new(
             self.thread_id,
             self.turn_id,
-            sequence,
+            state.sequence,
             event,
         ));
     }
 }
 
+fn is_terminal_event(event: &AgentEvent) -> bool {
+    matches!(
+        event,
+        AgentEvent::TurnCompleted { .. }
+            | AgentEvent::TurnFailed { .. }
+            | AgentEvent::TurnCancelled
+    )
+}
+
+fn is_runtime_owned_event(event: &AgentEvent) -> bool {
+    is_terminal_event(event) || matches!(event, AgentEvent::ThreadUpdated { .. })
+}
+
 struct RuntimeDeltaSink {
-    emitter: TurnEmitter,
+    emitter: TurnEventEmitter,
 }
 
 #[async_trait]

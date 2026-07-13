@@ -6,6 +6,7 @@ import type { ContextReference, RpcMethod } from '../shared/protocol'
 const RPC_METHODS = new Set<RpcMethod>([
   'initialize',
   'provider/list',
+  'provider/models',
   'project/list',
   'project/import',
   'thread/list',
@@ -16,6 +17,7 @@ const RPC_METHODS = new Set<RpcMethod>([
   'turn/start',
   'turn/cancel',
   'approval/respond',
+  'user-input/respond',
   'process/list',
   'process/get',
   'process/read-output',
@@ -38,6 +40,10 @@ export function validateRpcInvocation(method: unknown, params: unknown): asserts
   }
 
   switch (rpcMethod) {
+    case 'provider/models':
+      requireKeys(params, ['provider_id'])
+      requireString(params.provider_id, 'provider_id', 256)
+      break
     case 'project/import':
       requireKeys(params, ['path'], ['name'])
       requireString(params.path, 'path', 32_768)
@@ -92,6 +98,31 @@ export function validateRpcInvocation(method: unknown, params: unknown): asserts
       requireKeys(params, ['approval_id', 'approved'])
       requireId(params.approval_id, 'approval_id')
       if (typeof params.approved !== 'boolean') throw new Error("'approved' must be a boolean")
+      break
+    case 'user-input/respond':
+      requireKeys(params, ['interaction_id', 'answers', 'cancelled'])
+      requireId(params.interaction_id, 'interaction_id')
+      if (typeof params.cancelled !== 'boolean') throw new Error("'cancelled' must be a boolean")
+      if (!isRecord(params.answers) || Object.keys(params.answers).length > 16) {
+        throw new Error("'answers' must be a bounded question-answer map")
+      }
+      let totalAnswerLength = 0
+      for (const [questionId, answer] of Object.entries(params.answers)) {
+        requireId(questionId, 'question_id')
+        if (!isRecord(answer)) throw new Error('Invalid user-input answer')
+        requireKeys(answer, ['answers'])
+        if (!Array.isArray(answer.answers) || answer.answers.length === 0 || answer.answers.length > 32) {
+          throw new Error('Each user-input answer must contain between 1 and 32 values')
+        }
+        for (const value of answer.answers) {
+          requireString(value, 'answer', 32_768)
+          totalAnswerLength += value.length
+          if (totalAnswerLength > 512 * 1_024) throw new Error('User-input answers exceed the total size limit')
+        }
+      }
+      if (params.cancelled && Object.keys(params.answers).length !== 0) {
+        throw new Error('Cancelled user-input interactions cannot include answers')
+      }
       break
     case 'process/list':
       requireKeys(params, ['thread_id'])

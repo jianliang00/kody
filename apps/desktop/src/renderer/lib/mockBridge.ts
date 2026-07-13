@@ -1,4 +1,8 @@
-import type { CodyDesktopBridge } from '@shared/bridge'
+import type {
+  CodexAccountStatus,
+  CodyDesktopBridge,
+  ProviderProfileRecord
+} from '@shared/bridge'
 import type {
   ChatMessage,
   ContextReference,
@@ -169,6 +173,7 @@ function createMockStore() {
       messages: thread.id === 'thread-electron' ? clone(seedMessages) : [],
       turns: thread.id === 'thread-electron' ? clone(seedTurns) : [],
       pending_approvals: [],
+      pending_user_inputs: [],
       processes: []
     })
   }
@@ -318,7 +323,49 @@ function createMockStore() {
           }
         } as RpcMethodMap[M]['result']
       case 'provider/list':
-        return { providers: ['echo', 'openai-compatible'] } as RpcMethodMap[M]['result']
+        return {
+          providers: [
+            {
+              id: 'echo',
+              display_name: 'Echo demo',
+              kind: 'echo',
+              auth: 'not_required',
+              capabilities: {
+                streaming: true,
+                reasoning: false,
+                tools: true,
+                model_catalog: false,
+                custom_models: false
+              },
+              default_model: 'cody-demo'
+            },
+            {
+              id: 'codex',
+              display_name: 'Codex account',
+              kind: 'codex',
+              auth: 'configured',
+              capabilities: {
+                streaming: true,
+                reasoning: true,
+                tools: true,
+                model_catalog: true,
+                custom_models: false
+              },
+              default_model: 'codex-default'
+            }
+          ]
+        } as RpcMethodMap[M]['result']
+      case 'provider/models': {
+        const input = params as RpcMethodMap['provider/models']['params']
+        return {
+          models: input.provider_id === 'codex'
+            ? [
+                { id: 'codex-default', display_name: 'Codex default', is_default: true },
+                { id: 'codex-fast', display_name: 'Codex fast' }
+              ]
+            : [{ id: 'cody-demo', display_name: 'Cody demo', is_default: true }]
+        } as RpcMethodMap[M]['result']
+      }
       case 'project/list':
         return { projects: clone(projects) } as RpcMethodMap[M]['result']
       case 'thread/list':
@@ -383,6 +430,7 @@ function createMockStore() {
           messages: [],
           turns: [],
           pending_approvals: [],
+          pending_user_inputs: [],
           processes: []
         }
         snapshots.set(thread.id, snapshot)
@@ -434,6 +482,22 @@ function createMockStore() {
           input.reference
         ]
         return clone(snapshot.thread) as RpcMethodMap[M]['result']
+      }
+      case 'user-input/respond': {
+        const input = params as RpcMethodMap['user-input/respond']['params']
+        const snapshot = [...snapshots.values()].find((item) => (
+          item.pending_user_inputs.some((interaction) => interaction.interaction_id === input.interaction_id)
+        ))
+        if (!snapshot) throw new Error('This question was already resolved.')
+        snapshot.pending_user_inputs = snapshot.pending_user_inputs.filter(
+          (interaction) => interaction.interaction_id !== input.interaction_id
+        )
+        emit(snapshot.thread.id, snapshot.turns.at(-1)?.id ?? 'turn-user-input', {
+          type: 'user_input_resolved',
+          interaction_id: input.interaction_id,
+          cancelled: input.cancelled
+        })
+        return { resolved: true } as RpcMethodMap[M]['result']
       }
       case 'turn/start': {
         const input = params as RpcMethodMap['turn/start']['params']
@@ -590,6 +654,12 @@ function createMockStore() {
 
 export function createMockBridge(): CodyDesktopBridge {
   const store = createMockStore()
+  let providerProfiles: ProviderProfileRecord[] = []
+  let codexAccount: CodexAccountStatus = {
+    state: 'signed-in',
+    accountLabel: 'preview@example.test',
+    detail: 'Browser preview account'
+  }
   const connectedStatus: ServerStatus = {
     phase: 'connected',
     detail: 'Browser preview · in-memory server'
@@ -600,6 +670,44 @@ export function createMockBridge(): CodyDesktopBridge {
     copyText: async (text) => navigator.clipboard?.writeText(text),
     pickDirectory: async () => '/Users/demo/Code/new-project',
     getServerStatus: async () => connectedStatus,
+    getProviderSettings: async () => ({
+      profiles: clone(providerProfiles),
+      credentialStorage: { available: true, backend: 'browser-preview' }
+    }),
+    upsertProviderProfile: async (input) => {
+      const existing = input.id
+        ? providerProfiles.find((profile) => profile.id === input.id)
+        : undefined
+      const now = new Date().toISOString()
+      const profile: ProviderProfileRecord = {
+        id: existing?.id ?? id('provider'),
+        name: input.name,
+        kind: input.kind,
+        ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
+        defaultModel: input.defaultModel,
+        customModels: input.customModels ?? [],
+        hasSecret: input.clearSecret ? false : Boolean(input.secret || existing?.hasSecret),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now
+      }
+      providerProfiles = [profile, ...providerProfiles.filter((item) => item.id !== profile.id)]
+      return clone(profile)
+    },
+    deleteProviderProfile: async (profileId) => {
+      providerProfiles = providerProfiles.filter((profile) => profile.id !== profileId)
+    },
+    getCodexAccountStatus: async () => clone(codexAccount),
+    connectCodexAccount: async () => {
+      codexAccount = {
+        state: 'signed-in',
+        accountLabel: 'preview@example.test',
+        detail: 'Browser preview account'
+      }
+      return { mode: 'browser' }
+    },
+    disconnectCodexAccount: async () => {
+      codexAccount = { state: 'signed-out' }
+    },
     onEvent: (listener) => {
       store.events.add(listener)
       return () => store.events.delete(listener)
@@ -638,6 +746,22 @@ function createDisconnectedBridge(): CodyDesktopBridge {
     },
     pickDirectory: async () => null,
     getServerStatus: async () => status,
+    getProviderSettings: async () => {
+      throw new Error(status.detail)
+    },
+    upsertProviderProfile: async () => {
+      throw new Error(status.detail)
+    },
+    deleteProviderProfile: async () => {
+      throw new Error(status.detail)
+    },
+    getCodexAccountStatus: async () => ({ state: 'unavailable', detail: status.detail }),
+    connectCodexAccount: async () => {
+      throw new Error(status.detail)
+    },
+    disconnectCodexAccount: async () => {
+      throw new Error(status.detail)
+    },
     onEvent: () => () => undefined,
     onProcessEvent: () => () => undefined,
     onServerStatus: (listener) => {

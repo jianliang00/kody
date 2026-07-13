@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    sync::Arc,
+    sync::{Arc, RwLock},
 };
 
 use axum::{
@@ -15,8 +15,8 @@ use axum::{
     Json, Router,
 };
 use cody_core::{
-    AgentRuntime, CodyEngine, EventId, ProjectId, Result as CodyResult, StartTurn, ThreadId, Turn,
-    TurnId, WorkspaceId,
+    AgentRuntime, CodyEngine, EventId, ExternalTurnBackend, ProjectId, Result as CodyResult,
+    StartTurn, ThreadId, Turn, TurnId, WorkspaceId,
 };
 use futures_util::{FutureExt, SinkExt, StreamExt};
 use serde_json::{json, Value};
@@ -24,7 +24,10 @@ use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
-use crate::rpc::{RpcDispatcher, RpcError, RpcRequest, RpcResponse};
+use crate::{
+    codex_backend::CodexService,
+    rpc::{RpcDispatcher, RpcError, RpcRequest, RpcResponse},
+};
 
 const CREATE_REQUEST_CACHE_CAPACITY: usize = 1_024;
 
@@ -86,6 +89,7 @@ impl CreateRequestCache {
 pub struct AppState {
     pub engine: Arc<CodyEngine>,
     pub turns: TurnManager,
+    pub codex: Arc<CodexService>,
     pub(crate) create_requests: Arc<Mutex<CreateRequestCache>>,
     auth_token: Arc<str>,
     allowed_origins: Arc<HashSet<String>>,
@@ -97,6 +101,9 @@ impl AppState {
             .ok()
             .filter(|token| !token.trim().is_empty())
             .unwrap_or_else(|| format!("{}{}", EventId::new(), EventId::new()));
+        // The token authenticates the desktop-to-server control channel. It
+        // must not leak into Codex, tools, or managed child processes.
+        std::env::remove_var("CODY_SERVER_TOKEN");
         let allowed_origins = std::env::var("CODY_ALLOWED_ORIGINS")
             .ok()
             .into_iter()
@@ -117,9 +124,18 @@ impl AppState {
         auth_token: impl Into<String>,
         allowed_origins: HashSet<String>,
     ) -> Self {
+        let codex = CodexService::new(engine.clone());
+        if let Err(error) = engine.providers().replace(codex.catalog_provider()) {
+            warn!(%error, "could not register the Codex model catalog");
+        }
+        let turns = TurnManager::default();
+        if let Err(error) = turns.register_backend("codex", codex.clone()) {
+            warn!(%error, "could not register the Codex execution backend");
+        }
         Self {
             engine,
-            turns: TurnManager::default(),
+            turns,
+            codex,
             create_requests: Arc::new(Mutex::new(CreateRequestCache::default())),
             auth_token: Arc::from(auth_token.into()),
             allowed_origins: Arc::new(allowed_origins),
@@ -135,6 +151,7 @@ impl AppState {
 pub struct TurnManager {
     active: Arc<Mutex<HashMap<TurnId, CancellationToken>>>,
     idle: Arc<Notify>,
+    backends: Arc<RwLock<HashMap<String, Arc<dyn ExternalTurnBackend>>>>,
 }
 
 impl Default for TurnManager {
@@ -142,11 +159,32 @@ impl Default for TurnManager {
         Self {
             active: Arc::new(Mutex::new(HashMap::new())),
             idle: Arc::new(Notify::new()),
+            backends: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
 
 impl TurnManager {
+    pub fn register_backend(
+        &self,
+        provider_id: impl Into<String>,
+        backend: Arc<dyn ExternalTurnBackend>,
+    ) -> CodyResult<()> {
+        let provider_id = provider_id.into();
+        if provider_id.trim().is_empty() {
+            return Err(cody_core::CodyError::InvalidInput(
+                "external backend provider id cannot be empty".into(),
+            ));
+        }
+        self.backends
+            .write()
+            .map_err(|_| {
+                cody_core::CodyError::Store("turn backend registry lock was poisoned".into())
+            })?
+            .insert(provider_id, backend);
+        Ok(())
+    }
+
     pub async fn start(&self, runtime: Arc<AgentRuntime>, request: StartTurn) -> CodyResult<Turn> {
         let (turn, cancellation) = self.prepare(runtime.clone(), request).await?;
         self.execute_prepared(runtime, turn.id, cancellation);
@@ -175,11 +213,30 @@ impl TurnManager {
     ) {
         let active = self.active.clone();
         let idle = self.idle.clone();
+        let backends = self.backends.clone();
         tokio::spawn(async move {
-            let execution =
-                std::panic::AssertUnwindSafe(runtime.execute_turn(turn_id, cancellation))
-                    .catch_unwind()
-                    .await;
+            let execution = std::panic::AssertUnwindSafe(async {
+                let turn = runtime.store().get_turn(turn_id).await?;
+                let backend = backends
+                    .read()
+                    .map_err(|_| {
+                        cody_core::CodyError::Store(
+                            "turn backend registry lock was poisoned".into(),
+                        )
+                    })?
+                    .get(&turn.provider)
+                    .cloned();
+                match backend {
+                    Some(backend) => {
+                        runtime
+                            .execute_turn_with_backend(turn_id, cancellation, backend)
+                            .await
+                    }
+                    None => runtime.execute_turn(turn_id, cancellation).await,
+                }
+            })
+            .catch_unwind()
+            .await;
             match execution {
                 Ok(Err(error)) => debug!(%turn_id, %error, "turn task finished with an error"),
                 Err(_) => warn!(%turn_id, "turn task panicked outside the guarded agent loop"),
