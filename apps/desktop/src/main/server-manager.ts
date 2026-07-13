@@ -15,7 +15,8 @@ import type {
   ServerStatus
 } from '../shared/protocol'
 
-const HEALTH_TIMEOUT_MS = 15_000
+const PACKAGED_HEALTH_TIMEOUT_MS = 15_000
+const DEVELOPMENT_HEALTH_TIMEOUT_MS = 120_000
 const RPC_TIMEOUT_MS = 60_000
 const RECONNECT_MAX_DELAY_MS = 5_000
 const CODEX_AUTH_HOSTS = ['openai.com', 'chatgpt.com'] as const
@@ -197,7 +198,10 @@ export class KodyServerManager {
 
     try {
       await waitForSpawn(child)
-      await waitForHealth(port, HEALTH_TIMEOUT_MS, () => this.child === child && this.hasLiveChild())
+      const healthTimeout = this.options.isPackaged
+        ? PACKAGED_HEALTH_TIMEOUT_MS
+        : DEVELOPMENT_HEALTH_TIMEOUT_MS
+      await waitForHealth(port, healthTimeout, () => this.child === child && this.hasLiveChild())
       await this.connectExisting(false)
     } catch (error) {
       if (this.child === child) this.child = null

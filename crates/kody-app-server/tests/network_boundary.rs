@@ -532,8 +532,7 @@ async fn authorized_websocket_runs_echo_turn_and_streams_subscribed_events() -> 
         }),
     )
     .await?;
-    let turn = receive_json(&mut socket).await?;
-    assert_eq!(turn["id"], "get-turn");
+    let turn = receive_response(&mut socket, "get-turn").await?;
     assert_eq!(turn["result"]["status"], "completed");
 
     // Title enrichment is intentionally outside the terminal turn path, so

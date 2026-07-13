@@ -9,12 +9,13 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "build:server:dev": "cargo build --manifest-path ../../Cargo.toml -p kody-app-server",
     "build:server": "cargo build --release --manifest-path ../../Cargo.toml -p kody-app-server",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "npm run build && playwright test",
+    "test:e2e": "npm run build:server:dev && npm run build && playwright test",
     "package": "npm run build:server && npm run build && electron-builder --dir",
     "dist": "npm run build:server && npm run build && electron-builder --publish never"
   },
