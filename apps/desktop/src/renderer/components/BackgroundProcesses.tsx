@@ -207,7 +207,7 @@ export function BackgroundProcesses({
                       className="process-action process-action--stop"
                       type="button"
                       disabled={stopping}
-                      title={stopping ? 'Cody is stopping this process' : 'Stop this managed process'}
+                      title={stopping ? 'Kody is stopping this process' : 'Stop this managed process'}
                       onClick={() => void onStop(process.id)}
                     >
                       {stopping

@@ -23,16 +23,16 @@ function isolatedEnvironment(): Record<string, string> {
 
   // The smoke test is deterministic and must never consume a developer's model credentials.
   for (const key of Object.keys(environment)) {
-    if (key.startsWith('CODY_OPENAI_') || key.startsWith('OPENAI_')) delete environment[key]
+    if (key.startsWith('KODY_OPENAI_') || key.startsWith('OPENAI_')) delete environment[key]
   }
-  delete environment.CODY_HOME
+  delete environment.KODY_HOME
   delete environment.ELECTRON_RENDERER_URL
   environment.NODE_ENV = 'production'
   return environment
 }
 
 test('creates the first Thread through one idempotent draft request', async () => {
-  const temporaryRoot = await mkdtemp(join(tmpdir(), 'cody-electron-e2e-'))
+  const temporaryRoot = await mkdtemp(join(tmpdir(), 'kody-electron-e2e-'))
   const userDataRoot = join(temporaryRoot, 'profile')
   const selectedProjectRoot = join(temporaryRoot, 'selected-project')
   await mkdir(selectedProjectRoot)
@@ -57,20 +57,20 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expect(page.getByLabel('Local server connected')).toBeVisible({ timeout: 30_000 })
 
     const bridgeProbe = await page.evaluate(async () => {
-      if (!window.cody) return null
-      const status = await window.cody.getServerStatus()
-      const initialized = await window.cody.rpc('initialize', {})
+      if (!window.kody) return null
+      const status = await window.kody.getServerStatus()
+      const initialized = await window.kody.rpc('initialize', {})
       return {
-        platform: window.cody.platform,
+        platform: window.kody.platform,
         status,
         serverName: initialized.server_info.name,
         capabilities: initialized.capabilities,
-        hasProcessEvents: typeof window.cody.onProcessEvent === 'function'
+        hasProcessEvents: typeof window.kody.onProcessEvent === 'function'
       }
     })
     expect(bridgeProbe).not.toBeNull()
     expect(bridgeProbe?.status.phase).toBe('connected')
-    expect(bridgeProbe?.serverName).toBe('cody-app-server')
+    expect(bridgeProbe?.serverName).toBe('kody-app-server')
     expect(bridgeProbe?.platform).toBe(process.platform)
     expect(bridgeProbe?.capabilities.thread_create_and_start).toBe(true)
     expect(bridgeProbe?.capabilities.managed_processes).toBe(true)
@@ -78,17 +78,17 @@ test('creates the first Thread through one idempotent draft request', async () =
     expect(bridgeProbe?.hasProcessEvents).toBe(true)
 
     await expect(page.getByRole('heading', { level: 1, name: 'New conversation' })).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'What should Cody work on?' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'What should Kody work on?' })).toBeVisible()
     await expect(page.getByRole('form', { name: 'Message composer' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Working directory', exact: true })).toBeVisible()
     await expect(page.getByRole('dialog')).toHaveCount(0)
     await expect(page.getByText('No Threads yet', { exact: true })).toBeVisible()
 
     const emptyBackend = await page.evaluate(async () => {
-      if (!window.cody) throw new Error('preload bridge is unavailable')
+      if (!window.kody) throw new Error('preload bridge is unavailable')
       const [{ threads }, { projects }] = await Promise.all([
-        window.cody.rpc('thread/list', {}),
-        window.cody.rpc('project/list', {})
+        window.kody.rpc('thread/list', {}),
+        window.kody.rpc('project/list', {})
       ])
       return { threads, projects }
     })
@@ -122,10 +122,10 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expect(workingDirectoryChip.getByRole('button', { name: 'Clear working directory' })).toBeVisible()
 
     const stagedOnly = await page.evaluate(async () => {
-      if (!window.cody) throw new Error('preload bridge is unavailable')
+      if (!window.kody) throw new Error('preload bridge is unavailable')
       const [{ threads }, { projects }] = await Promise.all([
-        window.cody.rpc('thread/list', {}),
-        window.cody.rpc('project/list', {})
+        window.kody.rpc('thread/list', {}),
+        window.kody.rpc('project/list', {})
       ])
       return { threadCount: threads.length, projectCount: projects.length }
     })
@@ -150,15 +150,15 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expect(page.getByRole('heading', { level: 1, name: prompt })).toBeVisible({ timeout: 20_000 })
 
     const durable = await page.evaluate(async () => {
-      if (!window.cody) throw new Error('preload bridge is unavailable')
+      if (!window.kody) throw new Error('preload bridge is unavailable')
       const [{ threads }, { projects }] = await Promise.all([
-        window.cody.rpc('thread/list', {}),
-        window.cody.rpc('project/list', {})
+        window.kody.rpc('thread/list', {}),
+        window.kody.rpc('project/list', {})
       ])
       const [thread] = threads
       if (threads.length !== 1 || !thread) throw new Error(`expected one Thread, received ${threads.length}`)
-      const snapshot = await window.cody.rpc('thread/get', { thread_id: thread.id })
-      const processResult = await window.cody.rpc('process/list', { thread_id: thread.id })
+      const snapshot = await window.kody.rpc('thread/get', { thread_id: thread.id })
+      const processResult = await window.kody.rpc('process/list', { thread_id: thread.id })
       return { threads, projects, snapshot, processResult }
     })
     expect(durable.threads).toHaveLength(1)
@@ -229,9 +229,9 @@ test('creates the first Thread through one idempotent draft request', async () =
     await durableThreadRow.click()
     await expect(page.getByRole('heading', { level: 1, name: prompt })).toBeVisible()
     const afterAbandonedDraft = await page.evaluate(async (threadId) => {
-      if (!window.cody) throw new Error('preload bridge is unavailable')
-      const { threads } = await window.cody.rpc('thread/list', {})
-      const snapshot = await window.cody.rpc('thread/get', { thread_id: threadId })
+      if (!window.kody) throw new Error('preload bridge is unavailable')
+      const { threads } = await window.kody.rpc('thread/list', {})
+      const snapshot = await window.kody.rpc('thread/get', { thread_id: threadId })
       return { threadCount: threads.length, turnCount: snapshot.turns.length, messageCount: snapshot.messages.length }
     }, durable.snapshot.thread.id)
     expect(afterAbandonedDraft).toEqual({ threadCount: 1, turnCount: 1, messageCount: 2 })
@@ -243,7 +243,7 @@ test('creates the first Thread through one idempotent draft request', async () =
     await application.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.setSize(700, 700)
     })
-    const assetRail = page.getByLabel('Cody assets')
+    const assetRail = page.getByLabel('Kody assets')
     const openAssetDrawer = page.getByRole('button', { name: 'Open asset drawer' })
     await expect(assetRail).toBeHidden()
     await openAssetDrawer.click()

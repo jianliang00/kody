@@ -7,9 +7,9 @@ export function DraftConversation() {
         <MessageCircle size={21} />
       </span>
       <p className="eyebrow">New conversation</p>
-      <h2 id="draft-conversation-title">What should Cody work on?</h2>
+      <h2 id="draft-conversation-title">What should Kody work on?</h2>
       <p>
-        Write the first message below. Cody will create the Thread, prepare its Workspace, and name it from the conversation.
+        Write the first message below. Kody will create the Thread, prepare its Workspace, and name it from the conversation.
       </p>
     </section>
   )

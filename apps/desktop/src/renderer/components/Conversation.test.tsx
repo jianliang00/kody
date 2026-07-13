@@ -27,7 +27,7 @@ const pending: PendingUserInput = {
     {
       id: 'approach',
       header: 'Approach',
-      question: 'Which implementation should Cody use?',
+      question: 'Which implementation should Kody use?',
       is_other: true,
       is_secret: false,
       options: [

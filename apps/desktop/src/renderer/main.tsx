@@ -6,7 +6,7 @@ import './styles.css'
 const root = document.getElementById('root')
 
 if (!root) {
-  throw new Error('Cody renderer root was not found')
+  throw new Error('Kody renderer root was not found')
 }
 
 createRoot(root).render(

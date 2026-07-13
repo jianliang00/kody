@@ -301,7 +301,7 @@ export function Composer({
         value={message}
         rows={3}
         disabled={unavailable}
-        placeholder="Ask Cody to inspect, explain, or change something…"
+        placeholder="Ask Kody to inspect, explain, or change something…"
         aria-describedby={`composer-hint${validationError ? ' composer-error' : ''}`}
         aria-invalid={Boolean(validationError)}
         role="combobox"

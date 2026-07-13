@@ -6,7 +6,7 @@ The server exposes JSON-RPC 2.0 at:
 - WebSocket: `GET /v1/ws` or `GET /v1/app-server`
 - Health: `GET /health`
 
-HTTP requires `Authorization: Bearer <token>` and `Content-Type: application/json`. Native WebSocket clients may use the same Authorization header or `?token=<token>`. If a WebSocket request contains `Origin`, that exact value must appear in `CODY_ALLOWED_ORIGINS`.
+HTTP requires `Authorization: Bearer <token>` and `Content-Type: application/json`. Native WebSocket clients may use the same Authorization header or `?token=<token>`. If a WebSocket request contains `Origin`, that exact value must appear in `KODY_ALLOWED_ORIGINS`.
 
 ## Methods
 
@@ -123,13 +123,13 @@ The privileged native Provider configuration request is:
 
 ## Codex account and execution backend
 
-The `codex` catalog entry is backed by the official `codex app-server`; it is not a raw `ModelProvider.complete` implementation. Selecting `provider: "codex"` routes the whole Turn through the external backend, which starts or resumes an opaque Codex Thread, passes the explicitly selected model and bounded Cody context, and bridges Codex messages, reasoning, tools, file changes, approvals, and structured questions into Cody events.
+The `codex` catalog entry is backed by the official `codex app-server`; it is not a raw `ModelProvider.complete` implementation. Selecting `provider: "codex"` routes the whole Turn through the external backend, which starts or resumes an opaque Codex Thread, passes the explicitly selected model and bounded Kody context, and bridges Codex messages, reasoning, tools, file changes, approvals, and structured questions into Kody events.
 
-The account authority remains inside the official sidecar. Cody never reads `~/.codex/auth.json`, receives OAuth/refresh tokens, or treats a ChatGPT token as an API key. `codex/account/login/start` supports `{"mode":"browser"}` and `{"mode":"device_code"}`. Browser results include `login_id` and `auth_url`; device-code results include `login_id`, `user_code`, and `verification_url`. Trusted clients must allowlist the returned OpenAI/ChatGPT HTTPS host before opening it. A login can be cancelled with `{"login_id":"..."}`, and `codex/account/logout` takes `{}`.
+The account authority remains inside the official sidecar. Kody never reads `~/.codex/auth.json`, receives OAuth/refresh tokens, or treats a ChatGPT token as an API key. `codex/account/login/start` supports `{"mode":"browser"}` and `{"mode":"device_code"}`. Browser results include `login_id` and `auth_url`; device-code results include `login_id`, `user_code`, and `verification_url`. Trusted clients must allowlist the returned OpenAI/ChatGPT HTTPS host before opening it. A login can be cancelled with `{"login_id":"..."}`, and `codex/account/logout` takes `{}`.
 
 `codex/account/read` returns only public account metadata, whether OpenAI authentication is required, and the selected binary path/version. `codex/account/rate-limits` returns the sidecar's structured plan limits. When signed in with ChatGPT, Codex Turns consume the Codex quota available to that account; separately configured API-key Providers remain API-usage based.
 
-Binary selection and the `fast`/`flex` service-tier override are trusted host configuration (`CODY_CODEX_PATH`, `CODY_CODEX_SERVICE_TIER`), not JSON-RPC or Renderer options.
+Binary selection and the `fast`/`flex` service-tier override are trusted host configuration (`KODY_CODEX_PATH`, `KODY_CODEX_SERVICE_TIER`), not JSON-RPC or Renderer options.
 
 ## Draft-first Thread creation
 

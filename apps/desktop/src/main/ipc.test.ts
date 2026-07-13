@@ -51,7 +51,7 @@ describe('provider and Codex IPC boundary', () => {
 
   it('does not expose privileged provider or Codex control RPC through the generic bridge', async () => {
     const setup = registerWithStubs()
-    const rpc = getHandler('cody:rpc')
+    const rpc = getHandler('kody:rpc')
 
     for (const [method, params] of [
       ['provider/configure', { id: 'attacker', api_key: 'must-not-cross' }],
@@ -60,7 +60,7 @@ describe('provider and Codex IPC boundary', () => {
       ['codex/account/logout', {}],
       ['codex/account/login/start', { mode: 'browser' }]
     ] as const) {
-      await expect(rpc(setup.event, method, params)).rejects.toThrow(/Unsupported Cody RPC method/)
+      await expect(rpc(setup.event, method, params)).rejects.toThrow(/Unsupported Kody RPC method/)
     }
     expect(setup.server.rpc).not.toHaveBeenCalled()
   })
@@ -89,7 +89,7 @@ describe('provider and Codex IPC boundary', () => {
       if (configured.name === 'First') await firstActivation
     })
     const setup = registerWithStubs({ providerSettings, configureProvider })
-    const upsert = getHandler('cody:provider-settings:upsert')
+    const upsert = getHandler('kody:provider-settings:upsert')
 
     const first = Promise.resolve(upsert(setup.event, {
       name: 'First',

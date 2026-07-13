@@ -1,6 +1,6 @@
 import type {
   CodexAccountStatus,
-  CodyDesktopBridge,
+  KodyDesktopBridge,
   ProviderProfileRecord
 } from '@shared/bridge'
 import type {
@@ -24,11 +24,11 @@ const id = (prefix: string): string => `${prefix}-${crypto.randomUUID()}`
 
 const seedProjects: Project[] = [
   {
-    id: 'project-cody',
-    name: 'cody',
-    root: '/Users/demo/Code/cody',
+    id: 'project-kody',
+    name: 'kody',
+    root: '/Users/demo/Code/kody',
     kind: 'git',
-    git: { remote: 'github.com/example/cody', branch: 'ui/electron-shell' },
+    git: { remote: 'github.com/example/kody', branch: 'ui/electron-shell' },
     created_at: iso(-14_400)
   },
   {
@@ -55,7 +55,7 @@ const seedThreads: Thread[] = [
     workspace_id: 'workspace-electron',
     status: 'idle',
     default_references: [
-      { kind: 'project', project_id: 'project-cody', access: 'read_write' }
+      { kind: 'project', project_id: 'project-kody', access: 'read_write' }
     ],
     summary: 'A focused pass on the desktop shell, bridge boundary, and renderer experience.',
     created_at: iso(-1_520),
@@ -97,7 +97,7 @@ const seedMessages: ChatMessage[] = [
     ],
     references: [
       { kind: 'thread', thread_id: 'thread-context', mode: 'summary' },
-      { kind: 'project', project_id: 'project-cody', access: 'read_write' }
+      { kind: 'project', project_id: 'project-kody', access: 'read_write' }
     ],
     created_at: iso(-20)
   },
@@ -124,7 +124,7 @@ const seedTurns: Turn[] = [
     thread_id: 'thread-electron',
     input_message_id: 'message-electron-user',
     provider: 'echo',
-    model: 'cody-demo',
+    model: 'kody-demo',
     status: 'completed',
     created_at: iso(-20),
     started_at: iso(-20),
@@ -167,7 +167,7 @@ function createMockStore() {
       workspace: {
         id: thread.workspace_id,
         thread_id: thread.id,
-        root: `/tmp/cody/workspaces/${thread.id}`,
+        root: `/tmp/kody/workspaces/${thread.id}`,
         created_at: thread.created_at
       },
       messages: thread.id === 'thread-electron' ? clone(seedMessages) : [],
@@ -262,7 +262,7 @@ function createMockStore() {
     emit(threadId, turnId, { type: 'turn_started' })
     schedule(turnId, 180, () => emit(threadId, turnId, { type: 'step_started', step: 1 }))
     schedule(turnId, 360, () =>
-      emit(threadId, turnId, { type: 'model_started', provider: 'echo', model: 'cody-demo' })
+      emit(threadId, turnId, { type: 'model_started', provider: 'echo', model: 'kody-demo' })
     )
     schedule(turnId, 640, () =>
       emit(threadId, turnId, {
@@ -289,7 +289,7 @@ function createMockStore() {
           approval_id: approvalId,
           tool_call_id: approvals.get(approvalId)?.toolCallId ?? `tool-${approvalId}`,
           name: 'shell',
-          arguments: { command, cwd: '/Users/demo/Code/cody' },
+          arguments: { command, cwd: '/Users/demo/Code/kody' },
           reason: 'This command executes inside the referenced Project and may create build artifacts.'
         })
       )
@@ -314,7 +314,7 @@ function createMockStore() {
     switch (method) {
       case 'initialize':
         return {
-          server_info: { name: 'cody-browser-mock', version: '0.1.0' },
+          server_info: { name: 'kody-browser-mock', version: '0.1.0' },
           capabilities: {
             approvals: true,
             context_references: true,
@@ -337,7 +337,7 @@ function createMockStore() {
                 model_catalog: false,
                 custom_models: false
               },
-              default_model: 'cody-demo'
+              default_model: 'kody-demo'
             },
             {
               id: 'codex',
@@ -363,7 +363,7 @@ function createMockStore() {
                 { id: 'codex-default', display_name: 'Codex default', is_default: true },
                 { id: 'codex-fast', display_name: 'Codex fast' }
               ]
-            : [{ id: 'cody-demo', display_name: 'Cody demo', is_default: true }]
+            : [{ id: 'kody-demo', display_name: 'Kody demo', is_default: true }]
         } as RpcMethodMap[M]['result']
       }
       case 'project/list':
@@ -424,7 +424,7 @@ function createMockStore() {
           workspace: {
             id: thread.workspace_id,
             thread_id: thread.id,
-            root: `/tmp/cody/workspaces/${thread.id}`,
+            root: `/tmp/kody/workspaces/${thread.id}`,
             created_at: createdAt
           },
           messages: [],
@@ -518,7 +518,7 @@ function createMockStore() {
           thread_id: input.thread_id,
           input_message_id: message.id,
           provider: input.provider,
-          model: input.model || 'cody-demo',
+          model: input.model || 'kody-demo',
           status: 'running',
           created_at: createdAt,
           started_at: createdAt
@@ -564,7 +564,7 @@ function createMockStore() {
             type: 'tool_started',
             tool_call_id: approval.toolCallId,
             name: 'shell',
-            arguments: { command: approval.command, cwd: '/Users/demo/Code/cody' }
+            arguments: { command: approval.command, cwd: '/Users/demo/Code/kody' }
           })
           schedule(approval.turnId, 520, () => {
             emit(approval.threadId, approval.turnId, {
@@ -576,7 +576,7 @@ function createMockStore() {
             })
             emit(approval.threadId, approval.turnId, {
               type: 'file_changed',
-              project_id: 'project-cody',
+              project_id: 'project-kody',
               path: 'apps/desktop/src/renderer/App.tsx'
             })
             finish(
@@ -652,7 +652,7 @@ function createMockStore() {
   }
 }
 
-export function createMockBridge(): CodyDesktopBridge {
+export function createMockBridge(): KodyDesktopBridge {
   const store = createMockStore()
   let providerProfiles: ProviderProfileRecord[] = []
   let codexAccount: CodexAccountStatus = {
@@ -730,9 +730,9 @@ export function createMockBridge(): CodyDesktopBridge {
   }
 }
 
-let browserBridge: CodyDesktopBridge | undefined
+let browserBridge: KodyDesktopBridge | undefined
 
-function createDisconnectedBridge(): CodyDesktopBridge {
+function createDisconnectedBridge(): KodyDesktopBridge {
   const status: ServerStatus = {
     phase: 'disconnected',
     detail: 'The desktop preload bridge is unavailable.'
@@ -774,8 +774,8 @@ function createDisconnectedBridge(): CodyDesktopBridge {
   }
 }
 
-export function getCodyBridge(): CodyDesktopBridge {
-  if (window.cody) return window.cody
+export function getKodyBridge(): KodyDesktopBridge {
+  if (window.kody) return window.kody
   const isDevelopment = Boolean(
     (import.meta as ImportMeta & { env?: Record<string, string | boolean | undefined> }).env?.DEV
   )

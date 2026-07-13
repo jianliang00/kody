@@ -2,7 +2,7 @@ import { basename, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import {
-  CodyServerManager,
+  KodyServerManager,
   findCargoWorkspaceRoot,
   reserveLoopbackPort,
   resolveLaunchCommand,
@@ -14,7 +14,7 @@ describe('server manager helpers', () => {
   it('finds the Cargo workspace from the desktop package', () => {
     const root = findCargoWorkspaceRoot([process.cwd()])
     expect(root).not.toBeNull()
-    expect(basename(root!)).toBe('cody')
+    expect(basename(root!)).toBe('kody')
     expect(findCargoWorkspaceRoot([join(root!, 'apps', 'desktop', 'src', 'main')])).toBe(root)
   })
 
@@ -27,9 +27,9 @@ describe('server manager helpers', () => {
     })
     expect(launch.cwd).toBe(root)
     expect([basename(launch.command), launch.command]).toEqual(
-      expect.arrayContaining([expect.stringMatching(/^(cargo|cody-app-server(?:\.exe)?)$/)])
+      expect.arrayContaining([expect.stringMatching(/^(cargo|kody-app-server(?:\.exe)?)$/)])
     )
-    expect([...launch.args, launch.command].join(' ')).not.toContain('CODY_SERVER_TOKEN')
+    expect([...launch.args, launch.command].join(' ')).not.toContain('KODY_SERVER_TOKEN')
   })
 
   it('asks the OS for an ephemeral loopback port', async () => {
@@ -43,7 +43,7 @@ describe('server manager helpers', () => {
     const bootstrap = new Promise<void>((resolve) => {
       releaseBootstrap = resolve
     })
-    const manager = new CodyServerManager({
+    const manager = new KodyServerManager({
       appPath: '/unused',
       isPackaged: false,
       resourcesPath: '/unused',
@@ -76,7 +76,7 @@ describe('server manager helpers', () => {
       HOME: '/Users/test',
       LANG: 'en_US.UTF-8',
       OPENAI_API_KEY: 'openai-secret',
-      CODY_SERVER_TOKEN: 'privileged-control-token',
+      KODY_SERVER_TOKEN: 'privileged-control-token',
       AWS_ACCESS_KEY_ID: 'aws-key',
       GOOGLE_APPLICATION_CREDENTIALS: '/private/google.json',
       PGPASSWORD: 'postgres-secret',

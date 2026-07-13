@@ -420,7 +420,7 @@ async function reconcileStoredProvidersUnlocked(
   const snapshot = await settings.snapshot()
   const listed = await rpc('provider/list', {})
   if (!isRecord(listed) || !Array.isArray(listed.providers)) {
-    throw new Error('Cody returned an invalid provider catalog during reconciliation')
+    throw new Error('Kody returned an invalid provider catalog during reconciliation')
   }
 
   for (const candidate of listed.providers) {
@@ -430,7 +430,7 @@ async function reconcileStoredProvidersUnlocked(
       || !candidate.id
       || candidate.id.length > 256
     ) {
-      throw new Error('Cody returned an invalid provider descriptor during reconciliation')
+      throw new Error('Kody returned an invalid provider descriptor during reconciliation')
     }
     if (candidate.id === 'echo' || candidate.id === 'codex') continue
     await rpc('provider/remove', { provider_id: candidate.id })

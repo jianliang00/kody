@@ -24,15 +24,15 @@ import {
   ProviderSettingsStore,
   reconcileStoredProviders
 } from './provider-settings'
-import { CodyServerManager, trustedCodexAuthUrl } from './server-manager'
+import { KodyServerManager, trustedCodexAuthUrl } from './server-manager'
 import { hardenRendererSession, hardenWebContents } from './security'
 
 let mainWindow: BrowserWindow | null = null
-let server: CodyServerManager | null = null
+let server: KodyServerManager | null = null
 let shutdownStarted = false
 let shutdownComplete = false
 
-app.setName('Cody')
+app.setName('Kody')
 
 interface SavedWindowState {
   x: number
@@ -52,7 +52,7 @@ function broadcast(channel: string, payload: unknown): void {
 }
 
 function sendCommand(command: DesktopCommand): void {
-  broadcast('cody:menu-command', command)
+  broadcast('kody:menu-command', command)
 }
 
 function installApplicationMenu(): void {
@@ -108,12 +108,12 @@ function installApplicationMenu(): void {
       role: 'help',
       submenu: [
         {
-          label: 'About Cody’s Workspace Model',
+          label: 'About Kody’s Workspace Model',
           click: () => {
             const owner = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
             const options = {
               type: 'info' as const,
-              title: 'Cody workspace model',
+              title: 'Kody workspace model',
               message: 'Threads, Projects, and Workspaces stay independent.',
               detail: 'Threads are durable conversations. Projects are reusable code assets. Each Thread owns an ephemeral Workspace and can reference any number of other Threads or Projects.'
             }
@@ -199,10 +199,10 @@ function createMainWindow(): BrowserWindow {
     window.show()
     void dialog.showMessageBox(window, {
       type: 'error',
-      title: 'Cody could not open',
+      title: 'Kody could not open',
       message: 'The desktop interface failed to load.',
       detail: `${errorDescription} (${errorCode})\n${validatedUrl}`,
-      buttons: ['Quit Cody'],
+      buttons: ['Quit Kody'],
       defaultId: 0,
       noLink: true
     }).finally(() => app.quit())
@@ -225,15 +225,15 @@ void app.whenReady().then(() => {
     filePath: join(app.getPath('userData'), 'model-providers.json'),
     safeStorage
   })
-  server = new CodyServerManager({
+  server = new KodyServerManager({
     appPath: app.getAppPath(),
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     stateRoot: join(app.getPath('userData'), 'engine'),
-    onEvent: (event) => broadcast('cody:turn-event', event),
-    onProcessEvent: (event) => broadcast('cody:process-event', event),
-    onStatus: (status) => broadcast('cody:server-status-changed', status),
-    onLog: app.isPackaged ? undefined : (line) => console.info(`[cody-app-server] ${line}`),
+    onEvent: (event) => broadcast('kody:turn-event', event),
+    onProcessEvent: (event) => broadcast('kody:process-event', event),
+    onStatus: (status) => broadcast('kody:server-status-changed', status),
+    onLog: app.isPackaged ? undefined : (line) => console.info(`[kody-app-server] ${line}`),
     onConnected: async (rpc) => {
       await reconcileStoredProviders(providerSettings, rpc, (profile, error) => {
         console.error(`Could not activate model provider '${profile.id}':`, safeMessage(error))
@@ -279,11 +279,11 @@ void app.whenReady().then(() => {
   })
   mainWindow = createMainWindow()
   installApplicationMenu()
-  void server.start().catch((error) => console.error('Failed to start Cody engine:', error))
+  void server.start().catch((error) => console.error('Failed to start Kody engine:', error))
 
   app.on('activate', () => {
     if (!mainWindow) mainWindow = createMainWindow()
-    void server?.start().catch((error) => console.error('Failed to reconnect Cody engine:', error))
+    void server?.start().catch((error) => console.error('Failed to reconnect Kody engine:', error))
   })
 })
 
@@ -294,7 +294,7 @@ interface CodexAccountWire {
   binary?: { version?: string }
 }
 
-async function readCodexAccountStatus(manager: CodyServerManager): Promise<CodexAccountStatus> {
+async function readCodexAccountStatus(manager: KodyServerManager): Promise<CodexAccountStatus> {
   const value = await manager.controlRpc<CodexAccountWire>('codex/account/read', {})
   if (value.state === 'unavailable') {
     return { state: 'unavailable', detail: value.detail ?? 'Codex is unavailable.' }
@@ -319,7 +319,7 @@ async function readCodexAccountStatus(manager: CodyServerManager): Promise<Codex
 }
 
 async function connectCodexAccount(
-  manager: CodyServerManager
+  manager: KodyServerManager
 ): Promise<{ loginId: string; result: CodexConnectResult }> {
   const login = await manager.controlRpc<unknown>('codex/account/login/start', { mode: 'browser' })
   if (!isRecord(login)) throw new Error('Codex returned an invalid login response')
@@ -361,7 +361,7 @@ async function connectCodexAccount(
   }
 }
 
-async function cancelCodexLogin(manager: CodyServerManager, loginId: string): Promise<void> {
+async function cancelCodexLogin(manager: KodyServerManager, loginId: string): Promise<void> {
   await manager.controlRpc('codex/account/login/cancel', { login_id: loginId })
 }
 
@@ -370,7 +370,7 @@ async function openTrustedAuthUrl(rawUrl: string): Promise<void> {
   try {
     await shell.openExternal(trustedUrl, { activate: true })
   } catch {
-    throw new Error('Cody could not open the Codex sign-in page')
+    throw new Error('Kody could not open the Codex sign-in page')
   }
 }
 

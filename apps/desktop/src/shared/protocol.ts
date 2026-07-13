@@ -125,7 +125,7 @@ export interface ProcessOrigin {
   tool_call_id: string
 }
 
-/** Durable lifecycle metadata for a command supervised by Cody. */
+/** Durable lifecycle metadata for a command supervised by Kody. */
 export interface ManagedProcess {
   id: EntityId
   thread_id: EntityId

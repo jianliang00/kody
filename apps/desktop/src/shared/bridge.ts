@@ -56,7 +56,7 @@ export interface CodexConnectResult {
   userCode?: string
 }
 
-export interface CodyDesktopBridge {
+export interface KodyDesktopBridge {
   rpc<M extends RpcMethod>(method: M, params: RpcMethodMap[M]['params']): Promise<RpcMethodMap[M]['result']>
   pickDirectory(purpose?: DirectoryPickerPurpose): Promise<string | null>
   copyText(text: string): Promise<void>
@@ -77,6 +77,6 @@ export interface CodyDesktopBridge {
 
 declare global {
   interface Window {
-    cody?: CodyDesktopBridge
+    kody?: KodyDesktopBridge
   }
 }

@@ -67,8 +67,8 @@ export class JsonRpcError extends Error {
 }
 
 /** Owns the one private app-server process and authenticated WebSocket. */
-export class CodyServerManager {
-  private status: ServerStatus = { phase: 'starting', detail: 'Starting Cody engine…' }
+export class KodyServerManager {
+  private status: ServerStatus = { phase: 'starting', detail: 'Starting Kody engine…' }
   private child: ChildProcess | null = null
   private socket: WebSocket | null = null
   private token: string | null = null
@@ -88,7 +88,7 @@ export class CodyServerManager {
   }
 
   async start(): Promise<void> {
-    if (this.closed) throw new Error('Cody server manager is shutting down')
+    if (this.closed) throw new Error('Kody server manager is shutting down')
     if (this.startPromise) return this.startPromise
     // A WebSocket becomes OPEN before initialize, provider reconciliation, and
     // subscription restoration finish. Concurrent RPCs must wait for that
@@ -104,7 +104,7 @@ export class CodyServerManager {
         if (this.status.phase === 'starting') {
           this.updateStatus({
             phase: 'error',
-            detail: `Cody engine is unavailable: ${safeErrorMessage(error, this.token ?? '')}`
+            detail: `Kody engine is unavailable: ${safeErrorMessage(error, this.token ?? '')}`
           })
         }
         throw error
@@ -154,18 +154,18 @@ export class CodyServerManager {
     if (this.closed && !this.child && !this.socket) return
     this.closed = true
     this.clearReconnectTimer()
-    this.rejectPending(new Error('Cody app server stopped'))
+    this.rejectPending(new Error('Kody app server stopped'))
     this.closeSocket()
     const child = this.child
     this.child = null
     this.token = null
     this.port = null
     if (child) await terminateProcessTree(child)
-    this.updateStatus({ phase: 'disconnected', detail: 'Cody engine stopped.' })
+    this.updateStatus({ phase: 'disconnected', detail: 'Kody engine stopped.' })
   }
 
   private async launchFresh(): Promise<void> {
-    this.updateStatus({ phase: 'starting', detail: 'Starting Cody engine…' })
+    this.updateStatus({ phase: 'starting', detail: 'Starting Kody engine…' })
     this.closeSocket()
     if (this.child) {
       const staleChild = this.child
@@ -180,9 +180,9 @@ export class CodyServerManager {
       cwd: launch.cwd,
       env: {
         ...sanitizedChildEnvironment(process.env),
-        CODY_BIND: `127.0.0.1:${port}`,
-        CODY_SERVER_TOKEN: token,
-        CODY_HOME: this.options.stateRoot
+        KODY_BIND: `127.0.0.1:${port}`,
+        KODY_SERVER_TOKEN: token,
+        KODY_HOME: this.options.stateRoot
       },
       detached: true,
       windowsHide: true,
@@ -204,7 +204,7 @@ export class CodyServerManager {
       await terminateProcessTree(child)
       this.token = null
       this.port = null
-      const detail = `Cody engine failed to start: ${safeErrorMessage(error, token)}`
+      const detail = `Kody engine failed to start: ${safeErrorMessage(error, token)}`
       this.updateStatus({ phase: 'error', detail })
       throw new Error(detail)
     }
@@ -213,11 +213,11 @@ export class CodyServerManager {
   private async connectExisting(isReconnect: boolean): Promise<void> {
     const port = this.port
     const token = this.token
-    if (!port || !token || !this.hasLiveChild()) throw new Error('Cody app server is not running')
+    if (!port || !token || !this.hasLiveChild()) throw new Error('Kody app server is not running')
 
     this.updateStatus({
       phase: 'starting',
-      detail: isReconnect ? 'Reconnecting to Cody engine…' : 'Connecting to Cody engine…'
+      detail: isReconnect ? 'Reconnecting to Kody engine…' : 'Connecting to Kody engine…'
     })
     try {
       await this.openSocket(port, token)
@@ -225,11 +225,11 @@ export class CodyServerManager {
       await this.options.onConnected?.((method, params) => this.sendRpc(method, params))
       await this.restoreSubscriptions()
       if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-        throw new Error('Cody RPC connection closed during bootstrap')
+        throw new Error('Kody RPC connection closed during bootstrap')
       }
     } catch (error) {
       this.closeSocket()
-      this.rejectPending(new Error('Could not establish the Cody RPC connection'))
+      this.rejectPending(new Error('Could not establish the Kody RPC connection'))
       throw error
     }
     this.reconnectAttempt = 0
@@ -283,7 +283,7 @@ export class CodyServerManager {
     try {
       message = JSON.parse(data.toString())
     } catch {
-      this.options.onLog?.('Ignored an invalid JSON message from Cody app server.')
+      this.options.onLog?.('Ignored an invalid JSON message from Kody app server.')
       return
     }
     if (!isRecord(message)) return
@@ -326,27 +326,27 @@ export class CodyServerManager {
   private handleSocketClose(socket: WebSocket): void {
     if (this.socket !== socket) return
     this.socket = null
-    this.rejectPending(new Error('Connection to Cody app server was closed'))
+    this.rejectPending(new Error('Connection to Kody app server was closed'))
     if (this.closed) return
     if (this.hasLiveChild()) {
-      this.updateStatus({ phase: 'disconnected', detail: 'Cody engine connection was interrupted.' })
+      this.updateStatus({ phase: 'disconnected', detail: 'Kody engine connection was interrupted.' })
       this.scheduleReconnect()
     } else {
-      this.updateStatus({ phase: 'error', detail: 'Cody engine exited unexpectedly.' })
+      this.updateStatus({ phase: 'error', detail: 'Kody engine exited unexpectedly.' })
     }
   }
 
   private sendRpc<T>(method: string, params: unknown): Promise<T> {
     const socket = this.socket
     if (!socket || socket.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new Error('Cody app server is not connected'))
+      return Promise.reject(new Error('Kody app server is not connected'))
     }
     const id = `desktop-${this.nextRequestId++}`
     const payload = JSON.stringify({ jsonrpc: '2.0', id, method, params })
     return new Promise<T>((resolveRequest, rejectRequest) => {
       const timeout = setTimeout(() => {
         this.pending.delete(id)
-        rejectRequest(new Error(`Cody RPC '${method}' timed out`))
+        rejectRequest(new Error(`Kody RPC '${method}' timed out`))
       }, RPC_TIMEOUT_MS)
       this.pending.set(id, {
         resolve: (value) => resolveRequest(value as T),
@@ -377,10 +377,10 @@ export class CodyServerManager {
       this.token = null
       this.port = null
       this.closeSocket()
-      this.rejectPending(new Error('Cody app server exited'))
+      this.rejectPending(new Error('Kody app server exited'))
       if (!this.closed) {
         const suffix = code === null ? `signal ${signal ?? 'unknown'}` : `code ${code}`
-        this.updateStatus({ phase: 'error', detail: `Cody engine exited unexpectedly (${suffix}).` })
+        this.updateStatus({ phase: 'error', detail: `Kody engine exited unexpectedly (${suffix}).` })
       }
     })
   }
@@ -462,8 +462,8 @@ export function sanitizedChildEnvironment(
       || CONNECTION_NAME_PATTERN.test(upper)
       || upper.startsWith('OPENAI_')
       || upper.startsWith('ANTHROPIC_')
-      || upper.startsWith('CODY_OPENAI_')
-      || upper === 'CODY_SERVER_TOKEN'
+      || upper.startsWith('KODY_OPENAI_')
+      || upper === 'KODY_SERVER_TOKEN'
       || (PROXY_NAMES.has(upper) && proxyContainsCredentials(value))
     ) continue
     sanitized[name] = value
@@ -523,21 +523,21 @@ export async function reserveLoopbackPort(): Promise<number> {
 export function resolveLaunchCommand(
   options: Pick<ServerManagerOptions, 'appPath' | 'isPackaged' | 'resourcesPath'>
 ): LaunchCommand {
-  const executable = process.platform === 'win32' ? 'cody-app-server.exe' : 'cody-app-server'
+  const executable = process.platform === 'win32' ? 'kody-app-server.exe' : 'kody-app-server'
   if (options.isPackaged) {
     const binary = join(options.resourcesPath, 'bin', executable)
-    if (!existsSync(binary)) throw new Error('Packaged Cody app-server binary is missing')
+    if (!existsSync(binary)) throw new Error('Packaged Kody app-server binary is missing')
     return { command: binary, args: [], cwd: dirname(binary) }
   }
 
   const moduleDirectory = dirname(fileURLToPath(import.meta.url))
   const workspaceRoot = findCargoWorkspaceRoot([process.cwd(), options.appPath, moduleDirectory])
-  if (!workspaceRoot) throw new Error('Could not locate Cody Cargo workspace')
+  if (!workspaceRoot) throw new Error('Could not locate Kody Cargo workspace')
   const debugBinary = join(workspaceRoot, 'target', 'debug', executable)
   if (existsSync(debugBinary)) return { command: debugBinary, args: [], cwd: workspaceRoot }
   return {
     command: 'cargo',
-    args: ['run', '--quiet', '--manifest-path', join(workspaceRoot, 'Cargo.toml'), '-p', 'cody-app-server'],
+    args: ['run', '--quiet', '--manifest-path', join(workspaceRoot, 'Cargo.toml'), '-p', 'kody-app-server'],
     cwd: workspaceRoot
   }
 }
@@ -546,7 +546,7 @@ export function findCargoWorkspaceRoot(starts: string[]): string | null {
   for (const start of starts) {
     let current = resolve(start)
     while (true) {
-      if (existsSync(join(current, 'Cargo.toml')) && existsSync(join(current, 'crates', 'cody-app-server'))) {
+      if (existsSync(join(current, 'Cargo.toml')) && existsSync(join(current, 'crates', 'kody-app-server'))) {
         return current
       }
       const parent = dirname(current)
@@ -569,7 +569,7 @@ async function waitForHealth(port: number, timeoutMs: number, isAlive: () => boo
   const deadline = Date.now() + timeoutMs
   let lastError: unknown = new Error('Health endpoint did not respond')
   while (Date.now() < deadline) {
-    if (!isAlive()) throw new Error('Cody app server exited before becoming healthy')
+    if (!isAlive()) throw new Error('Kody app server exited before becoming healthy')
     try {
       await healthRequest(port)
       return
@@ -578,7 +578,7 @@ async function waitForHealth(port: number, timeoutMs: number, isAlive: () => boo
       await delay(75)
     }
   }
-  throw new Error(`Timed out waiting for Cody app server health: ${safeErrorMessage(lastError, '')}`)
+  throw new Error(`Timed out waiting for Kody app server health: ${safeErrorMessage(lastError, '')}`)
 }
 
 function healthRequest(port: number): Promise<void> {
@@ -593,7 +593,7 @@ function healthRequest(port: number): Promise<void> {
         }
         try {
           const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
-          if (!isRecord(body) || body.status !== 'ok' || body.service !== 'cody-app-server') {
+          if (!isRecord(body) || body.status !== 'ok' || body.service !== 'kody-app-server') {
             rejectHealth(new Error('Unexpected health response'))
             return
           }

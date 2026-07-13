@@ -4,8 +4,8 @@
 
 ```mermaid
 flowchart LR
-    Client["CLI / Desktop / IDE"] -->|"JSON-RPC HTTP or WS"| Server["cody-app-server"]
-    Server --> Engine["CodyEngine"]
+    Client["CLI / Desktop / IDE"] -->|"JSON-RPC HTTP or WS"| Server["kody-app-server"]
+    Server --> Engine["KodyEngine"]
     Server --> TurnManager["TurnManager"]
     Engine --> Runtime["AgentRuntime"]
     Runtime --> Context["ContextBuilder"]
@@ -28,9 +28,9 @@ flowchart LR
     ProcessEvents -->|"process/event"| Client
 ```
 
-`cody-core` does not depend on HTTP or WebSocket. The App Server is a transport adapter over `CodyEngine`, so a desktop application can embed the engine and subscribe to the same events directly.
+`kody-core` does not depend on HTTP or WebSocket. The App Server is a transport adapter over `KodyEngine`, so a desktop application can embed the engine and subscribe to the same events directly.
 
-There are deliberately two execution paths. Native `ModelProvider` adapters run inside Cody's own Agent Loop and return provider-neutral completions. The `codex` selection is routed to an `ExternalTurnBackend`: official Codex owns its agent loop and tool protocol, while Cody owns Thread state, context bindings, cancellation, client-facing events, approvals, and structured user input. Treating Codex as a raw completion endpoint would break both its account boundary and its execution semantics.
+There are deliberately two execution paths. Native `ModelProvider` adapters run inside Kody's own Agent Loop and return provider-neutral completions. The `codex` selection is routed to an `ExternalTurnBackend`: official Codex owns its agent loop and tool protocol, while Kody owns Thread state, context bindings, cancellation, client-facing events, approvals, and structured user input. Treating Codex as a raw completion endpoint would break both its account boundary and its execution semantics.
 
 ## Domain relationships
 
@@ -57,7 +57,7 @@ The important ownership rules are:
 5. A Thread has at most one active Turn. Store-level compare-and-set transitions enforce this independently of the server task map.
 6. A desktop draft is not a domain entity. `thread/create-and-start` materializes Thread, Workspace, optional Project, user Message, and first Turn only on Send; its client request ID is process-locally idempotent.
 7. A Managed Process belongs to one Thread and records the Turn/tool-call origin that created it. Its lifecycle is independent from that Turn, so cancellation never implicitly kills a successfully started process.
-8. External Thread IDs are opaque values namespaced by backend ID. A Cody Thread may resume the same Codex Thread without making Codex authentication or wire state part of Cody's domain model.
+8. External Thread IDs are opaque values namespaced by backend ID. A Kody Thread may resume the same Codex Thread without making Codex authentication or wire state part of Kody's domain model.
 
 ## Agent loop
 
@@ -117,11 +117,11 @@ The registry replaces a provider atomically. `prepare_turn` resolves the adapter
 
 ## Codex external Turn backend
 
-`CodexService` lazily discovers a usable official `codex` binary, starts one long-lived `codex app-server --listen stdio://` child, performs the initialize handshake, and probes `account/read`. An explicit `CODY_CODEX_PATH` is authoritative and fails closed when unusable. Without it, Cody probes candidates from `PATH` and known ChatGPT application bundles, tries parseable Codex versions from newest to oldest, and falls back only when a newer candidate fails its protocol/account capability probe. This prevents an older PATH installation from shadowing a newer compatible bundled server.
+`CodexService` lazily discovers a usable official `codex` binary, starts one long-lived `codex app-server --listen stdio://` child, performs the initialize handshake, and probes `account/read`. An explicit `KODY_CODEX_PATH` is authoritative and fails closed when unusable. Without it, Kody probes candidates from `PATH` and known ChatGPT application bundles, tries parseable Codex versions from newest to oldest, and falls back only when a newer candidate fails its protocol/account capability probe. This prevents an older PATH installation from shadowing a newer compatible bundled server.
 
-The sidecar is the authentication authority. Cody uses its account login/logout and rate-limit methods, model catalog, Thread/Turn methods, notifications, server requests, and interruption method. It never reads `~/.codex/auth.json`, receives an OAuth/refresh token, or converts a ChatGPT token into an API key. The trusted host may set `CODY_CODEX_SERVICE_TIER` (`fast` or `flex`) and `CODY_CODEX_PATH`; neither control is available to Renderer content.
+The sidecar is the authentication authority. Kody uses its account login/logout and rate-limit methods, model catalog, Thread/Turn methods, notifications, server requests, and interruption method. It never reads `~/.codex/auth.json`, receives an OAuth/refresh token, or converts a ChatGPT token into an API key. The trusted host may set `KODY_CODEX_SERVICE_TIER` (`fast` or `flex`) and `KODY_CODEX_PATH`; neither control is available to Renderer content.
 
-For a Codex Turn, Cody resolves its normal Workspace and reference context, starts or resumes the opaque external Thread binding, selects the requested model, sets the Workspace as `cwd`, and sends a workspace-write sandbox policy whose writable roots are the Thread Workspace plus only read-write Project bindings. Network access is disabled in that policy. Codex notifications become Cody model/reasoning/tool/file events. A Cody cancellation interrupts the remote Turn, and dropping an in-flight backend future also arms a best-effort interrupt guard.
+For a Codex Turn, Kody resolves its normal Workspace and reference context, starts or resumes the opaque external Thread binding, selects the requested model, sets the Workspace as `cwd`, and sends a workspace-write sandbox policy whose writable roots are the Thread Workspace plus only read-write Project bindings. Network access is disabled in that policy. Codex notifications become Kody model/reasoning/tool/file events. A Kody cancellation interrupts the remote Turn, and dropping an in-flight backend future also arms a best-effort interrupt guard.
 
 Codex command and file-change approval requests enter the same `ApprovalBroker` used by native tools. Codex `requestUserInput` server requests enter `UserInputBroker`; public question metadata can be recovered from `thread/get`, but submitted answers travel only through a one-shot channel to the waiting sidecar request.
 
@@ -131,7 +131,7 @@ The Electron Renderer may list providers/models and choose them for a Turn, but 
 
 Provider Profile metadata is persisted by atomic same-directory replacement. API keys are write-only Renderer inputs encrypted with Electron `safeStorage`; public snapshots contain only `hasSecret`. Unix directory/file modes are tightened to `0700`/`0600`. On Linux, credential writes fail closed when encryption cannot be verified or the selected backend is `basic_text`. On server reconnect the main process removes all non-built-in runtime providers and rebuilds the registry exactly from the encrypted durable snapshot, preventing deleted or changed credentials from remaining active.
 
-The App Server token and recognized provider API-key variables are removed from ambient environment state after their owning components consume them. Tool and Managed Process environments are allowlisted; the Electron main process also removes secret-shaped ambient variables before launching the App Server. Consequently the lazily started Codex sidecar cannot inherit Cody's server token or configured Provider keys. Provider and Codex error surfaces are redacted and bounded before entering logs, RPC responses, or public events.
+The App Server token and recognized provider API-key variables are removed from ambient environment state after their owning components consume them. Tool and Managed Process environments are allowlisted; the Electron main process also removes secret-shaped ambient variables before launching the App Server. Consequently the lazily started Codex sidecar cannot inherit Kody's server token or configured Provider keys. Provider and Codex error surfaces are redacted and bounded before entering logs, RPC responses, or public events.
 
 ## Interactive gates
 
@@ -156,6 +156,6 @@ Referenced content is never inserted into the system instruction and is JSON esc
 
 `JsonFileStore` uses an in-memory candidate for each mutation, validates it, writes a versioned same-directory temporary snapshot, calls `fsync`, atomically renames it, then publishes the candidate to readers. A failed write leaves live state unchanged. On startup, malformed snapshots and broken relationships fail closed.
 
-If the app server stopped after a Turn was queued or running, `CodyEngine::new` marks that Turn failed with a restart reason and returns its Thread to idle. Managed process metadata is recovered independently: an active record from an interrupted runtime becomes `Lost` and an old PID is never re-adopted or signalled, avoiding PID-reuse hazards. Process output lives outside `state.json` in a bounded, permission-restricted log.
+If the app server stopped after a Turn was queued or running, `KodyEngine::new` marks that Turn failed with a restart reason and returns its Thread to idle. Managed process metadata is recovered independently: an active record from an interrupted runtime becomes `Lost` and an old PID is never re-adopted or signalled, avoiding PID-reuse hazards. Process output lives outside `state.json` in a bounded, permission-restricted log.
 
 For multi-process or remote deployments, implement the same `StateStore` trait with transactional compare-and-set semantics in SQLite/Postgres rather than sharing the JSON file.

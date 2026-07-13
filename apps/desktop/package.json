@@ -1,20 +1,22 @@
 {
-  "name": "@cody/desktop",
+  "name": "@kody/desktop",
   "version": "0.1.0",
+  "description": "A local-first coding agent workspace powered by Rust and Electron.",
+  "author": "Jianliang Wang",
   "private": true,
   "type": "module",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "build:server": "cargo build --release --manifest-path ../../Cargo.toml -p cody-app-server",
+    "build:server": "cargo build --release --manifest-path ../../Cargo.toml -p kody-app-server",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "npm run build && playwright test",
     "package": "npm run build:server && npm run build && electron-builder --dir",
-    "dist": "npm run build:server && npm run build && electron-builder"
+    "dist": "npm run build:server && npm run build && electron-builder --publish never"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",
@@ -36,7 +38,7 @@
     "@types/react-dom": "^19.2.2",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.2.0",
-    "electron": "^43.1.0",
+    "electron": "43.1.0",
     "electron-builder": "^26.0.12",
     "electron-vite": "^5.0.0",
     "jsdom": "^27.0.1",
@@ -45,8 +47,9 @@
     "vitest": "^4.1.10"
   },
   "build": {
-    "appId": "dev.cody.agent",
-    "productName": "Cody",
+    "appId": "dev.kody.agent",
+    "productName": "Kody",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "asar": true,
     "files": [
       "out/**/*",
@@ -57,14 +60,18 @@
         "from": "../../target/release",
         "to": "bin",
         "filter": [
-          "cody-app-server",
-          "cody-app-server.exe"
+          "kody-app-server",
+          "kody-app-server.exe"
         ]
       }
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
-      "target": "dmg"
+      "target": "dmg",
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "notarize": false
     },
     "win": {
       "target": "nsis"

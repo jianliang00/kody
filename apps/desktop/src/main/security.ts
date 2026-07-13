@@ -29,7 +29,7 @@ const EXTERNAL_PROTOCOLS = new Set(['http:', 'https:'])
 
 export function validateRpcInvocation(method: unknown, params: unknown): asserts method is RpcMethod {
   if (typeof method !== 'string' || !RPC_METHODS.has(method as RpcMethod)) {
-    throw new Error('Unsupported Cody RPC method')
+    throw new Error('Unsupported Kody RPC method')
   }
   if (!isRecord(params)) throw new Error(`Invalid parameters for '${method}'`)
 
@@ -146,7 +146,7 @@ export function validateRpcInvocation(method: unknown, params: unknown): asserts
       requireId(params.process_id, 'process_id')
       break
     default:
-      throw new Error('Unsupported Cody RPC method')
+      throw new Error('Unsupported Kody RPC method')
   }
 }
 

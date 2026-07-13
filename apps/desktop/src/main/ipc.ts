@@ -8,13 +8,13 @@ import type {
   ProviderProfileUpdate
 } from '../shared/bridge'
 import { ProviderSettingsStore } from './provider-settings'
-import { CodyServerManager } from './server-manager'
+import { KodyServerManager } from './server-manager'
 import { isTrustedRendererUrl, validateRpcInvocation } from './security'
 
 interface IpcOptions {
   getWindow(): BrowserWindow | null
   rendererUrl: string
-  server: CodyServerManager
+  server: KodyServerManager
   providerSettings: ProviderSettingsStore
   configureProvider(profile: ProviderProfileRecord): Promise<void>
   removeProvider(profileId: string): Promise<void>
@@ -38,7 +38,7 @@ export function registerIpcHandlers(options: IpcOptions): void {
     return result
   }
 
-  ipcMain.handle('cody:rpc', async (event, method: unknown, params: unknown) => {
+  ipcMain.handle('kody:rpc', async (event, method: unknown, params: unknown) => {
     assertTrustedSender(event, options)
     validateRpcInvocation(method, params)
     return options.server.rpc(
@@ -47,7 +47,7 @@ export function registerIpcHandlers(options: IpcOptions): void {
     )
   })
 
-  ipcMain.handle('cody:pick-directory', async (event, purpose: unknown) => {
+  ipcMain.handle('kody:pick-directory', async (event, purpose: unknown) => {
     assertTrustedSender(event, options)
     if (purpose !== undefined && purpose !== 'project' && purpose !== 'working-directory') {
       throw new Error('Unsupported directory picker purpose')
@@ -70,17 +70,17 @@ export function registerIpcHandlers(options: IpcOptions): void {
     return result.canceled ? null : result.filePaths[0] ?? null
   })
 
-  ipcMain.handle('cody:server-status', (event) => {
+  ipcMain.handle('kody:server-status', (event) => {
     assertTrustedSender(event, options)
     return options.server.getStatus()
   })
 
-  ipcMain.handle('cody:provider-settings:get', async (event) => {
+  ipcMain.handle('kody:provider-settings:get', async (event) => {
     assertTrustedSender(event, options)
     return options.providerSettings.snapshot()
   })
 
-  ipcMain.handle('cody:provider-settings:upsert', async (event, input: unknown) => {
+  ipcMain.handle('kody:provider-settings:upsert', async (event, input: unknown) => {
     assertTrustedSender(event, options)
     const update = validateProviderProfileUpdate(input)
     return mutateProvider(async () => {
@@ -90,7 +90,7 @@ export function registerIpcHandlers(options: IpcOptions): void {
     })
   })
 
-  ipcMain.handle('cody:provider-settings:delete', async (event, profileId: unknown) => {
+  ipcMain.handle('kody:provider-settings:delete', async (event, profileId: unknown) => {
     assertTrustedSender(event, options)
     if (
       typeof profileId !== 'string'
@@ -106,22 +106,22 @@ export function registerIpcHandlers(options: IpcOptions): void {
     })
   })
 
-  ipcMain.handle('cody:codex-account:get', async (event) => {
+  ipcMain.handle('kody:codex-account:get', async (event) => {
     assertTrustedSender(event, options)
     return options.getCodexAccountStatus()
   })
 
-  ipcMain.handle('cody:codex-account:connect', async (event) => {
+  ipcMain.handle('kody:codex-account:connect', async (event) => {
     assertTrustedSender(event, options)
     return mutateCodexAccount(() => options.connectCodexAccount())
   })
 
-  ipcMain.handle('cody:codex-account:disconnect', async (event) => {
+  ipcMain.handle('kody:codex-account:disconnect', async (event) => {
     assertTrustedSender(event, options)
     await mutateCodexAccount(() => options.disconnectCodexAccount())
   })
 
-  ipcMain.handle('cody:copy-text', (event, text: unknown) => {
+  ipcMain.handle('kody:copy-text', (event, text: unknown) => {
     assertTrustedSender(event, options)
     if (typeof text !== 'string' || text.length > 1_000_000) {
       throw new Error('Clipboard text must be a string no larger than 1 MB')
@@ -129,7 +129,7 @@ export function registerIpcHandlers(options: IpcOptions): void {
     clipboard.writeText(text)
   })
 
-  ipcMain.handle('cody:window-action', (event, action: unknown) => {
+  ipcMain.handle('kody:window-action', (event, action: unknown) => {
     assertTrustedSender(event, options)
     if (action !== 'minimize' && action !== 'maximize' && action !== 'close') {
       throw new Error('Unsupported window action')

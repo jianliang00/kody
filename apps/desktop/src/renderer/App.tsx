@@ -7,7 +7,7 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type {
   CodexAccountStatus,
-  CodyDesktopBridge,
+  KodyDesktopBridge,
   ProviderProfileUpdate,
   ProviderSettingsResult
 } from '@shared/bridge'
@@ -38,13 +38,13 @@ import {
 } from './components/ProviderSettings'
 import { ThreadContextCard } from './components/ThreadContextCard'
 import { TitleBar } from './components/TitleBar'
-import { getCodyBridge } from './lib/mockBridge'
+import { getKodyBridge } from './lib/mockBridge'
 import { referenceKey, upsertReference } from './lib/references'
 import { isProcessActive, shouldRefreshProcessSnapshot } from './lib/processes'
 import { deriveThreadContext } from './lib/threadContext'
 import { ThreadProjectionLedger } from './lib/threadProjection'
 
-type ExtendedBridge = CodyDesktopBridge & { copyText?: (text: string) => Promise<void> }
+type ExtendedBridge = KodyDesktopBridge & { copyText?: (text: string) => Promise<void> }
 
 const TERMINAL_EVENTS = new Set(['turn_completed', 'turn_failed', 'turn_cancelled'])
 
@@ -82,7 +82,7 @@ function appendLiveEvent(history: EventEnvelope[], envelope: EventEnvelope): Eve
 }
 
 function initialTheme(): boolean {
-  const saved = window.localStorage.getItem('cody.theme')
+  const saved = window.localStorage.getItem('kody.theme')
   if (saved === 'dark') return true
   if (saved === 'light') return false
   return window.matchMedia('(prefers-color-scheme: dark)').matches
@@ -136,7 +136,7 @@ const EMPTY_COMPOSER_DRAFT: ComposerDraftState = {
 }
 
 export function App() {
-  const bridge = useMemo(() => getCodyBridge(), [])
+  const bridge = useMemo(() => getKodyBridge(), [])
   const [status, setStatus] = useState<ServerStatus>({ phase: 'starting', detail: 'Starting local server…' })
   const [threads, setThreads] = useState<Thread[]>([])
   const [projects, setProjects] = useState<Project[]>([])
@@ -161,16 +161,16 @@ export function App() {
   const [loadingThread, setLoadingThread] = useState(false)
   const [bootstrapping, setBootstrapping] = useState(true)
   const [appError, setAppError] = useState('')
-  const [announcement, setAnnouncement] = useState('Starting Cody')
+  const [announcement, setAnnouncement] = useState('Starting Kody')
   const [draftId, setDraftId] = useState(() => crypto.randomUUID())
   const [draftWorkingDirectory, setDraftWorkingDirectory] = useState<string>()
   const [railOpen, setRailOpen] = useState(false)
   const [railCollapsed, setRailCollapsed] = useState(
-    () => window.localStorage.getItem('cody.railCollapsed') === 'true'
+    () => window.localStorage.getItem('kody.railCollapsed') === 'true'
   )
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [inspectorCollapsed, setInspectorCollapsed] = useState(
-    () => window.localStorage.getItem('cody.inspectorCollapsed') !== 'false'
+    () => window.localStorage.getItem('kody.inspectorCollapsed') !== 'false'
   )
   const [darkTheme, setDarkTheme] = useState(initialTheme)
   const inspectorIsNarrow = useMediaQuery('(max-width: 72rem)')
@@ -279,7 +279,7 @@ export function App() {
     processRefreshRequestRef.current.clear()
     setLoadingThread(true)
     setAppError('')
-    window.localStorage.setItem('cody.activeThreadId', threadId)
+    window.localStorage.setItem('kody.activeThreadId', threadId)
     try {
       const nextSnapshot = await bridge.rpc('thread/get', { thread_id: threadId })
       if (request !== loadRequestRef.current || activeThreadRef.current !== threadId) return
@@ -327,10 +327,10 @@ export function App() {
           setActiveThreadId(undefined)
           setSnapshot(undefined)
           hasHydratedRef.current = true
-          setAnnouncement('Cody is connected and ready')
+          setAnnouncement('Kody is connected and ready')
           return
         }
-        const persistedId = window.localStorage.getItem('cody.activeThreadId') ?? undefined
+        const persistedId = window.localStorage.getItem('kody.activeThreadId') ?? undefined
         const preferredId = activeId && threadResult.threads.some((thread) => thread.id === activeId)
           ? activeId
           : threadResult.threads.some((thread) => thread.id === persistedId)
@@ -344,9 +344,9 @@ export function App() {
         }
       }
       hasHydratedRef.current = true
-      setAnnouncement('Cody is connected and ready')
+      setAnnouncement('Kody is connected and ready')
     } catch (error) {
-      const detail = error instanceof Error ? error.message : 'Cody could not connect to the local server.'
+      const detail = error instanceof Error ? error.message : 'Kody could not connect to the local server.'
       statusRef.current = 'error'
       setStatus({ phase: 'error', detail })
       setAppError(detail)
@@ -418,7 +418,7 @@ export function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = darkTheme ? 'dark' : 'light'
-    window.localStorage.setItem('cody.theme', darkTheme ? 'dark' : 'light')
+    window.localStorage.setItem('kody.theme', darkTheme ? 'dark' : 'light')
   }, [darkTheme])
 
   useLayoutEffect(() => {
@@ -437,11 +437,11 @@ export function App() {
   }, [activeThreadId, bootstrapping, draftId, snapshot?.thread.id, status.phase])
 
   useEffect(() => {
-    window.localStorage.setItem('cody.railCollapsed', String(railCollapsed))
+    window.localStorage.setItem('kody.railCollapsed', String(railCollapsed))
   }, [railCollapsed])
 
   useEffect(() => {
-    window.localStorage.setItem('cody.inspectorCollapsed', String(inspectorCollapsed))
+    window.localStorage.setItem('kody.inspectorCollapsed', String(inspectorCollapsed))
   }, [inspectorCollapsed])
 
   useEffect(() => {
@@ -509,12 +509,12 @@ export function App() {
 
       if (envelope.event.type === 'turn_started') {
         setRunningTurns((current) => ({ ...current, [envelope.thread_id]: envelope.turn_id }))
-        setAnnouncement('Cody started working')
+        setAnnouncement('Kody started working')
       } else if (envelope.event.type === 'approval_requested') {
         setAnnouncement(`Approval required for ${envelope.event.name}`)
         void refreshThread(envelope.thread_id)
       } else if (envelope.event.type === 'user_input_requested') {
-        setAnnouncement('Cody needs your input to continue')
+        setAnnouncement('Kody needs your input to continue')
         void refreshThread(envelope.thread_id)
       } else if (envelope.event.type === 'user_input_resolved') {
         const interactionId = envelope.event.interaction_id
@@ -524,7 +524,7 @@ export function App() {
           next.delete(interactionId)
           return next
         })
-        setAnnouncement(envelope.event.cancelled ? 'Input request cancelled' : 'Input sent to Cody')
+        setAnnouncement(envelope.event.cancelled ? 'Input request cancelled' : 'Input sent to Kody')
         void refreshThread(envelope.thread_id)
       } else if (envelope.event.type === 'file_changed') {
         setAnnouncement(`Changed ${envelope.event.path}`)
@@ -780,7 +780,7 @@ export function App() {
     setDraftId(nextDraftId)
     setLoadingThread(false)
     setAppError('')
-    window.localStorage.removeItem('cody.activeThreadId')
+    window.localStorage.removeItem('kody.activeThreadId')
     setAnnouncement('Ready for a new conversation')
   }, [])
 
@@ -866,10 +866,10 @@ export function App() {
             processes: []
           })
           setDraftWorkingDirectory(undefined)
-          window.localStorage.setItem('cody.activeThreadId', started.thread.id)
-          setAnnouncement('Thread created. Cody is starting the first turn.')
+          window.localStorage.setItem('kody.activeThreadId', started.thread.id)
+          setAnnouncement('Thread created. Kody is starting the first turn.')
         } else {
-          setAnnouncement('Thread created; Cody started working')
+          setAnnouncement('Thread created; Kody started working')
         }
         void refreshThread(started.thread.id)
         return true
@@ -892,7 +892,7 @@ export function App() {
           turns: [...current.turns.filter((item) => item.id !== turn.id), turn]
         }
       })
-      setAnnouncement('Message sent. Cody is starting the turn.')
+      setAnnouncement('Message sent. Kody is starting the turn.')
       void refreshThread(snapshot.thread.id)
       return true
     } catch (error) {
@@ -959,10 +959,10 @@ export function App() {
           (request) => request.interaction_id !== interactionId
         )
       } : current)
-      setAnnouncement(cancelled ? 'Input request cancelled' : 'Input sent. Cody is continuing.')
+      setAnnouncement(cancelled ? 'Input request cancelled' : 'Input sent. Kody is continuing.')
       if (activeThreadRef.current) void refreshThread(activeThreadRef.current)
     } catch (error) {
-      setAppError(error instanceof Error ? error.message : 'Could not respond to Cody.')
+      setAppError(error instanceof Error ? error.message : 'Could not respond to Kody.')
     } finally {
       userInputRef.current.delete(interactionId)
       setResolvingUserInputs((current) => {
@@ -1230,8 +1230,8 @@ export function App() {
             <section className="connection-state">
               <span className="connection-state__icon"><WifiOff aria-hidden="true" size={24} /></span>
               <p className="eyebrow">Local agent server</p>
-              <h2>{status.phase === 'error' ? 'Cody could not start' : 'Server disconnected'}</h2>
-              <p>{status.detail || 'The desktop app cannot reach its local Cody server.'}</p>
+              <h2>{status.phase === 'error' ? 'Kody could not start' : 'Server disconnected'}</h2>
+              <p>{status.detail || 'The desktop app cannot reach its local Kody server.'}</p>
               <button className="primary-button" type="button" onClick={() => void bootstrap()}>
                 <RefreshCcw aria-hidden="true" size={15} /> Retry connection
               </button>
@@ -1239,7 +1239,7 @@ export function App() {
           ) : bootstrapping && !snapshot ? (
             <section className="loading-state" role="status">
               <LoaderCircle className="spin" aria-hidden="true" size={23} />
-              <h2>Opening Cody</h2>
+              <h2>Opening Kody</h2>
               <p>Connecting to the local agent runtime…</p>
             </section>
           ) : loadingThread && !snapshot ? (

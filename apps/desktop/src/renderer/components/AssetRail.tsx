@@ -46,12 +46,12 @@ export function AssetRail({
   )
 
   return (
-    <aside className={`asset-rail${open ? ' asset-rail--open' : ''}`} aria-label="Cody assets">
+    <aside className={`asset-rail${open ? ' asset-rail--open' : ''}`} aria-label="Kody assets">
       <header className="asset-rail__brand">
         <div className="brand-lockup">
           <span className="brand-mark" aria-hidden="true"><span /><span /><span /></span>
           <div>
-            <strong>Cody</strong>
+            <strong>Kody</strong>
             <span>Agent workspace</span>
           </div>
         </div>

@@ -155,7 +155,7 @@ function ApprovalCard({
         <span className="approval-card__icon"><ShieldAlert aria-hidden="true" size={17} /></span>
         <div>
           <h3 id={`approval-${event.approval_id}`}>Command permission required</h3>
-          <p>Cody paused before running this command.</p>
+          <p>Kody paused before running this command.</p>
         </div>
       </header>
       <dl>
@@ -232,7 +232,7 @@ function UserInputCard({
       <header>
         <span className="user-input-card__icon"><MessageCircle aria-hidden="true" size={17} /></span>
         <div>
-          <h3 id={`${formId}-title`}>Cody needs your input</h3>
+          <h3 id={`${formId}-title`}>Kody needs your input</h3>
           <p>The current Turn is paused until you answer or cancel this request.</p>
         </div>
       </header>
@@ -387,7 +387,7 @@ export function Conversation({
           <section className="thread-welcome">
             <span className="thread-welcome__mark" aria-hidden="true"><Sparkles size={22} /></span>
             <p className="eyebrow">Fresh Workspace</p>
-            <h2>What should Cody work on?</h2>
+            <h2>What should Kody work on?</h2>
             <p>
               Start with a question, or add Threads and Projects as explicit context. Each message joins this durable conversation.
             </p>
@@ -418,7 +418,7 @@ export function Conversation({
               <header>
                 <span className="assistant-identity">
                   <span className="assistant-identity__mark" aria-hidden="true"><MessageCircle size={13} /></span>
-                  Cody
+                  Kody
                 </span>
                 <time dateTime={message.created_at}>{formatTime(message.created_at)}</time>
               </header>
@@ -433,7 +433,7 @@ export function Conversation({
             <header>
               <span className="assistant-identity">
                 <span className="assistant-identity__mark assistant-identity__mark--live" aria-hidden="true"><LoaderCircle className="spin" size={13} /></span>
-                Cody is working
+                Kody is working
               </span>
               <span className="live-label">Live</span>
             </header>

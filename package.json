@@ -1,13 +1,15 @@
 {
-  "name": "cody-workspace",
+  "name": "kody-workspace",
   "private": true,
   "workspaces": [
     "apps/desktop"
   ],
   "scripts": {
-    "desktop:dev": "npm --workspace @cody/desktop run dev",
-    "desktop:build": "npm --workspace @cody/desktop run build",
-    "desktop:test": "npm --workspace @cody/desktop run test",
-    "desktop:package": "npm --workspace @cody/desktop run package"
+    "desktop:dev": "npm --workspace @kody/desktop run dev",
+    "desktop:build": "npm --workspace @kody/desktop run build",
+    "desktop:test": "npm --workspace @kody/desktop run test",
+    "desktop:package": "npm --workspace @kody/desktop run package",
+    "desktop:dist": "npm --workspace @kody/desktop run dist",
+    "release:mac": "scripts/release-macos.sh"
   }
 }

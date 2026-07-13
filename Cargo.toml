@@ -1,7 +1,7 @@
 [workspace]
 members = [
-    "crates/cody-core",
-    "crates/cody-app-server",
+    "crates/kody-core",
+    "crates/kody-app-server",
 ]
 resolver = "2"
 
@@ -10,7 +10,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.87"
 license = "MIT OR Apache-2.0"
-authors = ["Cody contributors"]
+authors = ["Kody contributors"]
 
 [workspace.dependencies]
 anyhow = "1"

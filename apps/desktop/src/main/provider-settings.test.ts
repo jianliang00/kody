@@ -350,7 +350,7 @@ describe('ProviderSettingsStore', () => {
 
   it('enforces private modes with the real filesystem adapter', async () => {
     if (process.platform === 'win32') return
-    const root = await mkdtemp(join(tmpdir(), 'cody-provider-settings-'))
+    const root = await mkdtemp(join(tmpdir(), 'kody-provider-settings-'))
     const directory = join(root, 'private')
     const filePath = join(directory, 'providers.json')
     try {

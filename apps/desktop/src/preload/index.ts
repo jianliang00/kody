@@ -3,7 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type {
   CodexAccountStatus,
   CodexConnectResult,
-  CodyDesktopBridge,
+  KodyDesktopBridge,
   DesktopCommand,
   DirectoryPickerPurpose,
   ProviderProfileRecord,
@@ -18,61 +18,61 @@ import type {
   ServerStatus
 } from '../shared/protocol'
 
-const bridge: CodyDesktopBridge = Object.freeze({
+const bridge: KodyDesktopBridge = Object.freeze({
   rpc<M extends RpcMethod>(method: M, params: RpcMethodMap[M]['params']) {
-    return ipcRenderer.invoke('cody:rpc', method, params) as Promise<RpcMethodMap[M]['result']>
+    return ipcRenderer.invoke('kody:rpc', method, params) as Promise<RpcMethodMap[M]['result']>
   },
   pickDirectory(purpose?: DirectoryPickerPurpose) {
-    return ipcRenderer.invoke('cody:pick-directory', purpose) as Promise<string | null>
+    return ipcRenderer.invoke('kody:pick-directory', purpose) as Promise<string | null>
   },
   copyText(text: string) {
-    return ipcRenderer.invoke('cody:copy-text', text) as Promise<void>
+    return ipcRenderer.invoke('kody:copy-text', text) as Promise<void>
   },
   getServerStatus() {
-    return ipcRenderer.invoke('cody:server-status') as Promise<ServerStatus>
+    return ipcRenderer.invoke('kody:server-status') as Promise<ServerStatus>
   },
   getProviderSettings() {
-    return ipcRenderer.invoke('cody:provider-settings:get') as Promise<ProviderSettingsResult>
+    return ipcRenderer.invoke('kody:provider-settings:get') as Promise<ProviderSettingsResult>
   },
   upsertProviderProfile(profile: ProviderProfileUpdate) {
-    return ipcRenderer.invoke('cody:provider-settings:upsert', profile) as Promise<ProviderProfileRecord>
+    return ipcRenderer.invoke('kody:provider-settings:upsert', profile) as Promise<ProviderProfileRecord>
   },
   deleteProviderProfile(profileId: string) {
-    return ipcRenderer.invoke('cody:provider-settings:delete', profileId) as Promise<void>
+    return ipcRenderer.invoke('kody:provider-settings:delete', profileId) as Promise<void>
   },
   getCodexAccountStatus() {
-    return ipcRenderer.invoke('cody:codex-account:get') as Promise<CodexAccountStatus>
+    return ipcRenderer.invoke('kody:codex-account:get') as Promise<CodexAccountStatus>
   },
   connectCodexAccount() {
-    return ipcRenderer.invoke('cody:codex-account:connect') as Promise<CodexConnectResult>
+    return ipcRenderer.invoke('kody:codex-account:connect') as Promise<CodexConnectResult>
   },
   disconnectCodexAccount() {
-    return ipcRenderer.invoke('cody:codex-account:disconnect') as Promise<void>
+    return ipcRenderer.invoke('kody:codex-account:disconnect') as Promise<void>
   },
   onEvent(listener: (event: EventEnvelope) => void) {
     const handler = (_event: Electron.IpcRendererEvent, envelope: EventEnvelope): void => listener(envelope)
-    ipcRenderer.on('cody:turn-event', handler)
-    return () => ipcRenderer.removeListener('cody:turn-event', handler)
+    ipcRenderer.on('kody:turn-event', handler)
+    return () => ipcRenderer.removeListener('kody:turn-event', handler)
   },
   onProcessEvent(listener: (event: ProcessEventEnvelope) => void) {
     const handler = (_event: Electron.IpcRendererEvent, envelope: ProcessEventEnvelope): void => listener(envelope)
-    ipcRenderer.on('cody:process-event', handler)
-    return () => ipcRenderer.removeListener('cody:process-event', handler)
+    ipcRenderer.on('kody:process-event', handler)
+    return () => ipcRenderer.removeListener('kody:process-event', handler)
   },
   onServerStatus(listener: (status: ServerStatus) => void) {
     const handler = (_event: Electron.IpcRendererEvent, status: ServerStatus): void => listener(status)
-    ipcRenderer.on('cody:server-status-changed', handler)
-    return () => ipcRenderer.removeListener('cody:server-status-changed', handler)
+    ipcRenderer.on('kody:server-status-changed', handler)
+    return () => ipcRenderer.removeListener('kody:server-status-changed', handler)
   },
   onCommand(listener: (command: DesktopCommand) => void) {
     const handler = (_event: Electron.IpcRendererEvent, command: DesktopCommand): void => listener(command)
-    ipcRenderer.on('cody:menu-command', handler)
-    return () => ipcRenderer.removeListener('cody:menu-command', handler)
+    ipcRenderer.on('kody:menu-command', handler)
+    return () => ipcRenderer.removeListener('kody:menu-command', handler)
   },
   windowAction(action: 'minimize' | 'maximize' | 'close') {
-    return ipcRenderer.invoke('cody:window-action', action) as Promise<void>
+    return ipcRenderer.invoke('kody:window-action', action) as Promise<void>
   },
   platform: process.platform
 })
 
-contextBridge.exposeInMainWorld('cody', bridge)
+contextBridge.exposeInMainWorld('kody', bridge)

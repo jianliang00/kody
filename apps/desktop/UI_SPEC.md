@@ -1,4 +1,4 @@
-# Cody Desktop UI specification
+# Kody Desktop UI specification
 
 ## Product model
 
@@ -26,7 +26,7 @@ The context card summarizes effective Thread/Project references using the same l
 
 ## Visual direction
 
-Borrow only broad traits from the Codex desktop aesthetic: quiet neutral surfaces, compact information density, precise typography, thin borders and restrained status color. Cody's own signature is the “context constellation”: Thread references use violet nodes, Project references use cyan nodes, and Workspace uses a warm amber node. Avoid cloning Codex icons, spacing, exact sidebar hierarchy or component layout.
+Borrow only broad traits from the Codex desktop aesthetic: quiet neutral surfaces, compact information density, precise typography, thin borders and restrained status color. Kody's own signature is the “context constellation”: Thread references use violet nodes, Project references use cyan nodes, and Workspace uses a warm amber node. Avoid cloning Codex icons, spacing, exact sidebar hierarchy or component layout.
 
 ## Essential flows
 
