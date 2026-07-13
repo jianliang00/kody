@@ -31,7 +31,7 @@ jobs:
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
       ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
-      CSC_NAME: Developer ID Application: Jianliang Wang (BZP4VMX57B)
+      CSC_NAME: "Developer ID Application: Jianliang Wang (BZP4VMX57B)"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
