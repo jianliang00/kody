@@ -22,7 +22,7 @@ Desktop uses three regions:
 2. Conversation workspace (fluid): title/status, linear messages, live agent activity, composer.
 3. Context rail (approximately 20rem): a persistent Current Thread context card at the upper-right, the detailed Thread inspector below it, and a separate Project shelf anchored at the bottom-right.
 
-The context card summarizes effective Thread/Project references using the same last-reference-wins semantics as the runtime. Runtime operations and pending approvals are shown separately from managed background processes; ordinary blocking shell tools must never be mislabeled as background processes. At narrow widths, the summary collapses into the title-bar Context trigger and the inspector becomes a drawer. The asset rail can collapse, and the conversation must remain usable at 320 CSS pixels.
+The context card summarizes effective Thread/Project references using the same last-reference-wins semantics as the runtime. Runtime operations and pending approvals are shown separately from real Process Manager records; ordinary blocking shell tools must never be mislabeled as background processes. It shows at most two active managed processes while the inspector owns the complete lifecycle list. At narrow widths, the summary collapses into the title-bar Context trigger and the inspector becomes a drawer. The asset rail can collapse, and the conversation must remain usable at 320 CSS pixels.
 
 ## Visual direction
 
@@ -36,16 +36,20 @@ Borrow only broad traits from the Codex desktop aesthetic: quiet neutral surface
 4. Select a Thread and load its durable snapshot.
 5. Type `@` or press the context button to search Threads/Projects; add/remove/toggle reference modes.
 6. Start a Turn, stream events, stop a running Turn and refresh durable history at terminal event.
-7. Show Shell approval inline with command/reason and explicit Allow/Deny actions.
+7. Show command-execution approval inline with command/reason and explicit Allow/Deny actions.
 8. Inspect Workspace path, default references, draft references and changed-file events.
 9. Replace the placeholder title after the first completed Turn and reflect it in both title bar and Thread list.
 10. Keep the upper-right Current Thread card synchronized with effective references, pending next-message context, active operations, approvals and managed background-process state.
+11. Inspect every managed process, read its bounded stdout/stderr stream by byte cursor, and stop active processes through the explicit Process Manager RPC.
+
+Process events use an independent stream because they may outlive their originating Turn. Lifecycle events refresh the authoritative Thread snapshot; output events update only the latest observed cursor and bytes are read through `process/read-output`. Process output is never appended to the Turn timeline or held as an unbounded renderer log.
 
 ## Accessibility
 
 - Semantic landmarks and native buttons/inputs.
 - Visible labels (not placeholder-only), skip link and status live region.
 - Full keyboard operation for lists, dialogs and mention palette.
+- The inspector is modal only when rendered as a narrow drawer, with a dynamic focus trap and focus restoration. Process output uses a bounded `role="log"` region with live announcements disabled.
 - Minimum 44px primary touch targets; dense secondary rows may use a larger invisible hit area.
 - WCAG AA contrast in light/dark themes.
 - Respect reduced motion and system color scheme.

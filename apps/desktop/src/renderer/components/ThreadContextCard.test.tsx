@@ -9,7 +9,7 @@ const now = '2026-07-13T00:00:00.000Z'
 afterEach(cleanup)
 
 describe('ThreadContextCard', () => {
-  it('renders references and leaf runtime activity without claiming unmanaged processes', () => {
+  it('renders references, foreground activity, and at most two authoritative managed processes', () => {
     const threads: Thread[] = [thread('thread-design', 'OAuth design')]
     const projects: Project[] = [{
       id: 'project-web',
@@ -28,7 +28,15 @@ describe('ThreadContextCard', () => {
       },
       messages: [],
       turns: [],
-      pending_approvals: []
+      pending_approvals: [],
+      processes: [
+        {
+          ...managedProcess('process-api', 'npm run api'),
+          origin: { turn_id: 'turn-current', tool_call_id: 'tool-shell' }
+        },
+        managedProcess('process-web', 'npm run web'),
+        managedProcess('process-worker', 'npm run worker')
+      ]
     }
     const context: ThreadContextView = {
       threadReferences: [{ kind: 'thread', thread_id: 'thread-design', mode: 'summary' }],
@@ -50,6 +58,13 @@ describe('ThreadContextCard', () => {
         name: 'shell',
         detail: 'npm test',
         kind: 'command'
+      }, {
+        key: 'turn-current:tool-read',
+        turnId: 'turn-current',
+        toolCallId: 'tool-read',
+        name: 'read_file',
+        detail: 'README.md',
+        kind: 'tool'
       }],
       pendingApprovals: [{
         approval_id: 'approval-current',
@@ -77,11 +92,13 @@ describe('ThreadContextCard', () => {
     expect(screen.getByLabelText('Referenced Threads').textContent).toContain('Summary')
     expect(screen.getByLabelText('Referenced Projects').textContent).toContain('Web app')
     expect(screen.getByLabelText('Referenced Projects').textContent).toContain('Read & write')
-    expect(screen.getByText('2 active')).toBeTruthy()
-    expect(screen.getByText('Running command')).toBeTruthy()
+    expect(screen.getByText('5 active')).toBeTruthy()
+    expect(screen.queryByText('Running command')).toBeNull()
+    expect(screen.getByText('Running read_file')).toBeTruthy()
     expect(screen.getByText('Waiting for approval')).toBeTruthy()
-    expect(screen.getByText('No managed background processes')).toBeTruthy()
-    expect(screen.getByTitle('Managed background processes').parentElement?.textContent).toContain('0')
+    expect(screen.getAllByText('Background process active')).toHaveLength(2)
+    expect(screen.getByText('+1 more managed processes')).toBeTruthy()
+    expect(screen.getByTitle('Active managed background processes').parentElement?.textContent).toContain('3')
     expect(screen.getByTitle('References pending for the next message').textContent).toBe('+1')
     expect(screen.getByRole('button', { name: 'Open full context inspector' }).getAttribute('aria-expanded')).toBe('false')
   })
@@ -96,5 +113,24 @@ function thread(id: string, title: string): Thread {
     default_references: [],
     created_at: now,
     updated_at: now
+  }
+}
+
+function managedProcess(id: string, command: string): ThreadSnapshot['processes'][number] {
+  return {
+    id,
+    thread_id: 'thread-current',
+    origin: { turn_id: 'turn-current', tool_call_id: `tool-${id}` },
+    spec_fingerprint: 'a'.repeat(64),
+    command,
+    cwd: '/tmp/thread-current',
+    pid: 10,
+    status: 'running',
+    output_truncated: false,
+    output_start_cursor: 0,
+    output_end_cursor: 0,
+    last_event_sequence: 1,
+    created_at: now,
+    started_at: now
   }
 }

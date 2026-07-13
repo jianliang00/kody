@@ -1,7 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 import type { CodyDesktopBridge, DesktopCommand, DirectoryPickerPurpose } from '../shared/bridge'
-import type { EventEnvelope, RpcMethod, RpcMethodMap, ServerStatus } from '../shared/protocol'
+import type {
+  EventEnvelope,
+  ProcessEventEnvelope,
+  RpcMethod,
+  RpcMethodMap,
+  ServerStatus
+} from '../shared/protocol'
 
 const bridge: CodyDesktopBridge = Object.freeze({
   rpc<M extends RpcMethod>(method: M, params: RpcMethodMap[M]['params']) {
@@ -20,6 +26,11 @@ const bridge: CodyDesktopBridge = Object.freeze({
     const handler = (_event: Electron.IpcRendererEvent, envelope: EventEnvelope): void => listener(envelope)
     ipcRenderer.on('cody:turn-event', handler)
     return () => ipcRenderer.removeListener('cody:turn-event', handler)
+  },
+  onProcessEvent(listener: (event: ProcessEventEnvelope) => void) {
+    const handler = (_event: Electron.IpcRendererEvent, envelope: ProcessEventEnvelope): void => listener(envelope)
+    ipcRenderer.on('cody:process-event', handler)
+    return () => ipcRenderer.removeListener('cody:process-event', handler)
   },
   onServerStatus(listener: (status: ServerStatus) => void) {
     const handler = (_event: Electron.IpcRendererEvent, status: ServerStatus): void => listener(status)

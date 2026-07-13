@@ -15,7 +15,11 @@ const RPC_METHODS = new Set<RpcMethod>([
   'thread/reference/add',
   'turn/start',
   'turn/cancel',
-  'approval/respond'
+  'approval/respond',
+  'process/list',
+  'process/get',
+  'process/read-output',
+  'process/stop'
 ])
 
 const EMPTY_METHODS = new Set<RpcMethod>(['initialize', 'provider/list', 'project/list', 'thread/list'])
@@ -88,6 +92,27 @@ export function validateRpcInvocation(method: unknown, params: unknown): asserts
       requireKeys(params, ['approval_id', 'approved'])
       requireId(params.approval_id, 'approval_id')
       if (typeof params.approved !== 'boolean') throw new Error("'approved' must be a boolean")
+      break
+    case 'process/list':
+      requireKeys(params, ['thread_id'])
+      requireId(params.thread_id, 'thread_id')
+      break
+    case 'process/get':
+      requireKeys(params, ['thread_id', 'process_id'])
+      requireId(params.thread_id, 'thread_id')
+      requireId(params.process_id, 'process_id')
+      break
+    case 'process/read-output':
+      requireKeys(params, ['thread_id', 'process_id'], ['after_cursor', 'limit'])
+      requireId(params.thread_id, 'thread_id')
+      requireId(params.process_id, 'process_id')
+      requireOptionalUnsignedInteger(params.after_cursor, 'after_cursor', Number.MAX_SAFE_INTEGER)
+      requireOptionalUnsignedInteger(params.limit, 'limit', 256 * 1024, 1)
+      break
+    case 'process/stop':
+      requireKeys(params, ['thread_id', 'process_id'])
+      requireId(params.thread_id, 'thread_id')
+      requireId(params.process_id, 'process_id')
       break
     default:
       throw new Error('Unsupported Cody RPC method')
@@ -199,6 +224,18 @@ function requireString(value: unknown, name: string, maxLength: number, allowEmp
 
 function requireOptionalString(value: unknown, name: string, maxLength: number): void {
   if (value !== undefined) requireString(value, name, maxLength)
+}
+
+function requireOptionalUnsignedInteger(
+  value: unknown,
+  name: string,
+  maximum: number,
+  minimum = 0
+): void {
+  if (value === undefined) return
+  if (!Number.isSafeInteger(value) || (value as number) < minimum || (value as number) > maximum) {
+    throw new Error(`'${name}' must be an integer between ${minimum} and ${maximum}`)
+  }
 }
 
 function requireId(value: unknown, name: string): void {

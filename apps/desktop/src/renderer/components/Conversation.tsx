@@ -145,7 +145,7 @@ function ApprovalCard({
       <header>
         <span className="approval-card__icon"><ShieldAlert aria-hidden="true" size={17} /></span>
         <div>
-          <h3 id={`approval-${event.approval_id}`}>Shell permission required</h3>
+          <h3 id={`approval-${event.approval_id}`}>Command permission required</h3>
           <p>Cody paused before running this command.</p>
         </div>
       </header>

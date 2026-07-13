@@ -1,4 +1,4 @@
-use crate::domain::{MessageId, ProjectId, ThreadId, TurnId, WorkspaceId};
+use crate::domain::{MessageId, ProcessId, ProjectId, ThreadId, TurnId, WorkspaceId};
 
 pub type Result<T, E = CodyError> = std::result::Result<T, E>;
 
@@ -14,6 +14,8 @@ pub enum CodyError {
     TurnNotFound(TurnId),
     #[error("message {0} was not found")]
     MessageNotFound(MessageId),
+    #[error("managed process {0} was not found")]
+    ProcessNotFound(ProcessId),
     #[error("provider '{0}' is not registered")]
     ProviderNotFound(String),
     #[error("tool '{0}' is not registered")]

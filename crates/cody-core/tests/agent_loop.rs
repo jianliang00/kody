@@ -349,7 +349,7 @@ async fn agent_loop_executes_tools_persists_history_and_emits_ordered_events() {
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].temperature, Some(0.2));
     assert_eq!(requests[0].max_output_tokens, Some(1_024));
-    assert_eq!(requests[0].tools.len(), 4);
+    assert_eq!(requests[0].tools.len(), 8);
     assert!(requests[0].messages[0]
         .text_content()
         .contains(&project.id.to_string()));
@@ -546,6 +546,101 @@ async fn shell_waits_for_an_explicit_approval_decision() {
             .unwrap(),
         "approved"
     );
+}
+
+#[tokio::test]
+async fn managed_process_start_uses_command_approval_and_outlives_its_turn() {
+    let (engine, _state) = engine().await;
+    let (thread, workspace, _) = engine
+        .create_thread("managed process approval", None)
+        .await
+        .unwrap();
+    let provider = Arc::new(ScriptedProvider::with_responses(
+        "process-approval-provider",
+        [
+            ModelResponse {
+                content: vec![ModelContent::ToolCall {
+                    id: "process-call".into(),
+                    name: "start_process".into(),
+                    arguments: json!({
+                        "command": "printf started > process-started.txt; exec sleep 30"
+                    }),
+                }],
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+            ModelResponse::text("managed process started"),
+        ],
+    ));
+    engine.providers().register(provider).unwrap();
+    let turn = engine
+        .runtime()
+        .prepare_turn(StartTurn {
+            thread_id: thread.id,
+            message: "start the managed process".into(),
+            references: Vec::new(),
+            provider: "process-approval-provider".into(),
+            model: None,
+            temperature: None,
+            max_output_tokens: None,
+        })
+        .await
+        .unwrap();
+    let mut events = engine.events().subscribe();
+    let runtime = engine.runtime().clone();
+    let turn_id = turn.id;
+    let execution = tokio::spawn(async move {
+        runtime
+            .execute_turn(turn_id, CancellationToken::new())
+            .await
+    });
+
+    let approval_id = loop {
+        let event = tokio::time::timeout(Duration::from_secs(2), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        if let AgentEvent::ApprovalRequested {
+            approval_id, name, ..
+        } = event.event
+        {
+            assert_eq!(name, "start_process");
+            break approval_id;
+        }
+    };
+    assert!(
+        tokio::fs::metadata(workspace.root.join("process-started.txt"))
+            .await
+            .is_err()
+    );
+    engine
+        .runtime()
+        .approvals()
+        .respond(approval_id, true)
+        .await
+        .unwrap();
+
+    let completed = execution.await.unwrap().unwrap();
+    let process = engine.processes().list(thread.id).await.unwrap().remove(0);
+    let marker = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match tokio::fs::read_to_string(workspace.root.join("process-started.txt")).await {
+                Ok(marker) => break marker,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    tokio::task::yield_now().await;
+                }
+                Err(error) => panic!("failed to read process marker: {error}"),
+            }
+        }
+    })
+    .await;
+    let stopped = engine.shutdown().await.unwrap();
+
+    assert_eq!(completed.status, TurnStatus::Completed);
+    assert!(process.status.is_active());
+    assert_eq!(marker.unwrap(), "started");
+    assert_eq!(stopped.len(), 1);
+    assert_eq!(stopped[0].id, process.id);
 }
 
 #[tokio::test]

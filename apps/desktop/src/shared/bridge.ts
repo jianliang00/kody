@@ -1,4 +1,4 @@
-import type { EventEnvelope, RpcMethod, RpcMethodMap, ServerStatus } from './protocol'
+import type { EventEnvelope, ProcessEventEnvelope, RpcMethod, RpcMethodMap, ServerStatus } from './protocol'
 
 export type DesktopCommand =
   | 'new-thread'
@@ -15,6 +15,7 @@ export interface CodyDesktopBridge {
   copyText(text: string): Promise<void>
   getServerStatus(): Promise<ServerStatus>
   onEvent(listener: (event: EventEnvelope) => void): () => void
+  onProcessEvent(listener: (event: ProcessEventEnvelope) => void): () => void
   onServerStatus(listener: (status: ServerStatus) => void): () => void
   onCommand(listener: (command: DesktopCommand) => void): () => void
   windowAction(action: 'minimize' | 'maximize' | 'close'): Promise<void>

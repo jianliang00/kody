@@ -12,7 +12,15 @@ import {
   X
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import type { ContextReference, EventEnvelope, Project, Thread, ThreadSnapshot } from '@shared/protocol'
+import type {
+  ContextReference,
+  EventEnvelope,
+  ProcessOutputPage,
+  Project,
+  Thread,
+  ThreadSnapshot
+} from '@shared/protocol'
+import { BackgroundProcesses } from './BackgroundProcesses'
 import { ReferenceChips } from './ReferenceChips'
 import { referenceKey } from '../lib/references'
 import { collectEffectiveReferences } from '../lib/threadContext'
@@ -24,8 +32,13 @@ interface InspectorProps {
   draftReferences: ContextReference[]
   events: EventEnvelope[]
   open: boolean
+  modal: boolean
+  stoppingProcessIds: Set<string>
+  processOutputCursors: Record<string, number>
   onClose: () => void
   onCopyText: (text: string) => Promise<void>
+  onReadProcessOutput: (processId: string, afterCursor: number, limit: number) => Promise<ProcessOutputPage>
+  onStopProcess: (processId: string) => Promise<void>
 }
 
 function eventCopy(event: EventEnvelope['event']): { label: string; detail?: string; kind: string } | null {
@@ -93,8 +106,13 @@ export function Inspector({
   draftReferences,
   events,
   open,
+  modal,
+  stoppingProcessIds,
+  processOutputCursors,
   onClose,
-  onCopyText
+  onCopyText,
+  onReadProcessOutput,
+  onStopProcess
 }: InspectorProps) {
   const [copied, setCopied] = useState(false)
   const changedFiles = useMemo(() => {
@@ -129,8 +147,8 @@ export function Inspector({
     <aside
       id="thread-inspector"
       className={`inspector${open ? ' inspector--open' : ''}`}
-      role={open ? 'dialog' : undefined}
-      aria-modal={open || undefined}
+      role={open && modal ? 'dialog' : undefined}
+      aria-modal={open && modal ? true : undefined}
       aria-label="Thread context and activity"
     >
       <header className="inspector__header">
@@ -242,6 +260,15 @@ export function Inspector({
             ) : null}
           </div>
         </section>
+
+        <BackgroundProcesses
+          processes={snapshot.processes}
+          projects={projects}
+          stoppingProcessIds={stoppingProcessIds}
+          liveOutputCursors={processOutputCursors}
+          onReadOutput={onReadProcessOutput}
+          onStop={onStopProcess}
+        />
 
         <details className="inspector-section disclosure" open>
           <summary>

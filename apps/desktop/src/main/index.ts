@@ -215,6 +215,7 @@ void app.whenReady().then(() => {
     resourcesPath: process.resourcesPath,
     stateRoot: join(app.getPath('userData'), 'engine'),
     onEvent: (event) => broadcast('cody:turn-event', event),
+    onProcessEvent: (event) => broadcast('cody:process-event', event),
     onStatus: (status) => broadcast('cody:server-status-changed', status),
     onLog: app.isPackaged ? undefined : (line) => console.info(`[cody-app-server] ${line}`)
   })

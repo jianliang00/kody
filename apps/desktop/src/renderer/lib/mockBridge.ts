@@ -3,6 +3,8 @@ import type {
   ChatMessage,
   ContextReference,
   EventEnvelope,
+  ManagedProcess,
+  ProcessEventEnvelope,
   Project,
   RpcMethod,
   RpcMethodMap,
@@ -148,6 +150,7 @@ function createMockStore() {
   const threads = clone(seedThreads)
   const snapshots = new Map<string, ThreadSnapshot>()
   const events = new Set<(event: EventEnvelope) => void>()
+  const processEvents = new Set<(event: ProcessEventEnvelope) => void>()
   const statusListeners = new Set<(status: ServerStatus) => void>()
   const timers = new Map<string, number[]>()
   const approvals = new Map<string, PendingApproval>()
@@ -165,7 +168,8 @@ function createMockStore() {
       },
       messages: thread.id === 'thread-electron' ? clone(seedMessages) : [],
       turns: thread.id === 'thread-electron' ? clone(seedTurns) : [],
-      pending_approvals: []
+      pending_approvals: [],
+      processes: []
     })
   }
 
@@ -181,6 +185,22 @@ function createMockStore() {
       event
     }
     events.forEach((listener) => listener(clone(envelope)))
+  }
+
+  const emitProcess = (
+    process: ManagedProcess,
+    event: ProcessEventEnvelope['event']
+  ): void => {
+    process.last_event_sequence += 1
+    const envelope: ProcessEventEnvelope = {
+      id: id('process-event'),
+      thread_id: process.thread_id,
+      process_id: process.id,
+      sequence: process.last_event_sequence,
+      created_at: new Date().toISOString(),
+      event
+    }
+    processEvents.forEach((listener) => listener(clone(envelope)))
   }
 
   const schedule = (turnId: string, delay: number, callback: () => void): void => {
@@ -290,7 +310,12 @@ function createMockStore() {
       case 'initialize':
         return {
           server_info: { name: 'cody-browser-mock', version: '0.1.0' },
-          capabilities: { approvals: true, context_references: true }
+          capabilities: {
+            approvals: true,
+            context_references: true,
+            managed_processes: true,
+            process_output: true
+          }
         } as RpcMethodMap[M]['result']
       case 'provider/list':
         return { providers: ['echo', 'openai-compatible'] } as RpcMethodMap[M]['result']
@@ -357,7 +382,8 @@ function createMockStore() {
           },
           messages: [],
           turns: [],
-          pending_approvals: []
+          pending_approvals: [],
+          processes: []
         }
         snapshots.set(thread.id, snapshot)
         return {
@@ -504,6 +530,48 @@ function createMockStore() {
         }
         return { resolved: true } as RpcMethodMap[M]['result']
       }
+      case 'process/list': {
+        const input = params as RpcMethodMap['process/list']['params']
+        const snapshot = snapshots.get(input.thread_id)
+        if (!snapshot) throw new Error(`Thread ${input.thread_id} was not found`)
+        return { processes: clone(snapshot.processes) } as RpcMethodMap[M]['result']
+      }
+      case 'process/get': {
+        const input = params as RpcMethodMap['process/get']['params']
+        const snapshot = snapshots.get(input.thread_id)
+        const process = snapshot?.processes.find((item) => item.id === input.process_id)
+        if (!process) throw new Error(`Process ${input.process_id} was not found in this Thread`)
+        return clone(process) as RpcMethodMap[M]['result']
+      }
+      case 'process/read-output': {
+        const input = params as RpcMethodMap['process/read-output']['params']
+        const snapshot = snapshots.get(input.thread_id)
+        const process = snapshot?.processes.find((item) => item.id === input.process_id)
+        if (!process) throw new Error(`Process ${input.process_id} was not found in this Thread`)
+        const requestedCursor = input.after_cursor ?? process.output_start_cursor
+        return {
+          process_id: process.id,
+          requested_cursor: requestedCursor,
+          start_cursor: Math.max(requestedCursor, process.output_start_cursor),
+          next_cursor: process.output_end_cursor,
+          end_cursor: process.output_end_cursor,
+          truncated: requestedCursor < process.output_start_cursor,
+          has_more: false,
+          chunks: []
+        } as RpcMethodMap[M]['result']
+      }
+      case 'process/stop': {
+        const input = params as RpcMethodMap['process/stop']['params']
+        const snapshot = snapshots.get(input.thread_id)
+        const process = snapshot?.processes.find((item) => item.id === input.process_id)
+        if (!process) throw new Error(`Process ${input.process_id} was not found in this Thread`)
+        if (process.status === 'starting' || process.status === 'running' || process.status === 'stopping') {
+          process.status = 'stopped'
+          process.completed_at = new Date().toISOString()
+          emitProcess(process, { type: 'stopped', forced: false })
+        }
+        return clone(process) as RpcMethodMap[M]['result']
+      }
       default:
         throw new Error(`Browser mock does not implement ${String(method)}`)
     }
@@ -515,6 +583,7 @@ function createMockStore() {
     threads,
     snapshots,
     events,
+    processEvents,
     statusListeners
   }
 }
@@ -534,6 +603,10 @@ export function createMockBridge(): CodyDesktopBridge {
     onEvent: (listener) => {
       store.events.add(listener)
       return () => store.events.delete(listener)
+    },
+    onProcessEvent: (listener) => {
+      store.processEvents.add(listener)
+      return () => store.processEvents.delete(listener)
     },
     onServerStatus: (listener) => {
       store.statusListeners.add(listener)
@@ -566,6 +639,7 @@ function createDisconnectedBridge(): CodyDesktopBridge {
     pickDirectory: async () => null,
     getServerStatus: async () => status,
     onEvent: () => () => undefined,
+    onProcessEvent: () => () => undefined,
     onServerStatus: (listener) => {
       listener(status)
       return () => undefined

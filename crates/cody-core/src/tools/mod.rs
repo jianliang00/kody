@@ -5,6 +5,7 @@
 //! thread; project access is checked before any potentially mutating action.
 
 mod builtins;
+mod processes;
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -14,11 +15,13 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    domain::{Project, ProjectAccess, ProjectId, Workspace},
+    domain::{Project, ProjectAccess, ProjectId, ThreadId, TurnId, Workspace},
     error::{CodyError, Result},
+    process::ProcessManager,
 };
 
 pub use builtins::{ListDirectoryTool, ReadFileTool, ShellTool, WriteFileTool};
+pub use processes::{ListProcessesTool, ReadProcessOutputTool, StartProcessTool, StopProcessTool};
 
 /// A provider-neutral description of a tool exposed to a model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -26,6 +29,16 @@ pub struct ToolDefinition {
     pub name: String,
     pub description: String,
     pub input_schema: Value,
+}
+
+/// Security-relevant behavior declared by a tool. Runtime approval policy is
+/// based on this semantic risk instead of fragile tool-name allowlists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolRisk {
+    ReadOnly,
+    FilesystemWrite,
+    CommandExecution,
+    ProcessControl,
 }
 
 impl ToolDefinition {
@@ -109,6 +122,8 @@ impl ProjectBinding {
 /// Filesystem roots and cancellation state available during a tool call.
 #[derive(Debug, Clone)]
 pub struct ToolContext {
+    pub thread_id: ThreadId,
+    pub turn_id: TurnId,
     pub workspace: Workspace,
     pub projects: Vec<ProjectBinding>,
     pub cancellation_token: CancellationToken,
@@ -116,11 +131,15 @@ pub struct ToolContext {
 
 impl ToolContext {
     pub fn new(
+        thread_id: ThreadId,
+        turn_id: TurnId,
         workspace: Workspace,
         projects: Vec<ProjectBinding>,
         cancellation_token: CancellationToken,
     ) -> Self {
         Self {
+            thread_id,
+            turn_id,
             workspace,
             projects,
             cancellation_token,
@@ -147,6 +166,19 @@ impl ToolContext {
 pub trait Tool: Send + Sync {
     fn definition(&self) -> ToolDefinition;
 
+    fn risk(&self) -> ToolRisk {
+        ToolRisk::ReadOnly
+    }
+
+    fn approval_reason(&self) -> Option<&'static str> {
+        match self.risk() {
+            ToolRisk::CommandExecution => {
+                Some("This tool starts an arbitrary command outside an OS filesystem sandbox.")
+            }
+            _ => None,
+        }
+    }
+
     async fn execute(&self, call: &ToolCall, context: &ToolContext) -> Result<ToolResult>;
 }
 
@@ -168,6 +200,14 @@ impl ToolRegistry {
         registry.register(WriteFileTool)?;
         registry.register(ListDirectoryTool)?;
         registry.register(ShellTool)?;
+        Ok(registry)
+    }
+
+    /// Construct the complete tool set used by the app runtime, including
+    /// long-lived process lifecycle tools backed by one shared manager.
+    pub fn with_builtins_and_processes(manager: Arc<ProcessManager>) -> Result<Self> {
+        let mut registry = Self::with_builtins()?;
+        processes::register_process_tools(&mut registry, manager)?;
         Ok(registry)
     }
 
@@ -216,6 +256,18 @@ impl ToolRegistry {
         self.tools.values().map(|tool| tool.definition()).collect()
     }
 
+    pub fn risk(&self, name: &str) -> Result<ToolRisk> {
+        self.get(name)
+            .map(|tool| tool.risk())
+            .ok_or_else(|| CodyError::ToolNotFound(name.to_owned()))
+    }
+
+    pub fn approval_reason(&self, name: &str) -> Result<Option<&'static str>> {
+        self.get(name)
+            .map(|tool| tool.approval_reason())
+            .ok_or_else(|| CodyError::ToolNotFound(name.to_owned()))
+    }
+
     pub fn len(&self) -> usize {
         self.tools.len()
     }
@@ -235,6 +287,8 @@ impl ToolRegistry {
 
 #[cfg(test)]
 mod tests {
+    use crate::{process::ProcessManagerConfig, store::InMemoryStore};
+
     use super::*;
 
     #[test]
@@ -253,6 +307,38 @@ mod tests {
         assert!(definitions
             .iter()
             .all(|definition| definition.input_schema.is_object()));
+    }
+
+    #[test]
+    fn app_tool_definitions_include_the_complete_process_lifecycle() {
+        let log_root = tempfile::tempdir().unwrap();
+        let manager = Arc::new(
+            ProcessManager::new(
+                Arc::new(InMemoryStore::default()),
+                ProcessManagerConfig::new(log_root.path()),
+            )
+            .unwrap(),
+        );
+        let registry = ToolRegistry::with_builtins_and_processes(manager).unwrap();
+        let names = registry
+            .definitions()
+            .into_iter()
+            .map(|definition| definition.name)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            names,
+            vec![
+                "list_directory",
+                "list_processes",
+                "read_file",
+                "read_process_output",
+                "shell",
+                "start_process",
+                "stop_process",
+                "write_file",
+            ]
+        );
     }
 
     #[tokio::test]

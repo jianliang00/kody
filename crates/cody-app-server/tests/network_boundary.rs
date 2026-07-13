@@ -1,8 +1,11 @@
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, collections::HashSet, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context, Result};
 use cody_app_server::{app, AppState};
-use cody_core::{provider::EchoProvider, CodyEngine, EngineConfig};
+use cody_core::{
+    process::StartProcessRequest, provider::EchoProvider, CodyEngine, EngineConfig, ProcessOrigin,
+    StartTurn,
+};
 use futures_util::{SinkExt, StreamExt};
 use reqwest::{header, StatusCode};
 use serde_json::{json, Value};
@@ -17,6 +20,7 @@ use tokio_tungstenite::{
     },
     MaybeTlsStream, WebSocketStream,
 };
+use tokio_util::sync::CancellationToken;
 
 const TOKEN: &str = "integration-test-token";
 const ALLOWED_ORIGIN: &str = "https://allowed.example";
@@ -26,6 +30,7 @@ type TestSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 struct TestServer {
     http_base: String,
     ws_url: String,
+    engine: Arc<CodyEngine>,
     task: JoinHandle<()>,
     _state_root: TempDir,
 }
@@ -42,7 +47,11 @@ impl TestServer {
             .providers()
             .register(Arc::new(EchoProvider::default()))?;
 
-        let state = AppState::with_auth(engine, TOKEN, HashSet::from([ALLOWED_ORIGIN.to_owned()]));
+        let state = AppState::with_auth(
+            engine.clone(),
+            TOKEN,
+            HashSet::from([ALLOWED_ORIGIN.to_owned()]),
+        );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
         let task = tokio::spawn(async move {
@@ -54,6 +63,7 @@ impl TestServer {
         Ok(Self {
             http_base: format!("http://{address}"),
             ws_url: format!("ws://{address}/v1/ws"),
+            engine,
             task,
             _state_root: state_root,
         })
@@ -239,19 +249,22 @@ async fn websocket_create_and_start_is_idempotent_and_streams_from_the_first_eve
     };
     send_json(&mut socket, create("create-first")).await?;
 
-    let mut thread_id = None;
-    let mut turn_id = None;
+    // create-and-start subscribes atomically, but the acknowledgement frame is
+    // always sent before execution begins and any event can be observed.
+    let created = receive_json(&mut socket).await?;
+    assert_eq!(created["id"], "create-first");
+    let thread_id = created["result"]["thread"]["id"]
+        .as_str()
+        .context("create-and-start returned no Thread")?
+        .to_owned();
+    let turn_id = created["result"]["turn"]["id"]
+        .as_str()
+        .context("create-and-start returned no Turn")?
+        .to_owned();
     let mut event_types = Vec::new();
     let mut last_sequence = 0_u64;
     for _ in 0..48 {
         let message = receive_json(&mut socket).await?;
-        if message["id"] == "create-first" {
-            thread_id = message["result"]["thread"]["id"]
-                .as_str()
-                .map(str::to_owned);
-            turn_id = message["result"]["turn"]["id"].as_str().map(str::to_owned);
-            continue;
-        }
         if message["method"] != "turn/event" {
             continue;
         }
@@ -263,12 +276,10 @@ async fn websocket_create_and_start_is_idempotent_and_streams_from_the_first_eve
         if let Some(event_type) = message["params"]["event"]["type"].as_str() {
             event_types.push(event_type.to_owned());
         }
-        if event_types.iter().any(|event| event == "thread_updated") && thread_id.is_some() {
+        if event_types.iter().any(|event| event == "thread_updated") {
             break;
         }
     }
-    let thread_id = thread_id.context("create-and-start returned no Thread")?;
-    let turn_id = turn_id.context("create-and-start returned no Turn")?;
     assert_eq!(
         event_types.first().map(String::as_str),
         Some("turn_started")
@@ -483,6 +494,196 @@ async fn authorized_websocket_runs_echo_turn_and_streams_subscribed_events() -> 
     Ok(())
 }
 
+#[tokio::test]
+async fn websocket_exposes_managed_process_events_output_and_stop() -> Result<()> {
+    let server = TestServer::start().await?;
+    let (thread, workspace, _) = server
+        .engine
+        .create_thread("Process network test", None)
+        .await?;
+    let turn = server
+        .engine
+        .runtime()
+        .prepare_turn(StartTurn {
+            thread_id: thread.id,
+            message: "prepare a durable process origin".into(),
+            references: Vec::new(),
+            provider: "echo".into(),
+            model: None,
+            temperature: None,
+            max_output_tokens: None,
+        })
+        .await?;
+    server
+        .engine
+        .runtime()
+        .execute_turn(turn.id, CancellationToken::new())
+        .await?;
+
+    let mut request = server.ws_url.clone().into_client_request()?;
+    request.headers_mut().insert(
+        "Authorization",
+        HeaderValue::from_str(&format!("Bearer {TOKEN}"))?,
+    );
+    let (mut socket, _) = connect_async(request).await?;
+    send_json(
+        &mut socket,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "subscribe-process-thread",
+            "method": "thread/get",
+            "params": { "thread_id": thread.id }
+        }),
+    )
+    .await?;
+    let subscribed = receive_response(&mut socket, "subscribe-process-thread").await?;
+    assert_eq!(
+        subscribed["result"]["processes"].as_array().map(Vec::len),
+        Some(0)
+    );
+
+    let process = server
+        .engine
+        .processes()
+        .start(StartProcessRequest {
+            thread_id: thread.id,
+            origin: ProcessOrigin {
+                turn_id: turn.id,
+                tool_call_id: "network-process".into(),
+            },
+            project_id: None,
+            command: "printf 'ready\\n'; sleep 30".into(),
+            cwd: workspace.root.clone(),
+            environment: BTreeMap::from([
+                ("HOME".into(), workspace.root.display().to_string()),
+                ("PATH".into(), "/usr/bin:/bin".into()),
+                ("PWD".into(), workspace.root.display().to_string()),
+            ]),
+        })
+        .await?;
+
+    let mut last_sequence = 0_u64;
+    let mut saw_started = false;
+    let mut saw_output = false;
+    timeout(Duration::from_secs(5), async {
+        while !saw_started || !saw_output {
+            let message = receive_json(&mut socket).await?;
+            if message["method"] != "process/event" {
+                continue;
+            }
+            assert_eq!(message["params"]["thread_id"], thread.id.to_string());
+            assert_eq!(message["params"]["process_id"], process.id.to_string());
+            let sequence = message["params"]["sequence"]
+                .as_u64()
+                .context("process/event had no sequence")?;
+            assert!(sequence > last_sequence);
+            last_sequence = sequence;
+            match message["params"]["event"]["type"].as_str() {
+                Some("started") => saw_started = true,
+                Some("output") => {
+                    assert_eq!(message["params"]["event"]["cursor"], 0);
+                    assert_eq!(message["params"]["event"]["next_cursor"], 6);
+                    assert!(message["params"]["event"].get("bytes").is_none());
+                    saw_output = true;
+                }
+                _ => {}
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .context("timed out waiting for process events")??;
+
+    send_json(
+        &mut socket,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "list-processes",
+            "method": "process/list",
+            "params": { "thread_id": thread.id }
+        }),
+    )
+    .await?;
+    let listed = receive_response(&mut socket, "list-processes").await?;
+    assert_eq!(
+        listed["result"]["processes"][0]["id"],
+        process.id.to_string()
+    );
+    assert_eq!(listed["result"]["processes"][0]["status"], "running");
+
+    send_json(
+        &mut socket,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "read-process-output",
+            "method": "process/read-output",
+            "params": {
+                "thread_id": thread.id,
+                "process_id": process.id,
+                "after_cursor": 0,
+                "limit": 1024
+            }
+        }),
+    )
+    .await?;
+    let output = receive_response(&mut socket, "read-process-output").await?;
+    assert_eq!(output["result"]["chunks"][0]["text"], "ready\n");
+    assert_eq!(output["result"]["has_more"], false);
+
+    send_json(
+        &mut socket,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "stop-process",
+            "method": "process/stop",
+            "params": { "thread_id": thread.id, "process_id": process.id }
+        }),
+    )
+    .await?;
+    let mut stop_response = None;
+    let mut saw_stopping = false;
+    let mut saw_stopped = false;
+    timeout(Duration::from_secs(5), async {
+        while stop_response.is_none() || !saw_stopping || !saw_stopped {
+            let message = receive_json(&mut socket).await?;
+            if message["id"] == "stop-process" {
+                stop_response = Some(message);
+                continue;
+            }
+            if message["method"] != "process/event"
+                || message["params"]["process_id"] != process.id.to_string()
+            {
+                continue;
+            }
+            match message["params"]["event"]["type"].as_str() {
+                Some("stopping") => saw_stopping = true,
+                Some("stopped") => saw_stopped = true,
+                _ => {}
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .context("timed out waiting for process stop")??;
+    assert_eq!(stop_response.unwrap()["result"]["status"], "stopped");
+
+    send_json(
+        &mut socket,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "process-thread-snapshot",
+            "method": "thread/get",
+            "params": { "thread_id": thread.id }
+        }),
+    )
+    .await?;
+    let snapshot = receive_response(&mut socket, "process-thread-snapshot").await?;
+    assert_eq!(snapshot["result"]["processes"][0]["status"], "stopped");
+
+    socket.close(None).await?;
+    Ok(())
+}
+
 fn assert_json_content_type(response: &reqwest::Response) {
     let content_type = response
         .headers()
@@ -514,6 +715,15 @@ async fn receive_json(socket: &mut TestSocket) -> Result<Value> {
             Message::Ping(payload) => socket.send(Message::Pong(payload)).await?,
             Message::Pong(_) | Message::Frame(_) => {}
             Message::Close(frame) => bail!("websocket closed unexpectedly: {frame:?}"),
+        }
+    }
+}
+
+async fn receive_response(socket: &mut TestSocket, id: &str) -> Result<Value> {
+    loop {
+        let message = receive_json(socket).await?;
+        if message["id"] == id {
+            return Ok(message);
         }
     }
 }

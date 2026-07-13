@@ -41,9 +41,9 @@ pub struct AgentRuntimeConfig {
     pub max_steps: usize,
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
-    /// Shell is not a filesystem sandbox, so interactive runtimes require an
-    /// explicit client decision before each shell call by default.
-    pub require_shell_approval: bool,
+    /// Arbitrary command execution is not an OS sandbox boundary, so
+    /// interactive runtimes require an explicit client decision by default.
+    pub require_command_approval: bool,
 }
 
 impl Default for AgentRuntimeConfig {
@@ -52,7 +52,7 @@ impl Default for AgentRuntimeConfig {
             max_steps: 24,
             temperature: None,
             max_output_tokens: None,
-            require_shell_approval: true,
+            require_command_approval: true,
         }
     }
 }
@@ -421,8 +421,13 @@ impl AgentRuntime {
                 .context_builder
                 .build(self.store.as_ref(), turn)
                 .await?;
-            let tool_context =
-                ToolContext::new(resolved.workspace, resolved.projects, cancellation.clone());
+            let tool_context = ToolContext::new(
+                turn.thread_id,
+                turn.id,
+                resolved.workspace,
+                resolved.projects,
+                cancellation.clone(),
+            );
             let request = ModelRequest {
                 model: turn.model.clone(),
                 messages: resolved.messages,
@@ -468,14 +473,16 @@ impl AgentRuntime {
 
             for call in tool_calls {
                 check_cancelled(&cancellation)?;
-                if call.name == "shell" && self.config.require_shell_approval {
+                let requires_approval = self.config.require_command_approval
+                    && self.tools.risk(&call.name)? == crate::tools::ToolRisk::CommandExecution;
+                if requires_approval {
                     let approved = self
                         .request_tool_approval(turn, &call, &cancellation, &emitter)
                         .await?;
                     if !approved {
                         let result = ToolResult::error(
                             &call,
-                            "shell execution was denied by the user",
+                            "command execution was denied by the user",
                             json!({ "error_kind": "approval_denied" }),
                         );
                         emitter.emit(AgentEvent::ToolCompleted {
@@ -528,7 +535,11 @@ impl AgentRuntime {
         emitter: &TurnEmitter,
     ) -> Result<bool> {
         let approval_id = ApprovalId::new();
-        let reason = "shell commands run outside an OS filesystem sandbox".to_owned();
+        let reason = self
+            .tools
+            .approval_reason(&call.name)?
+            .unwrap_or("This tool requires explicit approval.")
+            .to_owned();
         let receiver = self
             .approvals
             .register(PendingApproval {

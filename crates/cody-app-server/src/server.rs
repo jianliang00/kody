@@ -20,7 +20,7 @@ use cody_core::{
 };
 use futures_util::{FutureExt, SinkExt, StreamExt};
 use serde_json::{json, Value};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
@@ -131,9 +131,19 @@ impl AppState {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct TurnManager {
     active: Arc<Mutex<HashMap<TurnId, CancellationToken>>>,
+    idle: Arc<Notify>,
+}
+
+impl Default for TurnManager {
+    fn default() -> Self {
+        Self {
+            active: Arc::new(Mutex::new(HashMap::new())),
+            idle: Arc::new(Notify::new()),
+        }
+    }
 }
 
 impl TurnManager {
@@ -164,6 +174,7 @@ impl TurnManager {
         cancellation: CancellationToken,
     ) {
         let active = self.active.clone();
+        let idle = self.idle.clone();
         tokio::spawn(async move {
             let execution =
                 std::panic::AssertUnwindSafe(runtime.execute_turn(turn_id, cancellation))
@@ -175,6 +186,7 @@ impl TurnManager {
                 Ok(Ok(_)) => {}
             }
             active.lock().await.remove(&turn_id);
+            idle.notify_waiters();
         });
     }
 
@@ -185,6 +197,32 @@ impl TurnManager {
             true
         } else {
             false
+        }
+    }
+
+    /// Cancel every active Turn and wait until each execution task has
+    /// persisted its terminal state. This is the app-server shutdown barrier.
+    pub async fn cancel_all_and_wait(&self, timeout: std::time::Duration) -> bool {
+        let cancellations = self
+            .active
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for cancellation in cancellations {
+            cancellation.cancel();
+        }
+
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let notified = self.idle.notified();
+            if self.active.lock().await.is_empty() {
+                return true;
+            }
+            if tokio::time::timeout_at(deadline, notified).await.is_err() {
+                return self.active.lock().await.is_empty();
+            }
         }
     }
 }
@@ -310,6 +348,7 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 async fn websocket_session(socket: WebSocket, state: AppState) {
     let dispatcher = RpcDispatcher::new(state.clone());
     let mut events = state.engine.events().subscribe();
+    let mut process_events = state.engine.processes().subscribe();
     let (mut sender, mut receiver) = socket.split();
     let mut subscriptions = HashSet::<ThreadId>::new();
 
@@ -319,26 +358,42 @@ async fn websocket_session(socket: WebSocket, state: AppState) {
                 let Some(incoming) = incoming else { break };
                 match incoming {
                     Ok(WsMessage::Text(text)) => {
-                        let response = match serde_json::from_str::<RpcRequest>(text.as_str()) {
+                        let outcome = match serde_json::from_str::<RpcRequest>(text.as_str()) {
                             Ok(request) => handle_ws_request(&dispatcher, &state, request, &mut subscriptions).await,
-                            Err(error) => Some(RpcResponse::error(Value::Null, RpcError::parse(error))),
+                            Err(error) => WsRequestOutcome::response(RpcResponse::error(Value::Null, RpcError::parse(error))),
                         };
-                        if let Some(response) = response {
-                            if send_json(&mut sender, &response).await.is_err() {
-                                break;
-                            }
+                        let send_failed = if let Some(response) = outcome.response {
+                            send_json(&mut sender, &response).await.is_err()
+                        } else {
+                            false
+                        };
+                        if let Some((turn_id, cancellation)) = outcome.prepared {
+                            state.turns.execute_prepared(
+                                state.engine.runtime().clone(),
+                                turn_id,
+                                cancellation,
+                            );
                         }
+                        if send_failed { break; }
                     }
                     Ok(WsMessage::Binary(bytes)) => {
-                        let response = match serde_json::from_slice::<RpcRequest>(&bytes) {
+                        let outcome = match serde_json::from_slice::<RpcRequest>(&bytes) {
                             Ok(request) => handle_ws_request(&dispatcher, &state, request, &mut subscriptions).await,
-                            Err(error) => Some(RpcResponse::error(Value::Null, RpcError::parse(error))),
+                            Err(error) => WsRequestOutcome::response(RpcResponse::error(Value::Null, RpcError::parse(error))),
                         };
-                        if let Some(response) = response {
-                            if send_json(&mut sender, &response).await.is_err() {
-                                break;
-                            }
+                        let send_failed = if let Some(response) = outcome.response {
+                            send_json(&mut sender, &response).await.is_err()
+                        } else {
+                            false
+                        };
+                        if let Some((turn_id, cancellation)) = outcome.prepared {
+                            state.turns.execute_prepared(
+                                state.engine.runtime().clone(),
+                                turn_id,
+                                cancellation,
+                            );
                         }
+                        if send_failed { break; }
                     }
                     Ok(WsMessage::Ping(payload)) => {
                         if sender.send(WsMessage::Pong(payload)).await.is_err() {
@@ -369,7 +424,36 @@ async fn websocket_session(socket: WebSocket, state: AppState) {
                         let notification = json!({
                             "jsonrpc": "2.0",
                             "method": "server/event_gap",
-                            "params": { "skipped": skipped },
+                            "params": { "stream": "turn", "skipped": skipped },
+                        });
+                        if send_json(&mut sender, &notification).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            event = process_events.recv() => {
+                match event {
+                    Ok(event) => {
+                        if !subscriptions.contains(&event.thread_id) {
+                            continue;
+                        }
+                        let notification = json!({
+                            "jsonrpc": "2.0",
+                            "method": "process/event",
+                            "params": event,
+                        });
+                        if send_json(&mut sender, &notification).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        warn!(skipped, "websocket client lagged behind the process event stream");
+                        let notification = json!({
+                            "jsonrpc": "2.0",
+                            "method": "server/event_gap",
+                            "params": { "stream": "process", "skipped": skipped },
                         });
                         if send_json(&mut sender, &notification).await.is_err() {
                             break;
@@ -382,16 +466,39 @@ async fn websocket_session(socket: WebSocket, state: AppState) {
     }
 }
 
+struct WsRequestOutcome {
+    response: Option<RpcResponse>,
+    prepared: Option<(TurnId, CancellationToken)>,
+}
+
+impl WsRequestOutcome {
+    fn response(response: RpcResponse) -> Self {
+        Self {
+            response: Some(response),
+            prepared: None,
+        }
+    }
+
+    fn from_response(response: Option<RpcResponse>) -> Self {
+        Self {
+            response,
+            prepared: None,
+        }
+    }
+}
+
 async fn handle_ws_request(
     dispatcher: &RpcDispatcher,
     state: &AppState,
     request: RpcRequest,
     subscriptions: &mut HashSet<ThreadId>,
-) -> Option<RpcResponse> {
+) -> WsRequestOutcome {
     if request.jsonrpc != "2.0" {
-        return request
-            .id
-            .map(|id| RpcResponse::error(id, RpcError::invalid_request("jsonrpc must be '2.0'")));
+        return WsRequestOutcome::from_response(
+            request.id.map(|id| {
+                RpcResponse::error(id, RpcError::invalid_request("jsonrpc must be '2.0'"))
+            }),
+        );
     }
     if matches!(
         request.method.as_str(),
@@ -399,7 +506,7 @@ async fn handle_ws_request(
     ) {
         let id = request.id.clone();
         let result = dispatcher.create_and_prepare_thread(request.params).await;
-        let result = match result {
+        let (result, prepared) = match result {
             Ok((value, prepared)) => {
                 let thread_id = value
                     .get("thread")
@@ -410,24 +517,20 @@ async fn handle_ws_request(
                 match thread_id {
                     Ok(thread_id) => {
                         subscriptions.insert(thread_id);
-                        if let Some((turn_id, cancellation)) = prepared {
-                            state.turns.execute_prepared(
-                                state.engine.runtime().clone(),
-                                turn_id,
-                                cancellation,
-                            );
-                        }
-                        Ok(value)
+                        (Ok(value), prepared)
                     }
-                    Err(error) => Err(error),
+                    Err(error) => (Err(error), None),
                 }
             }
-            Err(error) => Err(error),
+            Err(error) => (Err(error), None),
         };
-        return id.map(|id| match result {
-            Ok(value) => RpcResponse::success(id, value),
-            Err(error) => RpcResponse::error(id, error),
-        });
+        return WsRequestOutcome {
+            response: id.map(|id| match result {
+                Ok(value) => RpcResponse::success(id, value),
+                Err(error) => RpcResponse::error(id, error),
+            }),
+            prepared,
+        };
     }
     if matches!(
         request.method.as_str(),
@@ -446,10 +549,10 @@ async fn handle_ws_request(
             },
             Err(error) => Err(error),
         };
-        return id.map(|id| match result {
+        return WsRequestOutcome::from_response(id.map(|id| match result {
             Ok(value) => RpcResponse::success(id, value),
             Err(error) => RpcResponse::error(id, error),
-        });
+        }));
     }
     if matches!(
         request.method.as_str(),
@@ -462,10 +565,10 @@ async fn handle_ws_request(
                 let removed = subscriptions.remove(&params.thread_id);
                 json!({ "subscribed": false, "removed": removed, "thread_id": params.thread_id })
             });
-        return id.map(|id| match result {
+        return WsRequestOutcome::from_response(id.map(|id| match result {
             Ok(value) => RpcResponse::success(id, value),
             Err(error) => RpcResponse::error(id, error),
-        });
+        }));
     }
 
     // Starting or inspecting a thread implicitly subscribes this connection.
@@ -477,6 +580,14 @@ async fn handle_ws_request(
             | "thread.get"
             | "thread/messages"
             | "thread.messages"
+            | "process/list"
+            | "process.list"
+            | "process/get"
+            | "process.get"
+            | "process/read-output"
+            | "process.read-output"
+            | "process/stop"
+            | "process.stop"
     ) {
         if let Some(thread_id) = request
             .params
@@ -487,7 +598,7 @@ async fn handle_ws_request(
             subscriptions.insert(thread_id);
         }
     }
-    dispatcher.handle(request).await
+    WsRequestOutcome::from_response(dispatcher.handle(request).await)
 }
 
 #[derive(Debug, serde::Deserialize)]

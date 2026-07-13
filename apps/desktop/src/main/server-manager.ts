@@ -7,7 +7,13 @@ import { request } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import WebSocket, { type RawData } from 'ws'
 
-import type { EventEnvelope, RpcMethod, RpcMethodMap, ServerStatus } from '../shared/protocol'
+import type {
+  EventEnvelope,
+  ProcessEventEnvelope,
+  RpcMethod,
+  RpcMethodMap,
+  ServerStatus
+} from '../shared/protocol'
 
 const HEALTH_TIMEOUT_MS = 15_000
 const RPC_TIMEOUT_MS = 60_000
@@ -32,6 +38,7 @@ interface ServerManagerOptions {
   resourcesPath: string
   stateRoot: string
   onEvent(event: EventEnvelope): void
+  onProcessEvent(event: ProcessEventEnvelope): void
   onStatus(status: ServerStatus): void
   onLog?(line: string): void
 }
@@ -108,11 +115,20 @@ export class CodyServerManager {
     if (method === 'thread/create-and-start') {
       const threadId = (result as { thread?: { id?: unknown } }).thread?.id
       if (typeof threadId === 'string') {
+        // The WebSocket endpoint atomically subscribes this connection before
+        // it acknowledges create-and-start. Keep the local set only so a new
+        // socket can restore that subscription after reconnecting.
         this.subscriptions.add(threadId)
-        await this.sendRpc('thread/subscribe', { thread_id: threadId })
       }
     }
-    if (method === 'thread/get' || method === 'turn/start') {
+    if (
+      method === 'thread/get'
+      || method === 'turn/start'
+      || method === 'process/list'
+      || method === 'process/get'
+      || method === 'process/read-output'
+      || method === 'process/stop'
+    ) {
       const threadId = (params as { thread_id?: unknown }).thread_id
       if (typeof threadId === 'string') this.subscriptions.add(threadId)
     }
@@ -270,6 +286,10 @@ export class CodyServerManager {
 
     if (message.method === 'turn/event' && isEventEnvelope(message.params)) {
       this.options.onEvent(message.params)
+      return
+    }
+    if (message.method === 'process/event' && isProcessEventEnvelope(message.params)) {
+      this.options.onProcessEvent(message.params)
       return
     }
     if (message.method === 'server/event_gap') {
@@ -526,7 +546,14 @@ async function terminateProcessTree(child: ChildProcess): Promise<void> {
   } catch {
     child.kill('SIGTERM')
   }
-  await Promise.race([exited, delay(1_500)])
+  // The Rust server drains active Turns and asks every managed process group
+  // to terminate before exiting. Give that graceful barrier time to finish;
+  // SIGKILL remains the final fallback for a wedged server.
+  // Rust reserves up to 5s for Turn cancellation, 3s for process-group
+  // escalation, 2s for output-pipe drain detection, and 2s for connection
+  // draining. Leave margin around the complete shutdown contract before the
+  // desktop applies SIGKILL; parent-death guardians remain the crash fallback.
+  await Promise.race([exited, delay(15_000)])
   if (child.exitCode === null && child.signalCode === null) {
     try {
       process.kill(-child.pid, 'SIGKILL')
@@ -545,6 +572,52 @@ function isEventEnvelope(value: unknown): value is EventEnvelope {
     && typeof value.sequence === 'number'
     && typeof value.created_at === 'string'
     && typeof value.event.type === 'string'
+}
+
+function isProcessEventEnvelope(value: unknown): value is ProcessEventEnvelope {
+  if (!isRecord(value) || !isRecord(value.event)) return false
+  const envelopeFieldsAreValid = typeof value.id === 'string'
+    && typeof value.thread_id === 'string'
+    && typeof value.process_id === 'string'
+    && Number.isSafeInteger(value.sequence)
+    && (value.sequence as number) > 0
+    && typeof value.created_at === 'string'
+  if (!envelopeFieldsAreValid) return false
+
+  const event = value.event
+  switch (event.type) {
+    case 'started':
+      return Number.isSafeInteger(event.pid)
+        && (event.pid as number) > 0
+        && (event.pid as number) <= 0xffff_ffff
+        && (event.process_group_id === undefined || (
+          Number.isSafeInteger(event.process_group_id)
+          && (event.process_group_id as number) >= -0x8000_0000
+          && (event.process_group_id as number) <= 0x7fff_ffff
+        ))
+    case 'output':
+      if (
+        (event.stream !== 'stdout' && event.stream !== 'stderr')
+        || !Number.isSafeInteger(event.cursor)
+        || !Number.isSafeInteger(event.next_cursor)
+        || (event.cursor as number) < 0
+        || (event.next_cursor as number) < (event.cursor as number)
+      ) return false
+      return true
+    case 'stopping':
+      return true
+    case 'exited':
+      return event.exit_code === undefined || Number.isSafeInteger(event.exit_code)
+    case 'stopped':
+      return (event.exit_code === undefined || Number.isSafeInteger(event.exit_code))
+        && typeof event.forced === 'boolean'
+    case 'failed':
+      return typeof event.error === 'string'
+    case 'lost':
+      return typeof event.reason === 'string'
+    default:
+      return false
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

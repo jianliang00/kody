@@ -14,6 +14,7 @@ use crate::{
     },
     error::{CodyError, Result},
     event::EventHub,
+    process::{ProcessManager, ProcessManagerConfig},
     provider::ProviderRegistry,
     runtime::{AgentRuntime, AgentRuntimeConfig},
     store::{InMemoryStore, JsonFileStore, StateStore},
@@ -27,6 +28,9 @@ pub struct EngineConfig {
     pub state_root: PathBuf,
     pub event_buffer: usize,
     pub agent: AgentRuntimeConfig,
+    /// Optional process-manager override. When omitted, durable process logs
+    /// live below `state_root/processes` with the standard resource limits.
+    pub process_manager: Option<ProcessManagerConfig>,
 }
 
 impl EngineConfig {
@@ -44,18 +48,23 @@ impl EngineConfig {
             })
             .transpose()?
             .unwrap_or(24);
-        let require_shell_approval = match std::env::var("CODY_REQUIRE_SHELL_APPROVAL") {
+        let approval_value =
+            std::env::var("CODY_REQUIRE_COMMAND_APPROVAL").or_else(|error| match error {
+                std::env::VarError::NotPresent => std::env::var("CODY_REQUIRE_SHELL_APPROVAL"),
+                other => Err(other),
+            });
+        let require_command_approval = match approval_value {
             Ok(value) if value == "0" || value.eq_ignore_ascii_case("false") => false,
             Ok(value) if value == "1" || value.eq_ignore_ascii_case("true") => true,
             Ok(_) => {
                 return Err(CodyError::InvalidInput(
-                    "CODY_REQUIRE_SHELL_APPROVAL must be true/false or 1/0".into(),
+                    "CODY_REQUIRE_COMMAND_APPROVAL must be true/false or 1/0".into(),
                 ))
             }
             Err(std::env::VarError::NotPresent) => true,
             Err(std::env::VarError::NotUnicode(_)) => {
                 return Err(CodyError::InvalidInput(
-                    "CODY_REQUIRE_SHELL_APPROVAL is not Unicode".into(),
+                    "CODY_REQUIRE_COMMAND_APPROVAL is not Unicode".into(),
                 ))
             }
         };
@@ -71,9 +80,10 @@ impl EngineConfig {
             event_buffer: 1_024,
             agent: AgentRuntimeConfig {
                 max_steps,
-                require_shell_approval,
+                require_command_approval,
                 ..AgentRuntimeConfig::default()
             },
+            process_manager: None,
         })
     }
 }
@@ -87,6 +97,7 @@ impl Default for EngineConfig {
             state_root,
             event_buffer: 1_024,
             agent: AgentRuntimeConfig::default(),
+            process_manager: None,
         }
     }
 }
@@ -97,6 +108,7 @@ pub struct CodyEngine {
     store: Arc<dyn StateStore>,
     providers: Arc<ProviderRegistry>,
     tools: Arc<ToolRegistry>,
+    processes: Arc<ProcessManager>,
     events: EventHub,
     runtime: Arc<AgentRuntime>,
 }
@@ -135,7 +147,15 @@ impl CodyEngine {
     ) -> Result<Self> {
         tokio::fs::create_dir_all(config.state_root.join("workspaces")).await?;
         let providers = Arc::new(ProviderRegistry::default());
-        let tools = Arc::new(ToolRegistry::with_builtins()?);
+        let process_config = config
+            .process_manager
+            .clone()
+            .unwrap_or_else(|| ProcessManagerConfig::new(config.state_root.join("processes")));
+        let processes = Arc::new(ProcessManager::new(store.clone(), process_config)?);
+        processes.recover_interrupted().await?;
+        let tools = Arc::new(ToolRegistry::with_builtins_and_processes(
+            processes.clone(),
+        )?);
         let events = EventHub::new(config.event_buffer);
         let context_builder = Arc::new(DefaultContextBuilder::default());
         let runtime = Arc::new(match title_generator {
@@ -163,6 +183,7 @@ impl CodyEngine {
             store,
             providers,
             tools,
+            processes,
             events,
             runtime,
         })
@@ -180,12 +201,22 @@ impl CodyEngine {
         &self.tools
     }
 
+    pub fn processes(&self) -> &Arc<ProcessManager> {
+        &self.processes
+    }
+
     pub fn events(&self) -> &EventHub {
         &self.events
     }
 
     pub fn runtime(&self) -> &Arc<AgentRuntime> {
         &self.runtime
+    }
+
+    /// Gracefully stop every process still supervised by this engine. App
+    /// servers should await this before dropping their runtime state.
+    pub async fn shutdown(&self) -> Result<Vec<crate::domain::ManagedProcess>> {
+        self.processes.shutdown_all().await
     }
 
     pub async fn import_project(

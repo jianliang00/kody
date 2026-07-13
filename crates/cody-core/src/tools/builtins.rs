@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     env,
     ffi::OsString,
     io,
@@ -23,7 +24,7 @@ use crate::{
     error::{CodyError, Result},
 };
 
-use super::{Tool, ToolCall, ToolContext, ToolDefinition, ToolResult};
+use super::{Tool, ToolCall, ToolContext, ToolDefinition, ToolResult, ToolRisk};
 
 const DEFAULT_FILE_BYTES: usize = 256 * 1024;
 const MAX_FILE_BYTES: usize = 1024 * 1024;
@@ -167,6 +168,10 @@ impl Tool for WriteFileTool {
                 "additionalProperties": false
             }),
         )
+    }
+
+    fn risk(&self) -> ToolRisk {
+        ToolRisk::FilesystemWrite
     }
 
     async fn execute(&self, call: &ToolCall, context: &ToolContext) -> Result<ToolResult> {
@@ -375,6 +380,10 @@ impl Tool for ShellTool {
         )
     }
 
+    fn risk(&self) -> ToolRisk {
+        ToolRisk::CommandExecution
+    }
+
     async fn execute(&self, call: &ToolCall, context: &ToolContext) -> Result<ToolResult> {
         let arguments: ShellArguments = parse_arguments(call)?;
         if arguments.command.trim().is_empty() {
@@ -418,6 +427,13 @@ impl Tool for ShellTool {
         let mut child = command
             .spawn()
             .map_err(|error| CodyError::Tool(format!("failed to start shell command: {error}")))?;
+        // Capture the process-group id before `wait`: Tokio no longer exposes
+        // the child id after it has been reaped. A foreground shell call must
+        // never become an alternate way to leave an unmanaged daemon behind.
+        #[cfg(unix)]
+        let process_group_id = child.id().and_then(|pid| i32::try_from(pid).ok());
+        #[cfg(not(unix))]
+        let process_group_id = None;
         let stdout = child
             .stdout
             .take()
@@ -441,7 +457,7 @@ impl Tool for ShellTool {
 
         match outcome {
             ShellOutcome::Cancelled => {
-                terminate_child(&mut child).await;
+                terminate_child(&mut child, process_group_id).await?;
                 stdout_task.abort();
                 stderr_task.abort();
                 let _ = stdout_task.await;
@@ -449,7 +465,7 @@ impl Tool for ShellTool {
                 return Err(CodyError::Cancelled);
             }
             ShellOutcome::TimedOut => {
-                terminate_child(&mut child).await;
+                terminate_child(&mut child, process_group_id).await?;
                 let stdout = collect_reader(stdout_task).await?;
                 let stderr = collect_reader(stderr_task).await?;
                 return Ok(shell_result(
@@ -462,6 +478,12 @@ impl Tool for ShellTool {
                 ));
             }
             ShellOutcome::Exited(status) => {
+                // The shell can exit after `command &` while descendants keep
+                // running and retain its output pipes. Those descendants are
+                // not managed processes, so terminate the remaining group
+                // before collecting output. Long-lived work must use
+                // `start_process`, where it receives durable supervision.
+                terminate_process_group(process_group_id)?;
                 let stdout = collect_reader(stdout_task).await?;
                 let stderr = collect_reader(stderr_task).await?;
                 Ok(shell_result(
@@ -483,11 +505,11 @@ enum ShellOutcome {
     Exited(std::process::ExitStatus),
 }
 
-struct SelectedRoot {
-    root: PathBuf,
+pub(super) struct SelectedRoot {
+    pub(super) root: PathBuf,
 }
 
-async fn select_root(
+pub(super) async fn select_root(
     context: &ToolContext,
     project_id: Option<ProjectId>,
     requires_write: bool,
@@ -526,7 +548,7 @@ async fn select_root(
     Ok(SelectedRoot { root })
 }
 
-fn validate_relative_path(input: &str) -> Result<PathBuf> {
+pub(super) fn validate_relative_path(input: &str) -> Result<PathBuf> {
     if input.is_empty() {
         return Err(CodyError::InvalidInput("path cannot be empty".to_owned()));
     }
@@ -560,7 +582,7 @@ fn validate_relative_path(input: &str) -> Result<PathBuf> {
     Ok(normalized)
 }
 
-async fn confined_existing_path(root: &Path, relative: &Path) -> Result<PathBuf> {
+pub(super) async fn confined_existing_path(root: &Path, relative: &Path) -> Result<PathBuf> {
     let candidate = root.join(relative);
     let canonical = fs::canonicalize(&candidate).await.map_err(|error| {
         CodyError::Tool(format!("cannot access '{}': {error}", relative.display()))
@@ -720,24 +742,41 @@ async fn collect_reader(mut task: JoinHandle<io::Result<BoundedOutput>>) -> Resu
     }
 }
 
-async fn terminate_child(child: &mut tokio::process::Child) {
-    #[cfg(unix)]
-    if let Some(process_group) = child.id() {
-        // The shell is its group's leader, so a negative PID targets the
-        // complete process group. `/bin/kill` is used to avoid an additional
-        // libc dependency in the core crate.
-        let _ = Command::new("/bin/kill")
-            .arg("-KILL")
-            .arg(format!("-{process_group}"))
-            .env_clear()
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await;
-    }
-    let _ = child.kill().await;
+async fn terminate_child(
+    child: &mut tokio::process::Child,
+    process_group_id: Option<i32>,
+) -> Result<()> {
+    let group_result = terminate_process_group(process_group_id);
+    let child_result = child.kill().await;
     let _ = child.wait().await;
+    group_result?;
+    if let Err(error) = child_result {
+        // The process-group signal may have reaped the direct child first.
+        if error.kind() != io::ErrorKind::InvalidInput {
+            return Err(error.into());
+        }
+    }
+    Ok(())
+}
+
+fn terminate_process_group(process_group_id: Option<i32>) -> Result<()> {
+    #[cfg(unix)]
+    if let Some(process_group_id) = process_group_id.filter(|id| *id > 0) {
+        // SAFETY: a negative pid addresses the process group created above;
+        // SIGKILL requires no pointers or shared-memory access.
+        let result = unsafe { libc::kill(-process_group_id, libc::SIGKILL) };
+        if result != 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ESRCH) {
+                return Err(error.into());
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    let _ = process_group_id;
+
+    Ok(())
 }
 
 /// Do not expose provider keys, auth tokens, or the server's general process
@@ -745,9 +784,28 @@ async fn terminate_child(child: &mut tokio::process::Child) {
 /// terminal variables is retained so normal developer commands still work.
 fn configure_shell_environment(command: &mut Command, root: &Path) {
     command.env_clear();
-    command.env("HOME", root);
-    command.env("PWD", root);
-    command.env(
+    visit_shell_environment(root, |name, value| {
+        command.env(name, value);
+    });
+}
+
+/// Build the same credential-free environment used by the blocking shell tool
+/// for a command that will be owned by the process manager. Values are lossy
+/// UTF-8 because durable process requests intentionally use portable strings.
+pub(super) fn sanitized_process_environment(root: &Path) -> BTreeMap<String, String> {
+    let mut environment = BTreeMap::new();
+    visit_shell_environment(root, |name, value| {
+        environment.insert(name.to_owned(), value.to_string_lossy().into_owned());
+    });
+    environment
+}
+
+fn visit_shell_environment(root: &Path, mut visit: impl FnMut(&str, OsString)) {
+    // Keep this single source of truth shared by foreground and managed
+    // commands so neither execution mode accidentally gains ambient secrets.
+    visit("HOME", root.as_os_str().to_owned());
+    visit("PWD", root.as_os_str().to_owned());
+    visit(
         "PATH",
         env::var_os("PATH").unwrap_or_else(|| OsString::from("/usr/local/bin:/usr/bin:/bin")),
     );
@@ -763,18 +821,21 @@ fn configure_shell_environment(command: &mut Command, root: &Path) {
         "RUSTUP_HOME",
     ] {
         if let Some(value) = env::var_os(name) {
-            command.env(name, value);
+            visit(name, value);
         }
     }
 
     // Never expose the user's Cargo credentials. Projects needing a private
     // registry can opt into a separately mediated credential mount later.
-    command.env("CARGO_HOME", root.join(".cody-home/cargo"));
+    visit("CARGO_HOME", root.join(".cody-home/cargo").into_os_string());
     // Rustup shims need the installed toolchains, which contain no registry
     // credentials. Keep that path when it is explicitly configured.
     if env::var_os("RUSTUP_HOME").is_none() {
         if let Some(home) = env::var_os("HOME") {
-            command.env("RUSTUP_HOME", append_path(&home, ".rustup"));
+            visit(
+                "RUSTUP_HOME",
+                append_path(&home, ".rustup").into_os_string(),
+            );
         }
     }
 }
@@ -840,10 +901,13 @@ pub(super) mod tests {
 
     pub(crate) fn test_context(projects: Vec<ProjectBinding>) -> ToolContext {
         let root = tempfile::tempdir().unwrap().keep();
+        let thread_id = ThreadId::new();
         ToolContext::new(
+            thread_id,
+            crate::domain::TurnId::new(),
             Workspace {
                 id: WorkspaceId::new(),
-                thread_id: ThreadId::new(),
+                thread_id,
                 root,
                 created_at: Utc::now(),
             },
@@ -977,6 +1041,45 @@ pub(super) mod tests {
         assert_eq!(result.metadata["exit_code"], 7);
         assert_eq!(result.metadata["stdout_truncated"], true);
         assert_eq!(result.metadata["stderr_truncated"], true);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_does_not_leave_unmanaged_background_processes() {
+        let context = test_context(Vec::new());
+        let registry = ToolRegistry::with_builtins().unwrap();
+        let call = ToolCall::new(
+            "shell-background",
+            "shell",
+            json!({
+                "command": "trap '' HUP; sleep 30 & child=$!; printf '%s\\n' \"$child\""
+            }),
+        );
+
+        let result = registry.execute(&call, &context).await.unwrap();
+        assert!(!result.is_error);
+        let child_pid = result
+            .content
+            .lines()
+            .skip_while(|line| *line != "stdout:")
+            .nth(1)
+            .and_then(|line| line.trim().parse::<i32>().ok())
+            .expect("shell should print the background child pid");
+
+        timeout(Duration::from_secs(2), async {
+            while pid_is_alive(child_pid) {
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("foreground shell must clean up background descendants");
+    }
+
+    #[cfg(unix)]
+    fn pid_is_alive(pid: i32) -> bool {
+        // SAFETY: signal zero performs an existence/permission check only.
+        let result = unsafe { libc::kill(pid, 0) };
+        result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
 
     #[test]

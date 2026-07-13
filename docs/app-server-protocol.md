@@ -20,13 +20,16 @@ HTTP requires `Authorization: Bearer <token>` and `Content-Type: application/jso
 | `project/get`, `project/list` | Read Project state |
 | `thread/create` | Create a Thread and its Workspace; optional `working_directory` auto-imports a Project |
 | `thread/create-and-start` | Idempotently create a Thread/Workspace and prepare its first Turn from one draft request |
-| `thread/get`, `thread/list`, `thread/messages` | Read Thread state/history; `thread/get` also returns current pending approvals |
+| `thread/get`, `thread/list`, `thread/messages` | Read Thread state/history; `thread/get` also returns pending approvals and authoritative managed-process snapshots |
 | `thread/reference/add` | Add a persistent default Thread or Project reference |
 | `turn/start`, `turn/get`, `turn/cancel` | Run and control an Agent Turn |
-| `approval/respond` | Resolve a pending Shell approval |
+| `approval/respond` | Resolve a pending command-execution approval |
+| `process/list`, `process/get` | Read managed processes owned by a Thread |
+| `process/read-output` | Read a bounded stdout/stderr page from a byte cursor |
+| `process/stop` | Gracefully stop a process group, escalating if necessary |
 | `thread/subscribe`, `thread/unsubscribe` | WebSocket-only event subscription controls |
 
-Dot aliases such as `turn.start` are accepted for application methods. WebSocket `thread/create-and-start` subscribes before the prepared Turn begins; `turn/start`, `thread/get`, and `thread/messages` also implicitly subscribe that connection to the Thread.
+Dot aliases such as `turn.start` are accepted for application methods. WebSocket `thread/create-and-start` subscribes before the prepared Turn begins; `turn/start`, `thread/get`, `thread/messages`, and all process methods also implicitly subscribe that connection to the Thread.
 
 ## Draft-first Thread creation
 
@@ -117,7 +120,35 @@ When `approval_requested` arrives, respond with:
 }
 ```
 
-Events are live and held in a bounded process-local broadcast buffer. They are not replayed after reconnect/restart; use `thread/get` and `turn/get` to reconcile state. `thread/get.pending_approvals` contains actionable approvals still waiting in the current server process, so a renderer reconnect does not strand a Turn. A full server restart fails interrupted Turns during recovery, so no stale approval remains actionable. A slow subscriber may receive `server/event_gap` with the skipped count.
+Events are live and held in a bounded process-local broadcast buffer. They are not replayed after reconnect/restart; use `thread/get` and `turn/get` to reconcile state. `thread/get.pending_approvals` contains actionable approvals still waiting in the current server process, so a renderer reconnect does not strand a Turn. A full server restart fails interrupted Turns during recovery, so no stale approval remains actionable. A slow subscriber receives `server/event_gap` with `stream: "turn"` and the skipped count.
+
+## Managed process events and output
+
+Managed processes can outlive the Turn that started them, so they use a separate notification and sequence space:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "process/event",
+  "params": {
+    "id": "EVENT_UUID",
+    "thread_id": "THREAD_UUID",
+    "process_id": "PROCESS_UUID",
+    "sequence": 3,
+    "created_at": "2026-07-13T10:00:00Z",
+    "event": {
+      "type": "output",
+      "stream": "stderr",
+      "cursor": 12,
+      "next_cursor": 18
+    }
+  }
+}
+```
+
+Lifecycle types are `started`, `stopping`, `exited`, `stopped`, `failed`, and `lost`; `output` only announces an available byte range so the event buffer never duplicates command output. Cursors count bytes across the merged stdout/stderr stream. Clients call `process/read-output` with the previous `next_cursor`; its chunks carry exact bytes plus a lossy UTF-8 convenience string. The response also reports `start_cursor`, `end_cursor`, `has_more`, and whether the requested cursor was evicted. `thread/get.processes[*].output_truncated` separately records whether any earlier bytes have been evicted.
+
+Output notifications are hints, not an unbounded transport log. Reconnect and `server/event_gap` with `stream: "process"` are reconciled through `thread/get` plus `process/read-output`.
 
 ## Errors
 

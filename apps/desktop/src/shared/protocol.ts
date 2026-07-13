@@ -4,6 +4,8 @@ export type ThreadStatus = 'idle' | 'running' | 'archived'
 export type TurnStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 export type ProjectAccess = 'read_only' | 'read_write'
 export type ThreadReferenceMode = 'summary' | 'full' | 'messages' | 'artifacts'
+export type ProcessStatus = 'starting' | 'running' | 'stopping' | 'exited' | 'stopped' | 'failed' | 'lost'
+export type ProcessOutputStream = 'stdout' | 'stderr'
 
 export interface GitMetadata {
   remote?: string
@@ -87,12 +89,84 @@ export interface Turn {
   error?: string
 }
 
+export interface ProcessOrigin {
+  turn_id: EntityId
+  tool_call_id: string
+}
+
+/** Durable lifecycle metadata for a command supervised by Cody. */
+export interface ManagedProcess {
+  id: EntityId
+  thread_id: EntityId
+  origin: ProcessOrigin
+  spec_fingerprint: string
+  project_id?: EntityId
+  command: string
+  cwd: string
+  pid?: number
+  process_group_id?: number
+  status: ProcessStatus
+  exit_code?: number
+  error?: string
+  output_truncated: boolean
+  output_start_cursor: number
+  output_end_cursor: number
+  last_event_sequence: number
+  created_at: string
+  started_at?: string
+  completed_at?: string
+}
+
+export interface ProcessOutputChunk {
+  stream: ProcessOutputStream
+  cursor: number
+  next_cursor: number
+  bytes: number[]
+  text: string
+}
+
+/** A bounded page from the merged stdout/stderr stream. */
+export interface ProcessOutputPage {
+  process_id: EntityId
+  requested_cursor: number
+  start_cursor: number
+  next_cursor: number
+  end_cursor: number
+  truncated: boolean
+  has_more: boolean
+  chunks: ProcessOutputChunk[]
+}
+
+export interface ProcessEventEnvelope {
+  id: EntityId
+  thread_id: EntityId
+  process_id: EntityId
+  sequence: number
+  created_at: string
+  event: ProcessEvent
+}
+
+export type ProcessEvent =
+  | { type: 'started'; pid: number; process_group_id?: number }
+  | {
+      type: 'output'
+      stream: ProcessOutputStream
+      cursor: number
+      next_cursor: number
+    }
+  | { type: 'stopping' }
+  | { type: 'exited'; exit_code?: number }
+  | { type: 'stopped'; exit_code?: number; forced: boolean }
+  | { type: 'failed'; error: string }
+  | { type: 'lost'; reason: string }
+
 export interface ThreadSnapshot {
   thread: Thread
   workspace: Workspace
   messages: ChatMessage[]
   turns: Turn[]
   pending_approvals: PendingApproval[]
+  processes: ManagedProcess[]
 }
 
 export interface PendingApproval {
@@ -199,6 +273,22 @@ export interface RpcMethodMap {
   'approval/respond': {
     params: { approval_id: EntityId; approved: boolean }
     result: { resolved: boolean }
+  }
+  'process/list': {
+    params: { thread_id: EntityId }
+    result: { processes: ManagedProcess[] }
+  }
+  'process/get': {
+    params: { thread_id: EntityId; process_id: EntityId }
+    result: ManagedProcess
+  }
+  'process/read-output': {
+    params: { thread_id: EntityId; process_id: EntityId; after_cursor?: number; limit?: number }
+    result: ProcessOutputPage
+  }
+  'process/stop': {
+    params: { thread_id: EntityId; process_id: EntityId }
+    result: ManagedProcess
   }
 }
 

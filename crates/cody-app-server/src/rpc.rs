@@ -1,8 +1,8 @@
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use cody_core::{
-    ApprovalId, CodyEngine, CodyError, ContextReference, ProjectId, StartTurn, ThreadId, TurnId,
-    DEFAULT_THREAD_TITLE,
+    ApprovalId, CodyEngine, CodyError, ContextReference, ProcessId, ProjectId, StartTurn, ThreadId,
+    TurnId, DEFAULT_THREAD_TITLE,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -105,6 +105,7 @@ impl From<CodyError> for RpcError {
             | CodyError::WorkspaceNotFound(_)
             | CodyError::TurnNotFound(_)
             | CodyError::MessageNotFound(_)
+            | CodyError::ProcessNotFound(_)
             | CodyError::ProviderNotFound(_)
             | CodyError::ToolNotFound(_) => -32004,
             CodyError::Conflict(_) => -32009,
@@ -262,12 +263,20 @@ impl RpcDispatcher {
                     .approvals()
                     .list(Some(thread.id))
                     .await;
+                let processes = self
+                    .state
+                    .engine
+                    .processes()
+                    .list(thread.id)
+                    .await
+                    .map_err(RpcError::from)?;
                 Ok(json!({
                     "thread": thread,
                     "workspace": workspace,
                     "messages": messages,
                     "turns": turns,
                     "pending_approvals": pending_approvals,
+                    "processes": processes,
                 }))
             }
             "thread/reference/add" | "thread.reference.add" => {
@@ -327,6 +336,55 @@ impl RpcDispatcher {
                     .await
                     .map_err(RpcError::from)?;
                 Ok(json!({ "resolved": true }))
+            }
+            "process/list" | "process.list" => {
+                let params: ThreadGetParams = parse_params(params)?;
+                let processes = self
+                    .state
+                    .engine
+                    .processes()
+                    .list(params.thread_id)
+                    .await
+                    .map_err(RpcError::from)?;
+                Ok(json!({ "processes": processes }))
+            }
+            "process/get" | "process.get" => {
+                let params: ProcessGetParams = parse_params(params)?;
+                let process = self
+                    .state
+                    .engine
+                    .processes()
+                    .get_for_thread(params.thread_id, params.process_id)
+                    .await
+                    .map_err(RpcError::from)?;
+                serde_json::to_value(process).map_err(RpcError::invalid_params)
+            }
+            "process/read-output" | "process.read-output" => {
+                let params: ProcessOutputParams = parse_params(params)?;
+                let page = self
+                    .state
+                    .engine
+                    .processes()
+                    .read_output(
+                        params.thread_id,
+                        params.process_id,
+                        params.after_cursor,
+                        params.limit,
+                    )
+                    .await
+                    .map_err(RpcError::from)?;
+                serde_json::to_value(page).map_err(RpcError::invalid_params)
+            }
+            "process/stop" | "process.stop" => {
+                let params: ProcessGetParams = parse_params(params)?;
+                let process = self
+                    .state
+                    .engine
+                    .processes()
+                    .stop(params.thread_id, params.process_id)
+                    .await
+                    .map_err(RpcError::from)?;
+                serde_json::to_value(process).map_err(RpcError::invalid_params)
             }
             _ => Err(RpcError::method_not_found(method)),
         }
@@ -483,12 +541,15 @@ fn initialize_result() -> Value {
             "protocol": "json-rpc-2.0",
             "transports": ["http", "websocket"],
             "event_notification": "turn/event",
+            "process_event_notification": "process/event",
             "thread_references": true,
             "project_references": true,
             "thread_create_and_start": true,
             "thread_auto_titles": true,
             "turn_cancellation": true,
             "tool_approvals": true,
+            "managed_processes": true,
+            "process_output": true,
             "thread_event_subscriptions": true,
             "provider_plugins": true,
         }
@@ -552,6 +613,22 @@ struct TurnGetParams {
 struct ApprovalResponseParams {
     approval_id: ApprovalId,
     approved: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProcessGetParams {
+    thread_id: ThreadId,
+    process_id: ProcessId,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProcessOutputParams {
+    thread_id: ThreadId,
+    process_id: ProcessId,
+    #[serde(default)]
+    after_cursor: Option<u64>,
+    #[serde(default)]
+    limit: Option<usize>,
 }
 
 #[allow(dead_code)]

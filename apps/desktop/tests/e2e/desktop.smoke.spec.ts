@@ -64,7 +64,8 @@ test('creates the first Thread through one idempotent draft request', async () =
         platform: window.cody.platform,
         status,
         serverName: initialized.server_info.name,
-        capabilities: initialized.capabilities
+        capabilities: initialized.capabilities,
+        hasProcessEvents: typeof window.cody.onProcessEvent === 'function'
       }
     })
     expect(bridgeProbe).not.toBeNull()
@@ -72,6 +73,9 @@ test('creates the first Thread through one idempotent draft request', async () =
     expect(bridgeProbe?.serverName).toBe('cody-app-server')
     expect(bridgeProbe?.platform).toBe(process.platform)
     expect(bridgeProbe?.capabilities.thread_create_and_start).toBe(true)
+    expect(bridgeProbe?.capabilities.managed_processes).toBe(true)
+    expect(bridgeProbe?.capabilities.process_output).toBe(true)
+    expect(bridgeProbe?.hasProcessEvents).toBe(true)
 
     await expect(page.getByRole('heading', { level: 1, name: 'New conversation' })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'What should Cody work on?' })).toBeVisible()
@@ -154,13 +158,16 @@ test('creates the first Thread through one idempotent draft request', async () =
       const [thread] = threads
       if (threads.length !== 1 || !thread) throw new Error(`expected one Thread, received ${threads.length}`)
       const snapshot = await window.cody.rpc('thread/get', { thread_id: thread.id })
-      return { threads, projects, snapshot }
+      const processResult = await window.cody.rpc('process/list', { thread_id: thread.id })
+      return { threads, projects, snapshot, processResult }
     })
     expect(durable.threads).toHaveLength(1)
     expect(durable.projects).toHaveLength(1)
     expect(durable.snapshot.turns).toHaveLength(1)
     expect(durable.snapshot.turns[0]?.status).toBe('completed')
     expect(durable.snapshot.messages).toHaveLength(2)
+    expect(durable.snapshot.processes).toEqual([])
+    expect(durable.processResult.processes).toEqual([])
     expect(durable.snapshot.messages.map((message) => message.role)).toEqual(['user', 'assistant'])
     expect(durable.snapshot.thread.title).toBe(prompt)
     expect(durable.snapshot.workspace.thread_id).toBe(durable.snapshot.thread.id)
@@ -183,7 +190,7 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expect(contextCard.getByText('Managed procs', { exact: true })).toBeVisible()
     await expect(contextCard.getByLabel('Referenced Projects')).toContainText(durable.projects[0]?.name ?? '')
     await expect(contextCard.getByLabel('Referenced Projects')).toContainText('Read & write')
-    await expect(contextCard.getByText('No managed background processes', { exact: true })).toBeVisible()
+    await expect(contextCard.getByText('No active managed processes', { exact: true })).toBeVisible()
     const contextCardBox = await contextCard.boundingBox()
     expect(contextCardBox).not.toBeNull()
     expect(contextCardBox?.x ?? 0).toBeGreaterThan(viewport.width / 2)
@@ -254,8 +261,12 @@ test('creates the first Thread through one idempotent draft request', async () =
     await openInspector.focus()
     await page.keyboard.press('Enter')
     await expect(inspector).toBeVisible()
+    await expect(inspector).toHaveAttribute('role', 'dialog')
+    await expect(inspector).toHaveAttribute('aria-modal', 'true')
     await expect(openInspector).toHaveAttribute('aria-expanded', 'true')
     await expect(page.getByRole('heading', { name: 'Workspace', exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Background processes', exact: true })).toBeVisible()
+    await expect(inspector.getByText('No managed background processes.', { exact: true })).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(inspector).toBeHidden()
     await expect(openInspector).toHaveAttribute('aria-expanded', 'false')

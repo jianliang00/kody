@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import type { Project, Thread, ThreadSnapshot } from '@shared/protocol'
 import type { ThreadContextView } from '../lib/threadContext'
+import { isProcessActive, sortManagedProcesses } from '../lib/processes'
 
 interface ThreadContextCardProps {
   snapshot: ThreadSnapshot
@@ -27,8 +28,16 @@ export function ThreadContextCard({
   detailsOpen,
   onOpenDetails
 }: ThreadContextCardProps) {
-  const leafActivityCount = context.runningTools.length + context.pendingApprovals.length
-  const activeCount = leafActivityCount > 0 ? leafActivityCount : Math.min(context.activeTurns.length, 1)
+  const activeProcesses = sortManagedProcesses(snapshot.processes.filter(isProcessActive))
+  const activeProcessOrigins = new Set(activeProcesses.map((process) => (
+    `${process.origin.turn_id}:${process.origin.tool_call_id}`
+  )))
+  const foregroundTools = context.runningTools.filter((tool) => !activeProcessOrigins.has(tool.key))
+  const foregroundLeafCount = foregroundTools.length + context.pendingApprovals.length
+  const foregroundActivityCount = foregroundLeafCount > 0
+    ? foregroundLeafCount
+    : Math.min(context.activeTurns.length, 1)
+  const activeCount = foregroundActivityCount + activeProcesses.length
 
   return (
     <aside
@@ -64,8 +73,8 @@ export function ThreadContextCard({
           <dd>{context.projectReferences.length}</dd>
         </div>
         <div className="thread-context-card__metric thread-context-card__metric--process">
-          <dt title="Managed background processes"><TerminalSquare aria-hidden="true" size={14} /> Managed procs</dt>
-          <dd>0</dd>
+          <dt title="Active managed background processes"><TerminalSquare aria-hidden="true" size={14} /> Managed procs</dt>
+          <dd>{activeProcesses.length}</dd>
         </div>
       </dl>
 
@@ -100,13 +109,22 @@ export function ThreadContextCard({
             <p className="thread-context-card__empty">No active operations</p>
           ) : (
             <ul className="thread-context-card__runtime-list">
+              {activeProcesses.slice(0, 2).map((process) => (
+                <li key={process.id}>
+                  <TerminalSquare aria-hidden="true" size={13} />
+                  <span>
+                    <strong>{process.status === 'stopping' ? 'Stopping background process' : 'Background process active'}</strong>
+                    <small title={process.command}>{process.command}</small>
+                  </span>
+                </li>
+              ))}
               {context.pendingApprovals.slice(0, 1).map((approval) => (
                 <li key={approval.approval_id}>
                   <ShieldAlert aria-hidden="true" size={13} />
                   <span><strong>Waiting for approval</strong><small>{approval.name}</small></span>
                 </li>
               ))}
-              {context.runningTools.slice(0, 2).map((tool) => (
+              {foregroundTools.slice(0, 2).map((tool) => (
                 <li key={tool.key}>
                   <Activity aria-hidden="true" size={13} />
                   <span>
@@ -115,17 +133,22 @@ export function ThreadContextCard({
                   </span>
                 </li>
               ))}
-              {context.activeTurns.length > 0 && context.runningTools.length === 0 && context.pendingApprovals.length === 0 ? (
+              {context.activeTurns.length > 0 && foregroundTools.length === 0 && context.pendingApprovals.length === 0 ? (
                 <li>
                   <Activity aria-hidden="true" size={13} />
                   <span><strong>Agent Turn active</strong><small>Model or context work in progress</small></span>
                 </li>
               ) : null}
+              {activeProcesses.length > 2 ? (
+                <li className="thread-context-card__runtime-more">+{activeProcesses.length - 2} more managed processes</li>
+              ) : null}
             </ul>
           )}
-          <p className="thread-context-card__process-empty">
-            <TerminalSquare aria-hidden="true" size={13} /> No managed background processes
-          </p>
+          {activeProcesses.length === 0 ? (
+            <p className="thread-context-card__process-empty">
+              <TerminalSquare aria-hidden="true" size={13} /> No active managed processes
+            </p>
+          ) : null}
         </section>
       </div> : null}
 

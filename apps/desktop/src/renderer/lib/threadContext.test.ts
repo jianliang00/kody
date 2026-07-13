@@ -53,6 +53,7 @@ function snapshot(overrides: Partial<ThreadSnapshot> = {}): ThreadSnapshot {
     messages: [],
     turns: [],
     pending_approvals: [],
+    processes: [],
     ...overrides
   }
 }
@@ -122,7 +123,8 @@ describe('Thread context derivation', () => {
         name: 'shell',
         arguments: { command: 'cargo test' },
         reason: 'Needs permission'
-      }]
+      }],
+      processes: []
     })
     const events = [
       event('event-a', 'turn-a', {

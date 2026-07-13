@@ -13,8 +13,9 @@ use tokio::{
 
 use crate::{
     domain::{
-        ContextReference, Message, MessageId, Project, ProjectId, Thread, ThreadId, ThreadStatus,
-        Turn, TurnId, TurnStatus, Workspace, WorkspaceId,
+        ContextReference, ManagedProcess, Message, MessageId, ProcessId, ProcessOrigin,
+        ProcessStatus, Project, ProjectId, Thread, ThreadId, ThreadStatus, Turn, TurnId,
+        TurnStatus, Workspace, WorkspaceId,
     },
     error::{CodyError, Result},
 };
@@ -80,6 +81,26 @@ pub trait StateStore: Send + Sync {
         next: TurnStatus,
     ) -> Result<Turn>;
     async fn delete_turn(&self, id: TurnId) -> Result<()>;
+
+    async fn insert_process(&self, process: ManagedProcess) -> Result<ManagedProcess>;
+    async fn get_process(&self, id: ProcessId) -> Result<ManagedProcess>;
+    async fn get_process_by_origin(&self, origin: &ProcessOrigin)
+        -> Result<Option<ManagedProcess>>;
+    /// Lists all managed processes, optionally restricted to one thread.
+    async fn list_processes(&self, thread_id: Option<ThreadId>) -> Result<Vec<ManagedProcess>>;
+    /// Atomically updates runtime metadata and, when requested, performs one
+    /// legal lifecycle transition together with its terminal details.
+    async fn update_process(&self, process: ManagedProcess) -> Result<ManagedProcess>;
+    /// Compare-and-set convenience for callers that only need to change the
+    /// lifecycle state. Full terminal metadata can be committed atomically via
+    /// `update_process`.
+    async fn transition_process_status(
+        &self,
+        id: ProcessId,
+        expected: ProcessStatus,
+        next: ProcessStatus,
+    ) -> Result<ManagedProcess>;
+    async fn delete_process(&self, id: ProcessId) -> Result<()>;
 }
 
 /// A process-local state store suitable for embedding, tests, and a
@@ -101,7 +122,8 @@ pub struct JsonFileStore {
     persistence: Arc<Mutex<()>>,
 }
 
-const JSON_SNAPSHOT_VERSION: u32 = 1;
+const JSON_SNAPSHOT_VERSION: u32 = 2;
+const OLDEST_SUPPORTED_JSON_SNAPSHOT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct JsonSnapshot {
@@ -111,6 +133,8 @@ struct JsonSnapshot {
     workspaces: Vec<Workspace>,
     messages: Vec<Message>,
     turns: Vec<Turn>,
+    #[serde(default)]
+    processes: Vec<ManagedProcess>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -123,6 +147,8 @@ struct StoreState {
     message_order_by_thread: HashMap<ThreadId, Vec<MessageId>>,
     turns: HashMap<TurnId, Turn>,
     turn_order_by_thread: HashMap<ThreadId, Vec<TurnId>>,
+    processes: HashMap<ProcessId, ManagedProcess>,
+    process_by_origin: HashMap<ProcessOrigin, ProcessId>,
 }
 
 impl InMemoryStore {
@@ -155,7 +181,7 @@ impl JsonFileStore {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        let (memory, needs_initial_snapshot) = match tokio::fs::read(&path).await {
+        let (memory, needs_snapshot_write) = match tokio::fs::read(&path).await {
             Ok(bytes) => {
                 let snapshot: JsonSnapshot = serde_json::from_slice(&bytes).map_err(|error| {
                     CodyError::Store(format!(
@@ -163,7 +189,8 @@ impl JsonFileStore {
                         path.display()
                     ))
                 })?;
-                (InMemoryStore::from_snapshot(snapshot)?, false)
+                let needs_migration = snapshot.version < JSON_SNAPSHOT_VERSION;
+                (InMemoryStore::from_snapshot(snapshot)?, needs_migration)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 (InMemoryStore::new(), true)
@@ -176,7 +203,7 @@ impl JsonFileStore {
             path: Arc::new(path),
             persistence: Arc::new(Mutex::new(())),
         };
-        if needs_initial_snapshot {
+        if needs_snapshot_write {
             let snapshot = store.memory.snapshot().await?;
             write_snapshot_atomic(store.path.as_ref(), &snapshot).await?;
         }
@@ -261,6 +288,13 @@ impl JsonSnapshot {
             })
             .collect();
 
+        let mut processes: Vec<_> = state.processes.values().cloned().collect();
+        processes.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+
         Ok(Self {
             version: JSON_SNAPSHOT_VERSION,
             projects,
@@ -268,17 +302,25 @@ impl JsonSnapshot {
             workspaces,
             messages,
             turns,
+            processes,
         })
     }
 }
 
 impl InMemoryStore {
     fn from_snapshot(snapshot: JsonSnapshot) -> Result<Self> {
-        if snapshot.version != JSON_SNAPSHOT_VERSION {
+        if !(OLDEST_SUPPORTED_JSON_SNAPSHOT_VERSION..=JSON_SNAPSHOT_VERSION)
+            .contains(&snapshot.version)
+        {
             return Err(invalid_snapshot(format!(
-                "unsupported version {}; expected {}",
-                snapshot.version, JSON_SNAPSHOT_VERSION
+                "unsupported version {}; expected {} through {}",
+                snapshot.version, OLDEST_SUPPORTED_JSON_SNAPSHOT_VERSION, JSON_SNAPSHOT_VERSION
             )));
+        }
+        if snapshot.version == 1 && !snapshot.processes.is_empty() {
+            return Err(invalid_snapshot(
+                "version 1 snapshots cannot contain managed processes",
+            ));
         }
 
         let mut state = StoreState::default();
@@ -341,6 +383,27 @@ impl InMemoryStore {
                 .entry(turn.thread_id)
                 .or_default()
                 .push(turn.id);
+        }
+        for process in snapshot.processes {
+            if state
+                .processes
+                .insert(process.id, process.clone())
+                .is_some()
+            {
+                return Err(invalid_snapshot(format!(
+                    "duplicate managed process id {}",
+                    process.id
+                )));
+            }
+            if let Some(existing) = state
+                .process_by_origin
+                .insert(process.origin.clone(), process.id)
+            {
+                return Err(invalid_snapshot(format!(
+                    "managed processes {existing} and {} share origin turn {} tool call '{}'",
+                    process.id, process.origin.turn_id, process.origin.tool_call_id
+                )));
+            }
         }
 
         validate_store_state(&state)?;
@@ -461,6 +524,21 @@ fn validate_store_state(state: &StoreState) -> Result<()> {
     }
     for turn in state.turns.values() {
         validate_turn(state, turn).map_err(snapshot_invariant)?;
+    }
+
+    if state.process_by_origin.len() != state.processes.len() {
+        return Err(invalid_snapshot(
+            "managed process origin index does not cover every process",
+        ));
+    }
+    for process in state.processes.values() {
+        if state.process_by_origin.get(&process.origin) != Some(&process.id) {
+            return Err(invalid_snapshot(format!(
+                "managed process {} has an inconsistent origin index",
+                process.id
+            )));
+        }
+        validate_process(state, process).map_err(snapshot_invariant)?;
     }
 
     Ok(())
@@ -603,6 +681,26 @@ impl StateStore for InMemoryStore {
             return Err(conflict(format!(
                 "project {id} is still referenced by a thread"
             )));
+        }
+
+        if state
+            .processes
+            .values()
+            .any(|process| process.project_id == Some(id) && process.status.is_active())
+        {
+            return Err(conflict(format!(
+                "project {id} is still used by an active managed process"
+            )));
+        }
+
+        // A terminal process retains its command and cwd as an audit record,
+        // but its optional project association behaves like ON DELETE SET
+        // NULL so deleting an otherwise-unused Project cannot create a
+        // dangling foreign key.
+        for process in state.processes.values_mut() {
+            if process.project_id == Some(id) {
+                process.project_id = None;
+            }
         }
 
         state.projects.remove(&id);
@@ -769,6 +867,15 @@ impl StateStore for InMemoryStore {
                 "thread {id} is still referenced by another thread"
             )));
         }
+        if state
+            .processes
+            .values()
+            .any(|process| process.thread_id == id && process.status.is_active())
+        {
+            return Err(conflict(format!(
+                "thread {id} still owns an active managed process; stop its processes before deleting it"
+            )));
+        }
 
         state.threads.remove(&id);
         state.workspaces.remove(&thread.workspace_id);
@@ -782,6 +889,17 @@ impl StateStore for InMemoryStore {
         if let Some(turn_ids) = state.turn_order_by_thread.remove(&id) {
             for turn_id in turn_ids {
                 state.turns.remove(&turn_id);
+            }
+        }
+        let process_ids: Vec<_> = state
+            .processes
+            .values()
+            .filter(|process| process.thread_id == id)
+            .map(|process| process.id)
+            .collect();
+        for process_id in process_ids {
+            if let Some(process) = state.processes.remove(&process_id) {
+                state.process_by_origin.remove(&process.origin);
             }
         }
         Ok(())
@@ -1097,11 +1215,145 @@ impl StateStore for InMemoryStore {
         {
             return Err(conflict(format!("turn {id} still has associated messages")));
         }
+        if state
+            .processes
+            .values()
+            .any(|process| process.origin.turn_id == id)
+        {
+            return Err(conflict(format!(
+                "turn {id} still has associated managed processes"
+            )));
+        }
 
         state.turns.remove(&id);
         if let Some(order) = state.turn_order_by_thread.get_mut(&turn.thread_id) {
             order.retain(|candidate| *candidate != id);
         }
+        Ok(())
+    }
+
+    async fn insert_process(&self, process: ManagedProcess) -> Result<ManagedProcess> {
+        let mut state = self.inner.write().await;
+        if state.processes.contains_key(&process.id) {
+            return Err(conflict(format!(
+                "managed process {} already exists",
+                process.id
+            )));
+        }
+        if let Some(existing) = state.process_by_origin.get(&process.origin) {
+            return Err(conflict(format!(
+                "managed process origin turn {} tool call '{}' is already owned by {}",
+                process.origin.turn_id, process.origin.tool_call_id, existing
+            )));
+        }
+        validate_process(&state, &process)?;
+
+        state
+            .process_by_origin
+            .insert(process.origin.clone(), process.id);
+        state.processes.insert(process.id, process.clone());
+        Ok(process)
+    }
+
+    async fn get_process(&self, id: ProcessId) -> Result<ManagedProcess> {
+        let state = self.inner.read().await;
+        state
+            .processes
+            .get(&id)
+            .cloned()
+            .ok_or(CodyError::ProcessNotFound(id))
+    }
+
+    async fn get_process_by_origin(
+        &self,
+        origin: &ProcessOrigin,
+    ) -> Result<Option<ManagedProcess>> {
+        let state = self.inner.read().await;
+        Ok(state
+            .process_by_origin
+            .get(origin)
+            .and_then(|id| state.processes.get(id))
+            .cloned())
+    }
+
+    async fn list_processes(&self, thread_id: Option<ThreadId>) -> Result<Vec<ManagedProcess>> {
+        let state = self.inner.read().await;
+        if let Some(thread_id) = thread_id {
+            if !state.threads.contains_key(&thread_id) {
+                return Err(CodyError::ThreadNotFound(thread_id));
+            }
+        }
+        let mut processes: Vec<_> = state
+            .processes
+            .values()
+            .filter(|process| thread_id.is_none_or(|id| process.thread_id == id))
+            .cloned()
+            .collect();
+        processes.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(processes)
+    }
+
+    async fn update_process(&self, process: ManagedProcess) -> Result<ManagedProcess> {
+        let mut state = self.inner.write().await;
+        replace_process(&mut state, process)
+    }
+
+    async fn transition_process_status(
+        &self,
+        id: ProcessId,
+        expected: ProcessStatus,
+        next: ProcessStatus,
+    ) -> Result<ManagedProcess> {
+        let mut state = self.inner.write().await;
+        let mut process = state
+            .processes
+            .get(&id)
+            .cloned()
+            .ok_or(CodyError::ProcessNotFound(id))?;
+        if process.status != expected {
+            return Err(stale_status(
+                "managed process",
+                id,
+                expected,
+                process.status,
+            ));
+        }
+        if !legal_process_transition(expected, next) {
+            return Err(CodyError::InvalidInput(format!(
+                "illegal managed process status transition: {expected:?} -> {next:?}"
+            )));
+        }
+
+        let now = chrono::Utc::now();
+        process.status = next;
+        if next == ProcessStatus::Running && process.started_at.is_none() {
+            process.started_at = Some(now);
+        }
+        if next.is_terminal() && process.completed_at.is_none() {
+            process.completed_at = Some(now);
+        }
+        replace_process(&mut state, process)
+    }
+
+    async fn delete_process(&self, id: ProcessId) -> Result<()> {
+        let mut state = self.inner.write().await;
+        let process = state
+            .processes
+            .get(&id)
+            .cloned()
+            .ok_or(CodyError::ProcessNotFound(id))?;
+        if process.status.is_active() {
+            return Err(conflict(format!(
+                "managed process {id} is active; stop it before deleting its record"
+            )));
+        }
+
+        state.processes.remove(&id);
+        state.process_by_origin.remove(&process.origin);
         Ok(())
     }
 }
@@ -1263,6 +1515,48 @@ impl StateStore for JsonFileStore {
     async fn delete_turn(&self, id: TurnId) -> Result<()> {
         persistent_mutation!(self, candidate, candidate.delete_turn(id).await)
     }
+
+    async fn insert_process(&self, process: ManagedProcess) -> Result<ManagedProcess> {
+        persistent_mutation!(self, candidate, candidate.insert_process(process).await)
+    }
+
+    async fn get_process(&self, id: ProcessId) -> Result<ManagedProcess> {
+        self.memory.get_process(id).await
+    }
+
+    async fn get_process_by_origin(
+        &self,
+        origin: &ProcessOrigin,
+    ) -> Result<Option<ManagedProcess>> {
+        self.memory.get_process_by_origin(origin).await
+    }
+
+    async fn list_processes(&self, thread_id: Option<ThreadId>) -> Result<Vec<ManagedProcess>> {
+        self.memory.list_processes(thread_id).await
+    }
+
+    async fn update_process(&self, process: ManagedProcess) -> Result<ManagedProcess> {
+        persistent_mutation!(self, candidate, candidate.update_process(process).await)
+    }
+
+    async fn transition_process_status(
+        &self,
+        id: ProcessId,
+        expected: ProcessStatus,
+        next: ProcessStatus,
+    ) -> Result<ManagedProcess> {
+        persistent_mutation!(
+            self,
+            candidate,
+            candidate
+                .transition_process_status(id, expected, next)
+                .await
+        )
+    }
+
+    async fn delete_process(&self, id: ProcessId) -> Result<()> {
+        persistent_mutation!(self, candidate, candidate.delete_process(id).await)
+    }
 }
 
 fn conflict(message: impl Into<String>) -> CodyError {
@@ -1298,6 +1592,98 @@ fn legal_turn_transition(expected: TurnStatus, next: TurnStatus) -> bool {
                 TurnStatus::Completed | TurnStatus::Failed | TurnStatus::Cancelled
             )
     )
+}
+
+fn legal_process_transition(expected: ProcessStatus, next: ProcessStatus) -> bool {
+    matches!(
+        (expected, next),
+        (
+            ProcessStatus::Starting,
+            ProcessStatus::Running
+                | ProcessStatus::Stopping
+                | ProcessStatus::Exited
+                | ProcessStatus::Stopped
+                | ProcessStatus::Failed
+                | ProcessStatus::Lost
+        ) | (
+            ProcessStatus::Running,
+            ProcessStatus::Stopping
+                | ProcessStatus::Exited
+                | ProcessStatus::Failed
+                | ProcessStatus::Lost
+        ) | (
+            ProcessStatus::Stopping,
+            ProcessStatus::Stopped
+                | ProcessStatus::Exited
+                | ProcessStatus::Failed
+                | ProcessStatus::Lost
+        )
+    )
+}
+
+fn replace_process(state: &mut StoreState, process: ManagedProcess) -> Result<ManagedProcess> {
+    let current = state
+        .processes
+        .get(&process.id)
+        .ok_or(CodyError::ProcessNotFound(process.id))?;
+    if current.thread_id != process.thread_id
+        || current.origin != process.origin
+        || current.spec_fingerprint != process.spec_fingerprint
+        || current.project_id != process.project_id
+        || current.command != process.command
+        || current.cwd != process.cwd
+        || current.created_at != process.created_at
+    {
+        return Err(conflict(format!(
+            "ownership, launch specification, command, cwd, and creation metadata for managed process {} are immutable",
+            process.id
+        )));
+    }
+    if current.pid.is_some() && current.pid != process.pid {
+        return Err(conflict(format!(
+            "pid for managed process {} cannot be changed once assigned",
+            process.id
+        )));
+    }
+    if current.process_group_id.is_some() && current.process_group_id != process.process_group_id {
+        return Err(conflict(format!(
+            "process group for managed process {} cannot be changed once assigned",
+            process.id
+        )));
+    }
+    if current.started_at.is_some() && current.started_at != process.started_at {
+        return Err(conflict(format!(
+            "start time for managed process {} cannot be changed once assigned",
+            process.id
+        )));
+    }
+    if current.completed_at.is_some() && current.completed_at != process.completed_at {
+        return Err(conflict(format!(
+            "completion time for managed process {} cannot be changed once assigned",
+            process.id
+        )));
+    }
+    if process.output_start_cursor < current.output_start_cursor
+        || process.output_end_cursor < current.output_end_cursor
+        || process.last_event_sequence < current.last_event_sequence
+        || (current.output_truncated && !process.output_truncated)
+    {
+        return Err(conflict(format!(
+            "output cursors and event sequence for managed process {} cannot move backwards",
+            process.id
+        )));
+    }
+    if current.status != process.status && !legal_process_transition(current.status, process.status)
+    {
+        return Err(CodyError::InvalidInput(format!(
+            "illegal managed process status transition: {:?} -> {:?}",
+            current.status, process.status
+        )));
+    }
+
+    validate_process(state, &process)?;
+    state.processes.insert(process.id, process.clone());
+    Ok(process)
 }
 
 fn validate_thread_workspace(state: &StoreState, thread: &Thread) -> Result<()> {
@@ -1360,6 +1746,117 @@ fn validate_turn(state: &StoreState, turn: &Turn) -> Result<()> {
                 input.id, message_turn_id
             )));
         }
+    }
+    Ok(())
+}
+
+fn validate_process(state: &StoreState, process: &ManagedProcess) -> Result<()> {
+    if process.spec_fingerprint.len() != 64
+        || !process
+            .spec_fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(CodyError::InvalidInput(format!(
+            "managed process {} has an invalid spec fingerprint",
+            process.id
+        )));
+    }
+    if !state.threads.contains_key(&process.thread_id) {
+        return Err(CodyError::ThreadNotFound(process.thread_id));
+    }
+    let turn = state
+        .turns
+        .get(&process.origin.turn_id)
+        .ok_or(CodyError::TurnNotFound(process.origin.turn_id))?;
+    if turn.thread_id != process.thread_id {
+        return Err(conflict(format!(
+            "origin turn {} belongs to a different thread than managed process {}",
+            turn.id, process.id
+        )));
+    }
+    if process.origin.tool_call_id.trim().is_empty() {
+        return Err(CodyError::InvalidInput(
+            "managed process origin tool_call_id cannot be empty".into(),
+        ));
+    }
+    if let Some(project_id) = process.project_id {
+        if !state.projects.contains_key(&project_id) {
+            return Err(CodyError::ProjectNotFound(project_id));
+        }
+    }
+    if process.command.trim().is_empty() {
+        return Err(CodyError::InvalidInput(
+            "managed process command cannot be empty".into(),
+        ));
+    }
+    if !process.cwd.is_absolute() {
+        return Err(CodyError::InvalidInput(
+            "managed process cwd must be absolute".into(),
+        ));
+    }
+    if process.output_start_cursor > process.output_end_cursor {
+        return Err(CodyError::InvalidInput(format!(
+            "managed process {} output_start_cursor exceeds output_end_cursor",
+            process.id
+        )));
+    }
+    if process.output_start_cursor > 0 && !process.output_truncated {
+        return Err(CodyError::InvalidInput(format!(
+            "managed process {} has an advanced output cursor without marking output truncated",
+            process.id
+        )));
+    }
+    if process.status.is_active()
+        && (process.completed_at.is_some()
+            || process.exit_code.is_some()
+            || process.error.is_some())
+    {
+        return Err(CodyError::InvalidInput(format!(
+            "active managed process {} cannot have terminal metadata",
+            process.id
+        )));
+    }
+    if matches!(
+        process.status,
+        ProcessStatus::Running | ProcessStatus::Stopping
+    ) && (process.pid.is_none() || process.started_at.is_none())
+    {
+        return Err(CodyError::InvalidInput(format!(
+            "{:?} managed process {} requires a pid and start time",
+            process.status, process.id
+        )));
+    }
+    if process.status.is_terminal() && process.completed_at.is_none() {
+        return Err(CodyError::InvalidInput(format!(
+            "terminal managed process {} requires a completion time",
+            process.id
+        )));
+    }
+    if let Some(started_at) = process.started_at {
+        if started_at < process.created_at {
+            return Err(CodyError::InvalidInput(format!(
+                "managed process {} starts before it was created",
+                process.id
+            )));
+        }
+        if process
+            .completed_at
+            .is_some_and(|completed_at| completed_at < started_at)
+        {
+            return Err(CodyError::InvalidInput(format!(
+                "managed process {} completes before it starts",
+                process.id
+            )));
+        }
+    } else if process
+        .completed_at
+        .is_some_and(|completed_at| completed_at < process.created_at)
+    {
+        return Err(CodyError::InvalidInput(format!(
+            "managed process {} completes before it was created",
+            process.id
+        )));
     }
     Ok(())
 }
@@ -1514,6 +2011,39 @@ mod tests {
         }
     }
 
+    fn managed_process(
+        id: u128,
+        thread_id: ThreadId,
+        turn_id: TurnId,
+        project_id: Option<ProjectId>,
+        created_at: i64,
+    ) -> ManagedProcess {
+        ManagedProcess {
+            id: ProcessId(Uuid::from_u128(id)),
+            thread_id,
+            origin: ProcessOrigin {
+                turn_id,
+                tool_call_id: format!("call-{id}"),
+            },
+            spec_fingerprint: "0".repeat(64),
+            project_id,
+            command: format!("command-{id}"),
+            cwd: PathBuf::from(format!("/workspace/process-{id}")),
+            pid: None,
+            process_group_id: None,
+            status: ProcessStatus::Starting,
+            exit_code: None,
+            error: None,
+            output_truncated: false,
+            output_start_cursor: 0,
+            output_end_cursor: 0,
+            last_event_sequence: 0,
+            created_at: timestamp(created_at),
+            started_at: None,
+            completed_at: None,
+        }
+    }
+
     async fn seed_thread(
         store: &dyn StateStore,
         thread_id: u128,
@@ -1526,6 +2056,33 @@ mod tests {
             .await
             .unwrap();
         (thread, workspace)
+    }
+
+    async fn seed_turn(
+        store: &dyn StateStore,
+        thread: &Thread,
+        message_id: u128,
+        turn_id: u128,
+        created_at: i64,
+    ) -> Turn {
+        let input = message(message_id, thread.id, created_at);
+        store.append_message(input.clone()).await.unwrap();
+        let turn = Turn {
+            id: TurnId(Uuid::from_u128(turn_id)),
+            thread_id: thread.id,
+            input_message_id: input.id,
+            provider: "test".into(),
+            model: "test-model".into(),
+            temperature: None,
+            max_output_tokens: None,
+            status: TurnStatus::Queued,
+            created_at: timestamp(created_at),
+            started_at: None,
+            completed_at: None,
+            error: None,
+        };
+        store.insert_turn(turn.clone()).await.unwrap();
+        turn
     }
 
     #[tokio::test]
@@ -1796,6 +2353,151 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn managed_process_origin_is_unique_and_lifecycle_updates_are_atomic() {
+        let store = InMemoryStore::new();
+        let (thread, _) = seed_thread(&store, 1, 2, 1).await;
+        let turn = seed_turn(&store, &thread, 10, 20, 2).await;
+        let process = managed_process(30, thread.id, turn.id, None, 3);
+
+        store.insert_process(process.clone()).await.unwrap();
+        assert_eq!(
+            store.get_process_by_origin(&process.origin).await.unwrap(),
+            Some(process.clone())
+        );
+
+        let mut duplicate_origin = managed_process(31, thread.id, turn.id, None, 4);
+        duplicate_origin.origin = process.origin.clone();
+        assert!(matches!(
+            store.insert_process(duplicate_origin).await.unwrap_err(),
+            CodyError::Conflict(_)
+        ));
+
+        let mut running = process.clone();
+        running.pid = Some(1234);
+        running.process_group_id = Some(1234);
+        running.status = ProcessStatus::Running;
+        running.started_at = Some(timestamp(4));
+        running.output_end_cursor = 12;
+        running.last_event_sequence = 2;
+        assert_eq!(
+            store.update_process(running.clone()).await.unwrap(),
+            running
+        );
+
+        let mut stale = process;
+        stale.output_end_cursor = 4;
+        assert!(matches!(
+            store.update_process(stale).await.unwrap_err(),
+            CodyError::Conflict(_) | CodyError::InvalidInput(_)
+        ));
+
+        let stopping = store
+            .transition_process_status(running.id, ProcessStatus::Running, ProcessStatus::Stopping)
+            .await
+            .unwrap();
+        assert_eq!(stopping.status, ProcessStatus::Stopping);
+        let stopped = store
+            .transition_process_status(running.id, ProcessStatus::Stopping, ProcessStatus::Stopped)
+            .await
+            .unwrap();
+        assert!(stopped.completed_at.is_some());
+        assert_eq!(
+            store.list_processes(Some(thread.id)).await.unwrap(),
+            vec![stopped.clone()]
+        );
+
+        store.delete_process(stopped.id).await.unwrap();
+        assert!(matches!(
+            store.get_process(stopped.id).await.unwrap_err(),
+            CodyError::ProcessNotFound(id) if id == stopped.id
+        ));
+        assert!(store
+            .get_process_by_origin(&stopped.origin)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn managed_process_validates_ownership_and_protects_active_projects() {
+        let store = InMemoryStore::new();
+        let (thread, _) = seed_thread(&store, 1, 2, 1).await;
+        let (other_thread, _) = seed_thread(&store, 3, 4, 1).await;
+        let turn = seed_turn(&store, &thread, 10, 20, 2).await;
+        let project = project(40, 2);
+        store.insert_project(project.clone()).await.unwrap();
+
+        let mut wrong_thread = managed_process(30, other_thread.id, turn.id, None, 3);
+        assert!(matches!(
+            store
+                .insert_process(wrong_thread.clone())
+                .await
+                .unwrap_err(),
+            CodyError::Conflict(_)
+        ));
+        wrong_thread.thread_id = thread.id;
+        wrong_thread.project_id = Some(ProjectId(Uuid::from_u128(999)));
+        assert!(matches!(
+            store.insert_process(wrong_thread).await.unwrap_err(),
+            CodyError::ProjectNotFound(_)
+        ));
+
+        let process = managed_process(31, thread.id, turn.id, Some(project.id), 3);
+        store.insert_process(process.clone()).await.unwrap();
+        assert!(matches!(
+            store.delete_project(project.id).await.unwrap_err(),
+            CodyError::Conflict(message) if message.contains("active managed process")
+        ));
+
+        let failed = store
+            .transition_process_status(process.id, ProcessStatus::Starting, ProcessStatus::Failed)
+            .await
+            .unwrap();
+        store.delete_project(project.id).await.unwrap();
+        assert_eq!(store.get_process(failed.id).await.unwrap().project_id, None);
+    }
+
+    #[tokio::test]
+    async fn thread_deletion_requires_terminal_processes_then_cascades_them() {
+        let store = InMemoryStore::new();
+        let (thread, _) = seed_thread(&store, 1, 2, 1).await;
+        let turn = seed_turn(&store, &thread, 10, 20, 2).await;
+        let process = managed_process(30, thread.id, turn.id, None, 3);
+        store.insert_process(process.clone()).await.unwrap();
+
+        assert!(matches!(
+            store.delete_thread(thread.id).await.unwrap_err(),
+            CodyError::Conflict(message) if message.contains("active managed process")
+        ));
+
+        // Removing the input message would normally make a Turn deletable, but
+        // its process origin must remain valid until the owning Thread goes.
+        store
+            .delete_message(turn.input_message_id)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            store.delete_turn(turn.id).await.unwrap_err(),
+            CodyError::Conflict(_)
+        ));
+
+        store
+            .transition_process_status(process.id, ProcessStatus::Starting, ProcessStatus::Failed)
+            .await
+            .unwrap();
+        store.delete_thread(thread.id).await.unwrap();
+        assert!(matches!(
+            store.get_process(process.id).await.unwrap_err(),
+            CodyError::ProcessNotFound(id) if id == process.id
+        ));
+        assert!(store
+            .get_process_by_origin(&process.origin)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
     async fn json_store_survives_restart_with_order_and_statuses() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("state.json");
@@ -1901,6 +2603,67 @@ mod tests {
             reopened.get_thread(thread.id).await.unwrap().title,
             "Durable title"
         );
+    }
+
+    #[tokio::test]
+    async fn json_store_persists_managed_processes_and_origin_index() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.json");
+        let store = JsonFileStore::open(&path).await.unwrap();
+        let (thread, _) = seed_thread(&store, 1, 2, 1).await;
+        let turn = seed_turn(&store, &thread, 10, 20, 2).await;
+        let process = managed_process(30, thread.id, turn.id, None, 3);
+        store.insert_process(process.clone()).await.unwrap();
+
+        let mut running = process;
+        running.pid = Some(42);
+        running.process_group_id = Some(42);
+        running.status = ProcessStatus::Running;
+        running.started_at = Some(timestamp(4));
+        running.output_end_cursor = 24;
+        running.last_event_sequence = 3;
+        store.update_process(running.clone()).await.unwrap();
+        drop(store);
+
+        let reopened = JsonFileStore::open(&path).await.unwrap();
+        assert_eq!(reopened.get_process(running.id).await.unwrap(), running);
+        assert_eq!(
+            reopened
+                .get_process_by_origin(&running.origin)
+                .await
+                .unwrap(),
+            Some(running.clone())
+        );
+        assert_eq!(
+            reopened.list_processes(Some(thread.id)).await.unwrap(),
+            vec![running]
+        );
+
+        let raw: serde_json::Value =
+            serde_json::from_slice(&tokio::fs::read(path).await.unwrap()).unwrap();
+        assert_eq!(raw["version"], 2);
+        assert_eq!(raw["processes"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn json_store_migrates_v1_snapshot_to_v2_on_open() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.json");
+        drop(JsonFileStore::open(&path).await.unwrap());
+
+        let mut snapshot: serde_json::Value =
+            serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
+        snapshot["version"] = serde_json::json!(1);
+        snapshot.as_object_mut().unwrap().remove("processes");
+        tokio::fs::write(&path, serde_json::to_vec_pretty(&snapshot).unwrap())
+            .await
+            .unwrap();
+
+        drop(JsonFileStore::open(&path).await.unwrap());
+        let migrated: serde_json::Value =
+            serde_json::from_slice(&tokio::fs::read(path).await.unwrap()).unwrap();
+        assert_eq!(migrated["version"], 2);
+        assert_eq!(migrated["processes"], serde_json::json!([]));
     }
 
     #[tokio::test]

@@ -10,6 +10,8 @@ import type {
   ChatMessage,
   ContextReference,
   EventEnvelope,
+  ProcessEventEnvelope,
+  ProcessOutputPage,
   Project,
   ServerStatus,
   Thread,
@@ -26,7 +28,9 @@ import { ThreadContextCard } from './components/ThreadContextCard'
 import { TitleBar } from './components/TitleBar'
 import { getCodyBridge } from './lib/mockBridge'
 import { referenceKey, upsertReference } from './lib/references'
+import { isProcessActive, shouldRefreshProcessSnapshot } from './lib/processes'
 import { deriveThreadContext } from './lib/threadContext'
+import { ThreadProjectionLedger } from './lib/threadProjection'
 
 type ExtendedBridge = CodyDesktopBridge & { copyText?: (text: string) => Promise<void> }
 
@@ -72,6 +76,18 @@ function initialTheme(): boolean {
   return window.matchMedia('(prefers-color-scheme: dark)').matches
 }
 
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => window.matchMedia(query).matches)
+  useEffect(() => {
+    const media = window.matchMedia(query)
+    const update = (): void => setMatches(media.matches)
+    update()
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [query])
+  return matches
+}
+
 function runningTurn(snapshot?: ThreadSnapshot): Turn | undefined {
   return snapshot?.turns.findLast((turn) => turn.status === 'running' || turn.status === 'queued')
 }
@@ -113,6 +129,8 @@ export function App() {
   const [eventsByThread, setEventsByThread] = useState<Record<string, EventEnvelope[]>>({})
   const [runningTurns, setRunningTurns] = useState<Record<string, string>>({})
   const [resolvingApprovals, setResolvingApprovals] = useState<Set<string>>(new Set())
+  const [stoppingProcessIds, setStoppingProcessIds] = useState<Set<string>>(new Set())
+  const [processOutputCursors, setProcessOutputCursors] = useState<Record<string, number>>({})
   const [loadingThread, setLoadingThread] = useState(false)
   const [bootstrapping, setBootstrapping] = useState(true)
   const [appError, setAppError] = useState('')
@@ -128,25 +146,50 @@ export function App() {
     () => window.localStorage.getItem('cody.inspectorCollapsed') !== 'false'
   )
   const [darkTheme, setDarkTheme] = useState(initialTheme)
+  const inspectorIsNarrow = useMediaQuery('(max-width: 72rem)')
+  const railIsNarrow = useMediaQuery('(max-width: 48rem)')
 
   const activeThreadRef = useRef<string | undefined>(undefined)
   const draftIdRef = useRef(draftId)
   const loadRequestRef = useRef(0)
   const lastSequenceRef = useRef(new Map<string, number>())
+  const threadRefreshRequestRef = useRef(new Map<string, number>())
+  const threadProjectionRef = useRef(new ThreadProjectionLedger())
+  const lastProcessSequenceRef = useRef(new Map<string, number>())
+  const processRefreshTimersRef = useRef(new Map<string, number>())
+  const processRefreshRequestRef = useRef(new Map<string, number>())
   const startTurnRef = useRef(false)
   const cancelTurnRef = useRef(false)
   const approvalRef = useRef(new Set<string>())
+  const processStopRef = useRef(new Set<string>())
   const statusRef = useRef<ServerStatus['phase']>('starting')
   const hasHydratedRef = useRef(false)
   const preferDraftRef = useRef(false)
 
   const applySnapshot = useCallback((nextSnapshot: ThreadSnapshot): void => {
     if (activeThreadRef.current !== nextSnapshot.thread.id) return
-    setSnapshot(nextSnapshot)
-    setThreads((current) => current.map((thread) =>
-      thread.id === nextSnapshot.thread.id ? nextSnapshot.thread : thread
+    const reconciledSnapshot = {
+      ...nextSnapshot,
+      thread: threadProjectionRef.current.reconcile(nextSnapshot.thread)
+    }
+    setSnapshot(reconciledSnapshot)
+    setStoppingProcessIds((current) => new Set(
+      [...current].filter((processId) => {
+        const process = reconciledSnapshot.processes.find((item) => item.id === processId)
+        return process ? isProcessActive(process) : false
+      })
     ))
-    const activeTurn = runningTurn(nextSnapshot)
+    setProcessOutputCursors((current) => {
+      const next = { ...current }
+      for (const process of reconciledSnapshot.processes) {
+        next[process.id] = Math.max(next[process.id] ?? 0, process.output_end_cursor)
+      }
+      return next
+    })
+    setThreads((current) => current.map((thread) =>
+      thread.id === reconciledSnapshot.thread.id ? reconciledSnapshot.thread : thread
+    ))
+    const activeTurn = runningTurn(reconciledSnapshot)
     setRunningTurns((current) => {
       const next = { ...current }
       if (activeTurn) next[nextSnapshot.thread.id] = activeTurn.id
@@ -156,16 +199,39 @@ export function App() {
   }, [])
 
   const refreshThread = useCallback(async (threadId: string): Promise<void> => {
+    const request = (threadRefreshRequestRef.current.get(threadId) ?? 0) + 1
+    threadRefreshRequestRef.current.set(threadId, request)
     try {
       const [nextSnapshot, threadResult] = await Promise.all([
         bridge.rpc('thread/get', { thread_id: threadId }),
         bridge.rpc('thread/list', {})
       ])
-      setThreads(threadResult.threads)
+      if (threadRefreshRequestRef.current.get(threadId) !== request) return
+      setThreads(threadProjectionRef.current.reconcileAll(threadResult.threads))
       applySnapshot(nextSnapshot)
     } catch (error) {
       setAppError(error instanceof Error ? error.message : 'Could not refresh the Thread.')
     }
+  }, [applySnapshot, bridge])
+
+  const scheduleProcessRefresh = useCallback((threadId: string, immediate = false): void => {
+    const existingTimer = processRefreshTimersRef.current.get(threadId)
+    if (existingTimer !== undefined) window.clearTimeout(existingTimer)
+    const request = (processRefreshRequestRef.current.get(threadId) ?? 0) + 1
+    processRefreshRequestRef.current.set(threadId, request)
+    const timer = window.setTimeout(() => {
+      processRefreshTimersRef.current.delete(threadId)
+      void bridge.rpc('thread/get', { thread_id: threadId })
+        .then((nextSnapshot) => {
+          if (processRefreshRequestRef.current.get(threadId) !== request) return
+          applySnapshot(nextSnapshot)
+        })
+        .catch((error) => {
+          if (processRefreshRequestRef.current.get(threadId) !== request) return
+          setAppError(error instanceof Error ? error.message : 'Could not refresh managed processes.')
+        })
+    }, immediate ? 0 : 50)
+    processRefreshTimersRef.current.set(threadId, timer)
   }, [applySnapshot, bridge])
 
   const selectThread = useCallback(async (threadId: string): Promise<void> => {
@@ -175,6 +241,13 @@ export function App() {
     setActiveThreadId(threadId)
     setDraftWorkingDirectory(undefined)
     setSnapshot(undefined)
+    setStoppingProcessIds(new Set())
+    processStopRef.current.clear()
+    setProcessOutputCursors({})
+    lastProcessSequenceRef.current.clear()
+    for (const timer of processRefreshTimersRef.current.values()) window.clearTimeout(timer)
+    processRefreshTimersRef.current.clear()
+    processRefreshRequestRef.current.clear()
     setLoadingThread(true)
     setAppError('')
     window.localStorage.setItem('cody.activeThreadId', threadId)
@@ -209,7 +282,7 @@ export function App() {
         bridge.rpc('project/list', {}),
         bridge.rpc('provider/list', {})
       ])
-      setThreads(threadResult.threads)
+      setThreads(threadProjectionRef.current.reconcileAll(threadResult.threads))
       setProjects(projectResult.projects)
       setProviders(providerResult.providers)
       setProvider((current) =>
@@ -298,16 +371,16 @@ export function App() {
   }, [inspectorOpen, railOpen])
 
   useEffect(() => {
-    const railIsDrawer = railOpen && window.matchMedia('(max-width: 48rem)').matches
-    const inspectorIsDrawer = inspectorOpen && window.matchMedia('(max-width: 72rem)').matches
+    const railIsDrawer = railOpen && railIsNarrow
+    const inspectorIsDrawer = inspectorOpen && inspectorIsNarrow
     if (!railIsDrawer && !inspectorIsDrawer) return
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
     const drawer = document.querySelector<HTMLElement>(railIsDrawer ? '.asset-rail' : '.inspector')
     if (!drawer) return
     const focusableSelector = 'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], summary'
-    const focusables = [...drawer.querySelectorAll<HTMLElement>(focusableSelector)]
-    focusables[0]?.focus()
+    drawer.querySelector<HTMLElement>(focusableSelector)?.focus()
     const trapFocus = (event: KeyboardEvent): void => {
+      const focusables = [...drawer.querySelectorAll<HTMLElement>(focusableSelector)]
       if (event.key !== 'Tab' || focusables.length === 0) return
       const first = focusables[0]
       const last = focusables.at(-1)
@@ -324,10 +397,14 @@ export function App() {
       drawer.removeEventListener('keydown', trapFocus)
       previousFocus?.focus()
     }
-  }, [inspectorOpen, railOpen])
+  }, [inspectorIsNarrow, inspectorOpen, railIsNarrow, railOpen])
 
   useEffect(() => {
     const removeEventListener = bridge.onEvent((envelope) => {
+      threadRefreshRequestRef.current.set(
+        envelope.thread_id,
+        (threadRefreshRequestRef.current.get(envelope.thread_id) ?? 0) + 1
+      )
       const previousSequence = lastSequenceRef.current.get(envelope.turn_id)
       if (previousSequence !== undefined && envelope.sequence <= previousSequence) return
       if (previousSequence !== undefined && envelope.sequence !== previousSequence + 1) {
@@ -355,6 +432,7 @@ export function App() {
         setAnnouncement(`Changed ${envelope.event.path}`)
       } else if (envelope.event.type === 'thread_updated') {
         const title = envelope.event.title
+        threadProjectionRef.current.observeTitle(envelope.thread_id, title)
         setThreads((current) => current.map((thread) =>
           thread.id === envelope.thread_id ? { ...thread, title } : thread
         ))
@@ -362,6 +440,7 @@ export function App() {
           ? { ...current, thread: { ...current.thread, title } }
           : current)
         setAnnouncement(`Thread named ${title}`)
+        void refreshThread(envelope.thread_id)
       } else if (TERMINAL_EVENTS.has(envelope.event.type)) {
         setRunningTurns((current) => {
           const next = { ...current }
@@ -379,6 +458,51 @@ export function App() {
       }
     })
 
+    const removeProcessEventListener = bridge.onProcessEvent((envelope: ProcessEventEnvelope) => {
+      if (activeThreadRef.current !== envelope.thread_id) return
+      const previousSequence = lastProcessSequenceRef.current.get(envelope.process_id)
+      if (previousSequence !== undefined && envelope.sequence <= previousSequence) return
+      if (previousSequence !== undefined && envelope.sequence !== previousSequence + 1) {
+        setAnnouncement(
+          envelope.event.type === 'output'
+            ? 'Process output gap detected. The byte cursor will reconcile retained output.'
+            : 'Process activity gap detected. Refreshing authoritative state.'
+        )
+      }
+      lastProcessSequenceRef.current.set(envelope.process_id, envelope.sequence)
+
+      if (envelope.event.type === 'stopping') {
+        setStoppingProcessIds((current) => new Set(current).add(envelope.process_id))
+        setAnnouncement('Stopping managed background process…')
+      } else if (
+        envelope.event.type === 'exited'
+        || envelope.event.type === 'stopped'
+        || envelope.event.type === 'failed'
+        || envelope.event.type === 'lost'
+      ) {
+        setStoppingProcessIds((current) => {
+          const next = new Set(current)
+          next.delete(envelope.process_id)
+          return next
+        })
+        processStopRef.current.delete(envelope.process_id)
+        setAnnouncement(`Managed process ${envelope.event.type}`)
+      } else if (envelope.event.type === 'started') {
+        setAnnouncement('Managed background process started')
+      } else if (envelope.event.type === 'output') {
+        const nextCursor = envelope.event.next_cursor
+        setProcessOutputCursors((current) => ({
+          ...current,
+          [envelope.process_id]: Math.max(current[envelope.process_id] ?? 0, nextCursor)
+        }))
+      }
+
+      // Process events remain independent from the bounded Turn-event timeline.
+      // Lifecycle state is reconciled from the durable Thread snapshot. Output
+      // bytes are fetched only through the bounded cursor RPC.
+      if (shouldRefreshProcessSnapshot(envelope.event)) scheduleProcessRefresh(envelope.thread_id, true)
+    })
+
     const removeStatusListener = bridge.onServerStatus((nextStatus) => {
       const previous = statusRef.current
       statusRef.current = nextStatus.phase
@@ -386,6 +510,9 @@ export function App() {
       if (nextStatus.phase === 'connected' && (previous !== 'connected' || nextStatus.reconcile)) {
         setEventsByThread({})
         lastSequenceRef.current.clear()
+        threadRefreshRequestRef.current.clear()
+        threadProjectionRef.current.clear()
+        lastProcessSequenceRef.current.clear()
         setAnnouncement(
           nextStatus.reconcile
             ? 'Live activity was interrupted. Refreshing durable history.'
@@ -395,6 +522,13 @@ export function App() {
       } else if (nextStatus.phase !== 'connected') {
         setEventsByThread({})
         lastSequenceRef.current.clear()
+        lastProcessSequenceRef.current.clear()
+        for (const timer of processRefreshTimersRef.current.values()) window.clearTimeout(timer)
+        processRefreshTimersRef.current.clear()
+        processRefreshRequestRef.current.clear()
+        setStoppingProcessIds(new Set())
+        processStopRef.current.clear()
+        setProcessOutputCursors({})
         setAnnouncement(`Server ${nextStatus.phase}`)
       }
     })
@@ -402,9 +536,12 @@ export function App() {
     void bootstrap()
     return () => {
       removeEventListener()
+      removeProcessEventListener()
       removeStatusListener()
+      for (const timer of processRefreshTimersRef.current.values()) window.clearTimeout(timer)
+      processRefreshTimersRef.current.clear()
     }
-  }, [bootstrap, bridge, refreshThread])
+  }, [bootstrap, bridge, refreshThread, scheduleProcessRefresh])
 
   const activeEvents = activeThreadId ? eventsByThread[activeThreadId] ?? [] : []
   const activeRunningTurnId = activeThreadId
@@ -446,6 +583,13 @@ export function App() {
     activeThreadRef.current = undefined
     setActiveThreadId(undefined)
     setSnapshot(undefined)
+    setStoppingProcessIds(new Set())
+    processStopRef.current.clear()
+    setProcessOutputCursors({})
+    lastProcessSequenceRef.current.clear()
+    for (const timer of processRefreshTimersRef.current.values()) window.clearTimeout(timer)
+    processRefreshTimersRef.current.clear()
+    processRefreshRequestRef.current.clear()
     setDraftWorkingDirectory(workingDirectory)
     const nextDraftId = crypto.randomUUID()
     draftIdRef.current = nextDraftId
@@ -505,8 +649,9 @@ export function App() {
             ...current.filter((project) => project.id !== started.imported_project?.id)
           ])
         }
+        const reconciledThread = threadProjectionRef.current.reconcile(started.thread)
         setThreads((current) => [
-          started.thread,
+          reconciledThread,
           ...current.filter((thread) => thread.id !== started.thread.id)
         ])
         setRunningTurns((current) => ({ ...current, [started.thread.id]: started.turn.id }))
@@ -516,11 +661,12 @@ export function App() {
           activeThreadRef.current = started.thread.id
           setActiveThreadId(started.thread.id)
           setSnapshot({
-            thread: { ...started.thread, status: 'running', updated_at: started.turn.created_at },
+            thread: { ...reconciledThread, status: 'running', updated_at: started.turn.created_at },
             workspace: started.workspace,
             messages: [optimisticMessage(started.thread.id, started.turn, message, references)],
             turns: [started.turn],
-            pending_approvals: []
+            pending_approvals: [],
+            processes: []
           })
           setDraftWorkingDirectory(undefined)
           window.localStorage.setItem('cody.activeThreadId', started.thread.id)
@@ -580,7 +726,7 @@ export function App() {
     try {
       const result = await bridge.rpc('approval/respond', { approval_id: approvalId, approved })
       if (!result.resolved) throw new Error('This approval was already resolved.')
-      setAnnouncement(approved ? 'Shell access allowed once' : 'Shell access denied')
+      setAnnouncement(approved ? 'Command execution allowed once' : 'Command execution denied')
       if (activeThreadRef.current) void refreshThread(activeThreadRef.current)
     } catch (error) {
       setAppError(error instanceof Error ? error.message : 'Could not respond to approval.')
@@ -589,6 +735,53 @@ export function App() {
       setResolvingApprovals((current) => {
         const next = new Set(current)
         next.delete(approvalId)
+        return next
+      })
+    }
+  }
+
+  const handleReadProcessOutput = async (
+    processId: string,
+    afterCursor: number,
+    limit: number
+  ): Promise<ProcessOutputPage> => {
+    const threadId = activeThreadRef.current
+    if (!threadId) throw new Error('No active Thread is available for this process.')
+    return bridge.rpc('process/read-output', {
+      thread_id: threadId,
+      process_id: processId,
+      after_cursor: afterCursor,
+      limit
+    })
+  }
+
+  const handleStopProcess = async (processId: string): Promise<void> => {
+    const threadId = activeThreadRef.current
+    if (!threadId || processStopRef.current.has(processId)) return
+    processStopRef.current.add(processId)
+    setStoppingProcessIds((current) => new Set(current).add(processId))
+    setAnnouncement('Stopping managed background process…')
+    try {
+      const process = await bridge.rpc('process/stop', {
+        thread_id: threadId,
+        process_id: processId
+      })
+      setSnapshot((current) => {
+        if (!current || current.thread.id !== threadId) return current
+        return {
+          ...current,
+          processes: current.processes.map((item) => item.id === process.id ? process : item)
+        }
+      })
+      setAnnouncement(`Managed process ${process.status}`)
+      scheduleProcessRefresh(threadId, true)
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : 'Could not stop the managed process.')
+    } finally {
+      processStopRef.current.delete(processId)
+      setStoppingProcessIds((current) => {
+        const next = new Set(current)
+        next.delete(processId)
         return next
       })
     }
@@ -621,21 +814,21 @@ export function App() {
     }
     if (command === 'focus-assets') {
       setRailCollapsed(false)
-      if (window.matchMedia('(max-width: 48rem)').matches) setRailOpen(true)
+      if (railIsNarrow) setRailOpen(true)
       requestAnimationFrame(() => document.querySelector<HTMLInputElement>('#asset-filter')?.focus())
       return
     }
     if (command === 'toggle-rail') {
-      if (window.matchMedia('(max-width: 48rem)').matches) setRailOpen((current) => !current)
+      if (railIsNarrow) setRailOpen((current) => !current)
       else setRailCollapsed((current) => !current)
       return
     }
-    if (window.matchMedia('(max-width: 72rem)').matches) {
+    if (inspectorIsNarrow) {
       setInspectorOpen((current) => !current)
     } else {
       setInspectorCollapsed((current) => !current)
     }
-  }), [beginDraft, bridge, handleImportProject])
+  }), [beginDraft, bridge, handleImportProject, inspectorIsNarrow, railIsNarrow])
 
   const emptyDisconnected = status.phase !== 'connected' && !snapshot
   const selectedProjectIds = new Set(
@@ -654,15 +847,16 @@ export function App() {
     threadContext
     && (threadContext.activeTurns.length > 0
       || threadContext.runningTools.length > 0
-      || threadContext.pendingApprovals.length > 0)
+      || threadContext.pendingApprovals.length > 0
+      || snapshot?.processes.some(isProcessActive))
   )
 
   const openInspector = (): void => {
     setInspectorCollapsed(false)
-    if (window.matchMedia('(max-width: 72rem)').matches) setInspectorOpen(true)
+    if (inspectorIsNarrow) setInspectorOpen(true)
   }
   const toggleInspector = (): void => {
-    if (window.matchMedia('(max-width: 72rem)').matches) {
+    if (inspectorIsNarrow) {
       setInspectorOpen((current) => !current)
     } else {
       setInspectorCollapsed((current) => !current)
@@ -687,7 +881,7 @@ export function App() {
         onSelectThread={(threadId) => void selectThread(threadId)}
       />
 
-      {(railOpen || inspectorOpen) ? (
+      {((railOpen && railIsNarrow) || (inspectorOpen && inspectorIsNarrow)) ? (
         <button
           className="drawer-scrim"
           type="button"
@@ -707,7 +901,7 @@ export function App() {
           darkTheme={darkTheme}
           railCollapsed={railCollapsed}
           showInspector={Boolean(snapshot)}
-          inspectorExpanded={inspectorOpen}
+          inspectorExpanded={inspectorIsNarrow ? inspectorOpen : !inspectorCollapsed}
           contextCount={contextCount}
           contextActive={contextActive}
           onOpenRail={() => {
@@ -843,8 +1037,11 @@ export function App() {
             draftReferences={draftReferences}
             events={activeEvents}
             open={inspectorOpen}
+            modal={inspectorIsNarrow}
+            stoppingProcessIds={stoppingProcessIds}
+            processOutputCursors={processOutputCursors}
             onClose={() => {
-              if (window.matchMedia('(max-width: 72rem)').matches) setInspectorOpen(false)
+              if (inspectorIsNarrow) setInspectorOpen(false)
               else {
                 setInspectorCollapsed(true)
                 requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(
@@ -853,6 +1050,8 @@ export function App() {
               }
             }}
             onCopyText={copyText}
+            onReadProcessOutput={handleReadProcessOutput}
+            onStopProcess={handleStopProcess}
           />
         ) : null}
         <ProjectShelf

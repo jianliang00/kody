@@ -48,6 +48,7 @@ id_type!(TurnId);
 id_type!(MessageId);
 id_type!(EventId);
 id_type!(ApprovalId);
+id_type!(ProcessId);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -232,6 +233,91 @@ pub struct Turn {
     pub completed_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// The tool invocation that created a managed process. A single invocation is
+/// idempotent: at most one process may be associated with this origin.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ProcessOrigin {
+    pub turn_id: TurnId,
+    pub tool_call_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessStatus {
+    Starting,
+    Running,
+    Stopping,
+    Exited,
+    Stopped,
+    Failed,
+    Lost,
+}
+
+impl ProcessStatus {
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Starting | Self::Running | Self::Stopping)
+    }
+
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Exited | Self::Stopped | Self::Failed | Self::Lost
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessOutputStream {
+    Stdout,
+    Stderr,
+}
+
+/// Durable metadata for a process supervised by the process manager.
+///
+/// Output bytes are held by the process manager's bounded durable log. The
+/// cursors below make log eviction and event-gap recovery explicit without
+/// storing an unbounded output log in the state snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManagedProcess {
+    pub id: ProcessId,
+    pub thread_id: ThreadId,
+    pub origin: ProcessOrigin,
+    /// Stable SHA-256 over every immutable launch parameter, including the
+    /// sanitized environment. It makes retry idempotency complete even when
+    /// two requests otherwise share the same visible command and cwd.
+    pub spec_fingerprint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    pub command: String,
+    pub cwd: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_group_id: Option<i32>,
+    pub status: ProcessStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub output_truncated: bool,
+    /// First retained byte in the merged stdout/stderr output stream.
+    #[serde(default)]
+    pub output_start_cursor: u64,
+    /// Cursor immediately after the last observed output byte.
+    #[serde(default)]
+    pub output_end_cursor: u64,
+    /// Last sequence assigned on this process's independent event stream.
+    #[serde(default)]
+    pub last_event_sequence: u64,
+    pub created_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<DateTime<Utc>>,
 }
 
 #[cfg(test)]
