@@ -18,6 +18,9 @@ interface TitleBarProps {
   darkTheme: boolean
   railCollapsed: boolean
   showInspector: boolean
+  inspectorExpanded: boolean
+  contextCount: number
+  contextActive: boolean
   onOpenRail: () => void
   onOpenInspector: () => void
   onRetry: () => void
@@ -32,6 +35,9 @@ export function TitleBar({
   darkTheme,
   railCollapsed,
   showInspector,
+  inspectorExpanded,
+  contextCount,
+  contextActive,
   onOpenRail,
   onOpenInspector,
   onRetry,
@@ -85,8 +91,17 @@ export function TitleBar({
           {darkTheme ? <Sun aria-hidden="true" size={17} /> : <Moon aria-hidden="true" size={17} />}
         </button>
         {showInspector ? (
-          <button className="icon-button inspector-trigger" type="button" onClick={onOpenInspector} aria-label="Open context inspector">
+          <button
+            className="icon-button inspector-trigger"
+            type="button"
+            onClick={onOpenInspector}
+            aria-label={`Open context inspector. ${contextCount} active references${contextActive ? ', runtime active' : ''}`}
+            aria-controls="thread-inspector"
+            aria-expanded={inspectorExpanded}
+          >
             <PanelRightOpen aria-hidden="true" size={17} />
+            {contextCount > 0 ? <span className="inspector-trigger__count" aria-hidden="true">{contextCount}</span> : null}
+            {contextActive ? <span className="inspector-trigger__activity" aria-hidden="true" /> : null}
           </button>
         ) : null}
         {platform !== 'darwin' ? (

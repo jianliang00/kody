@@ -15,6 +15,7 @@ import { useMemo, useState } from 'react'
 import type { ContextReference, EventEnvelope, Project, Thread, ThreadSnapshot } from '@shared/protocol'
 import { ReferenceChips } from './ReferenceChips'
 import { referenceKey } from '../lib/references'
+import { collectEffectiveReferences } from '../lib/threadContext'
 
 interface InspectorProps {
   snapshot: ThreadSnapshot
@@ -122,9 +123,16 @@ export function Inspector({
       .reverse(),
     [events]
   )
+  const effectiveReferences = useMemo(() => collectEffectiveReferences(snapshot), [snapshot])
 
   return (
-    <aside className={`inspector${open ? ' inspector--open' : ''}`} aria-label="Thread context and activity">
+    <aside
+      id="thread-inspector"
+      className={`inspector${open ? ' inspector--open' : ''}`}
+      role={open ? 'dialog' : undefined}
+      aria-modal={open || undefined}
+      aria-label="Thread context and activity"
+    >
       <header className="inspector__header">
         <div>
           <p className="eyebrow">Thread lens</p>
@@ -174,17 +182,17 @@ export function Inspector({
               <h3 id="constellation-title">Active references</h3>
             </div>
             <span className="count-pill">
-              {snapshot.thread.default_references.length + historyReferences.length + draftReferences.length}
+              {effectiveReferences.threads.length + effectiveReferences.projects.length}
             </span>
           </header>
           <div className="constellation-graphic" aria-hidden="true">
             <span className="constellation-orbit" />
             <span className="constellation-core">C</span>
             <span className="constellation-dot constellation-dot--workspace" />
-            {snapshot.thread.default_references.slice(0, 3).map((reference, index) => (
+            {[...effectiveReferences.threads, ...effectiveReferences.projects].slice(0, 3).map((reference, index) => (
               <span
                 className={`constellation-dot constellation-dot--${reference.kind} constellation-dot--position-${index + 1}`}
-                key={`${reference.kind}-${index}`}
+                key={reference.kind === 'thread' ? reference.thread_id : reference.project_id}
               />
             ))}
           </div>

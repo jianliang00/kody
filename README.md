@@ -20,6 +20,7 @@ Cody 是一个从零实现的 Rust Coding Agent 核心框架。它把 Agent Loop
 - Thread/Turn 原子状态迁移，阻止同一 Thread 并发 Turn 和 Turn 重复执行。
 - Draft-first 创建：空白输入框不落库，首次发送通过幂等 RPC 一次创建 Thread/Workspace/可选 Project 与首个 Turn，失败自动回滚。
 - 首轮完成后自动生成 Thread 标题；标题生成器可替换，失败时使用 Unicode 安全的本地摘要。
+- Thread 右上角上下文卡片：汇总有效 Thread/Project 引用和当前 Turn/工具/审批活动；托管后台进程单独计数，当前尚未提供 ProcessManager 时明确显示为空。
 - 引用解析与上下文预算；被引用对话作为低优先级 JSON 参考数据注入，不复制进当前 Thread。
 - 版本化 JSON 持久化，原子替换、启动校验及中断 Turn 恢复。
 - JSON-RPC 2.0 over HTTP/WebSocket；WebSocket 推送 Turn 事件并按 Thread 订阅。

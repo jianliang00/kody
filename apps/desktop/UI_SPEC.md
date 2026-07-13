@@ -20,9 +20,9 @@ Desktop uses three regions:
 
 1. Asset rail (approximately 17rem): new-draft action, search, and durable Thread list.
 2. Conversation workspace (fluid): title/status, linear messages, live agent activity, composer.
-3. Context rail (approximately 20rem): Thread inspector above and a separate Project shelf anchored at the bottom-right.
+3. Context rail (approximately 20rem): a persistent Current Thread context card at the upper-right, the detailed Thread inspector below it, and a separate Project shelf anchored at the bottom-right.
 
-At narrow widths, the inspector becomes a drawer and the asset rail can collapse. The conversation must remain usable at 320 CSS pixels.
+The context card summarizes effective Thread/Project references using the same last-reference-wins semantics as the runtime. Runtime operations and pending approvals are shown separately from managed background processes; ordinary blocking shell tools must never be mislabeled as background processes. At narrow widths, the summary collapses into the title-bar Context trigger and the inspector becomes a drawer. The asset rail can collapse, and the conversation must remain usable at 320 CSS pixels.
 
 ## Visual direction
 
@@ -39,6 +39,7 @@ Borrow only broad traits from the Codex desktop aesthetic: quiet neutral surface
 7. Show Shell approval inline with command/reason and explicit Allow/Deny actions.
 8. Inspect Workspace path, default references, draft references and changed-file events.
 9. Replace the placeholder title after the first completed Turn and reflect it in both title bar and Thread list.
+10. Keep the upper-right Current Thread card synchronized with effective references, pending next-message context, active operations, approvals and managed background-process state.
 
 ## Accessibility
 

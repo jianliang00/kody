@@ -175,6 +175,20 @@ test('creates the first Thread through one idempotent draft request', async () =
       durable.snapshot.thread.id
     ])
 
+    const contextCard = page.locator('#thread-context-card')
+    await expect(contextCard).toBeVisible()
+    await expect(contextCard.getByRole('heading', { name: 'Context', exact: true })).toBeVisible()
+    await expect(contextCard.getByText('Threads', { exact: true })).toBeVisible()
+    await expect(contextCard.getByText('Projects', { exact: true })).toBeVisible()
+    await expect(contextCard.getByText('Managed procs', { exact: true })).toBeVisible()
+    await expect(contextCard.getByLabel('Referenced Projects')).toContainText(durable.projects[0]?.name ?? '')
+    await expect(contextCard.getByLabel('Referenced Projects')).toContainText('Read & write')
+    await expect(contextCard.getByText('No managed background processes', { exact: true })).toBeVisible()
+    const contextCardBox = await contextCard.boundingBox()
+    expect(contextCardBox).not.toBeNull()
+    expect(contextCardBox?.x ?? 0).toBeGreaterThan(viewport.width / 2)
+    expect(contextCardBox?.y ?? viewport.height).toBeLessThan(viewport.height / 2)
+
     await expect(projectShelf.getByRole('heading', { name: 'Projects 1' })).toBeVisible()
     await expect(projectShelf.getByText(durable.projects[0]?.name ?? '', { exact: true })).toBeVisible()
     await expect(projectShelf.getByTitle(canonicalProjectRoot)).toBeVisible()
@@ -184,6 +198,7 @@ test('creates the first Thread through one idempotent draft request', async () =
     expect(populatedShelfBox?.x ?? 0).toBeGreaterThan(viewport.width / 2)
     expect(populatedShelfBox?.y ?? 0).toBeGreaterThan(viewport.height / 2)
     expect(Math.abs((populatedShelfBox?.y ?? 0) + (populatedShelfBox?.height ?? 0) - viewport.height)).toBeLessThan(3)
+    expect((contextCardBox?.y ?? 0) + (contextCardBox?.height ?? 0)).toBeLessThan(populatedShelfBox?.y ?? 0)
 
     const threadNavigation = page.getByRole('navigation', { name: 'Threads' })
     const durableThreadRow = threadNavigation.getByRole('button', { name: new RegExp(prompt) })
@@ -232,12 +247,18 @@ test('creates the first Thread through one idempotent draft request', async () =
 
     const inspector = page.getByLabel('Thread context and activity')
     const openInspector = page.getByRole('button', { name: 'Open context inspector' })
+    await expect(contextCard).toBeHidden()
     await expect(inspector).toBeHidden()
-    await openInspector.click()
+    await expect(openInspector).toHaveAttribute('aria-controls', 'thread-inspector')
+    await expect(openInspector).toHaveAttribute('aria-expanded', 'false')
+    await openInspector.focus()
+    await page.keyboard.press('Enter')
     await expect(inspector).toBeVisible()
+    await expect(openInspector).toHaveAttribute('aria-expanded', 'true')
     await expect(page.getByRole('heading', { name: 'Workspace', exact: true })).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(inspector).toBeHidden()
+    await expect(openInspector).toHaveAttribute('aria-expanded', 'false')
     await expect(openInspector).toBeFocused()
   } finally {
     await application?.close().catch(() => undefined)

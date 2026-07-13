@@ -22,9 +22,11 @@ import { Conversation } from './components/Conversation'
 import { DraftConversation } from './components/DraftConversation'
 import { Inspector } from './components/Inspector'
 import { ProjectShelf } from './components/ProjectShelf'
+import { ThreadContextCard } from './components/ThreadContextCard'
 import { TitleBar } from './components/TitleBar'
 import { getCodyBridge } from './lib/mockBridge'
 import { referenceKey, upsertReference } from './lib/references'
+import { deriveThreadContext } from './lib/threadContext'
 
 type ExtendedBridge = CodyDesktopBridge & { copyText?: (text: string) => Promise<void> }
 
@@ -123,7 +125,7 @@ export function App() {
   )
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [inspectorCollapsed, setInspectorCollapsed] = useState(
-    () => window.localStorage.getItem('cody.inspectorCollapsed') === 'true'
+    () => window.localStorage.getItem('cody.inspectorCollapsed') !== 'false'
   )
   const [darkTheme, setDarkTheme] = useState(initialTheme)
 
@@ -330,6 +332,11 @@ export function App() {
       if (previousSequence !== undefined && envelope.sequence <= previousSequence) return
       if (previousSequence !== undefined && envelope.sequence !== previousSequence + 1) {
         setAnnouncement('Activity gap detected. Refreshing durable Thread history.')
+        setEventsByThread((current) => ({
+          ...current,
+          [envelope.thread_id]: (current[envelope.thread_id] ?? [])
+            .filter((event) => event.turn_id !== envelope.turn_id)
+        }))
         void refreshThread(envelope.thread_id)
       }
       lastSequenceRef.current.set(envelope.turn_id, envelope.sequence)
@@ -377,6 +384,8 @@ export function App() {
       statusRef.current = nextStatus.phase
       setStatus(nextStatus)
       if (nextStatus.phase === 'connected' && (previous !== 'connected' || nextStatus.reconcile)) {
+        setEventsByThread({})
+        lastSequenceRef.current.clear()
         setAnnouncement(
           nextStatus.reconcile
             ? 'Live activity was interrupted. Refreshing durable history.'
@@ -384,6 +393,8 @@ export function App() {
         )
         void bootstrap(hasHydratedRef.current)
       } else if (nextStatus.phase !== 'connected') {
+        setEventsByThread({})
+        lastSequenceRef.current.clear()
         setAnnouncement(`Server ${nextStatus.phase}`)
       }
     })
@@ -515,7 +526,7 @@ export function App() {
           window.localStorage.setItem('cody.activeThreadId', started.thread.id)
           setAnnouncement('Thread created. Cody is starting the first turn.')
         } else {
-          setAnnouncement('Thread created and running in the background')
+          setAnnouncement('Thread created; Cody started working')
         }
         void refreshThread(started.thread.id)
         return true
@@ -632,6 +643,31 @@ export function App() {
       .filter((reference): reference is Extract<ContextReference, { kind: 'project' }> => reference.kind === 'project')
       .map((reference) => reference.project_id)
   )
+  const threadContext = useMemo(
+    () => snapshot ? deriveThreadContext(snapshot, activeEvents, draftReferences) : undefined,
+    [activeEvents, draftReferences, snapshot]
+  )
+  const contextCount = threadContext
+    ? threadContext.threadReferences.length + threadContext.projectReferences.length
+    : 0
+  const contextActive = Boolean(
+    threadContext
+    && (threadContext.activeTurns.length > 0
+      || threadContext.runningTools.length > 0
+      || threadContext.pendingApprovals.length > 0)
+  )
+
+  const openInspector = (): void => {
+    setInspectorCollapsed(false)
+    if (window.matchMedia('(max-width: 72rem)').matches) setInspectorOpen(true)
+  }
+  const toggleInspector = (): void => {
+    if (window.matchMedia('(max-width: 72rem)').matches) {
+      setInspectorOpen((current) => !current)
+    } else {
+      setInspectorCollapsed((current) => !current)
+    }
+  }
 
   return (
     <div className={`app-shell${railCollapsed ? ' app-shell--rail-collapsed' : ''}${inspectorCollapsed ? ' app-shell--inspector-collapsed' : ''}${bridge.platform === 'darwin' ? ' app-shell--darwin' : ''}`}>
@@ -671,15 +707,14 @@ export function App() {
           darkTheme={darkTheme}
           railCollapsed={railCollapsed}
           showInspector={Boolean(snapshot)}
+          inspectorExpanded={inspectorOpen}
+          contextCount={contextCount}
+          contextActive={contextActive}
           onOpenRail={() => {
             setRailCollapsed(false)
             setRailOpen(true)
           }}
-          onOpenInspector={() => {
-            setInspectorCollapsed(false)
-            if (window.matchMedia('(max-width: 72rem)').matches) setInspectorOpen(true)
-            else setInspectorCollapsed(false)
-          }}
+          onOpenInspector={openInspector}
           onRetry={() => void bootstrap()}
           onToggleTheme={() => setDarkTheme((current) => !current)}
           onWindowAction={(action) => void bridge.windowAction(action)}
@@ -790,6 +825,16 @@ export function App() {
       </section>
 
       <div className="right-rail">
+        {snapshot && threadContext ? (
+          <ThreadContextCard
+            snapshot={snapshot}
+            threads={threads}
+            projects={projects}
+            context={threadContext}
+            detailsOpen={!inspectorCollapsed}
+            onOpenDetails={toggleInspector}
+          />
+        ) : null}
         {snapshot ? (
           <Inspector
             snapshot={snapshot}
@@ -800,7 +845,12 @@ export function App() {
             open={inspectorOpen}
             onClose={() => {
               if (window.matchMedia('(max-width: 72rem)').matches) setInspectorOpen(false)
-              else setInspectorCollapsed(true)
+              else {
+                setInspectorCollapsed(true)
+                requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(
+                  '#thread-context-card button[aria-controls="thread-inspector"]'
+                )?.focus())
+              }
             }}
             onCopyText={copyText}
           />
