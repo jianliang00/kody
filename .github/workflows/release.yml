@@ -31,7 +31,8 @@ jobs:
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
       ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
-      CSC_NAME: "Developer ID Application: Jianliang Wang (BZP4VMX57B)"
+      CSC_NAME: "Jianliang Wang (BZP4VMX57B)"
+      CSC_EXPECTED_NAME: "Developer ID Application: Jianliang Wang (BZP4VMX57B)"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
@@ -67,7 +68,7 @@ jobs:
           security import "$CERTIFICATE_PATH" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH"
-          security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -F "$CSC_NAME"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -F "$CSC_EXPECTED_NAME"
       - name: Configure App Store Connect key
         run: |
           PRIVATE_KEY_PATH="$RUNNER_TEMP/AuthKey_${ASC_KEY_ID}.p8"
