@@ -117,11 +117,31 @@ describe('provider and Codex IPC boundary', () => {
     ])
     expect(JSON.stringify(results)).not.toContain('CANARY')
   })
+
+  it('exposes only update state-machine actions to the trusted renderer', async () => {
+    const updateManager = {
+      getStatus: vi.fn(() => ({ phase: 'available', currentVersion: '0.1.1', availableVersion: '0.1.2' })),
+      check: vi.fn(async () => ({ phase: 'up-to-date', currentVersion: '0.1.1' })),
+      download: vi.fn(async () => ({ phase: 'downloading', currentVersion: '0.1.1', percent: 0 })),
+      restartAndInstall: vi.fn(async () => undefined)
+    }
+    const setup = registerWithStubs({ updateManager })
+
+    expect(getHandler('kody:update:get')(setup.event)).toMatchObject({ phase: 'available' })
+    await expect(getHandler('kody:update:check')(setup.event)).resolves.toMatchObject({ phase: 'up-to-date' })
+    await expect(getHandler('kody:update:download')(setup.event)).resolves.toMatchObject({ phase: 'downloading' })
+    await getHandler('kody:update:restart-and-install')(setup.event)
+
+    expect(updateManager.check).toHaveBeenCalledWith(true)
+    expect(updateManager.download).toHaveBeenCalledOnce()
+    expect(updateManager.restartAndInstall).toHaveBeenCalledOnce()
+  })
 })
 
 function registerWithStubs(overrides: {
   providerSettings?: Record<string, unknown>
   configureProvider?: (profile: ProviderProfileRecord) => Promise<void>
+  updateManager?: Record<string, unknown>
 } = {}) {
   const frame = { url: RENDERER_URL }
   const webContents = { mainFrame: frame }
@@ -139,6 +159,12 @@ function registerWithStubs(overrides: {
       snapshot: vi.fn(),
       upsert: vi.fn(),
       delete: vi.fn()
+    }) as never,
+    updateManager: (overrides.updateManager ?? {
+      getStatus: vi.fn(),
+      check: vi.fn(),
+      download: vi.fn(),
+      restartAndInstall: vi.fn()
     }) as never,
     configureProvider: overrides.configureProvider ?? vi.fn(),
     removeProvider: vi.fn(),

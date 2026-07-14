@@ -10,12 +10,14 @@ import type {
 import { ProviderSettingsStore } from './provider-settings'
 import { KodyServerManager } from './server-manager'
 import { isTrustedRendererUrl, validateRpcInvocation } from './security'
+import type { KodyUpdateManager } from './update-manager'
 
 interface IpcOptions {
   getWindow(): BrowserWindow | null
   rendererUrl: string
   server: KodyServerManager
   providerSettings: ProviderSettingsStore
+  updateManager: KodyUpdateManager
   configureProvider(profile: ProviderProfileRecord): Promise<void>
   removeProvider(profileId: string): Promise<void>
   getCodexAccountStatus(): Promise<CodexAccountStatus>
@@ -119,6 +121,26 @@ export function registerIpcHandlers(options: IpcOptions): void {
   ipcMain.handle('kody:codex-account:disconnect', async (event) => {
     assertTrustedSender(event, options)
     await mutateCodexAccount(() => options.disconnectCodexAccount())
+  })
+
+  ipcMain.handle('kody:update:get', (event) => {
+    assertTrustedSender(event, options)
+    return options.updateManager.getStatus()
+  })
+
+  ipcMain.handle('kody:update:check', async (event) => {
+    assertTrustedSender(event, options)
+    return options.updateManager.check(true)
+  })
+
+  ipcMain.handle('kody:update:download', async (event) => {
+    assertTrustedSender(event, options)
+    return options.updateManager.download()
+  })
+
+  ipcMain.handle('kody:update:restart-and-install', async (event) => {
+    assertTrustedSender(event, options)
+    await options.updateManager.restartAndInstall()
   })
 
   ipcMain.handle('kody:copy-text', (event, text: unknown) => {

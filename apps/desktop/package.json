@@ -1,6 +1,6 @@
 {
   "name": "@kody/desktop",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A local-first coding agent workspace powered by Rust and Electron.",
   "author": "Jianliang Wang",
   "private": true,
@@ -23,6 +23,7 @@
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-tooltip": "^1.2.8",
     "clsx": "^2.1.1",
+    "electron-updater": "^6.8.9",
     "lucide-react": "^1.24.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
@@ -66,9 +67,20 @@
         ]
       }
     ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "jianliang00",
+        "repo": "kody-releases",
+        "releaseType": "release"
+      }
+    ],
     "mac": {
       "category": "public.app-category.developer-tools",
-      "target": "dmg",
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "hardenedRuntime": true,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",

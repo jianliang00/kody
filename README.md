@@ -30,6 +30,7 @@ Kody 是一个从零实现的 Rust Coding Agent 核心框架。它把 Agent Loop
 - 版本化 JSON 持久化，原子替换、启动校验及中断 Turn 恢复。
 - JSON-RPC 2.0 over HTTP/WebSocket；WebSocket 推送 Turn 事件并按 Thread 订阅。
 - Electron Settings 中的 Provider 配置、模型目录与逐 Turn 模型选择；API Key 由主进程使用系统安全存储加密，Renderer 只能看到脱敏后的 Profile。
+- macOS 应用内自动更新：后台静默检查公开的 GitHub Release，按 CPU 架构下载签名、公证后的 ZIP，显示进度，并在重启前干净关闭 Rust App Server；源码仓库和发布凭据不会暴露给 Renderer。
 - 本地服务 Bearer Token、WebSocket Origin 检查、Renderer RPC 白名单和非 loopback 绑定保护。
 
 ## 结构

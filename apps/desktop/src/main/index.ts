@@ -12,6 +12,7 @@ import {
   shell,
   type MenuItemConstructorOptions
 } from 'electron'
+import electronUpdater from 'electron-updater'
 
 import type {
   CodexAccountStatus,
@@ -26,13 +27,17 @@ import {
 } from './provider-settings'
 import { KodyServerManager, trustedCodexAuthUrl } from './server-manager'
 import { hardenRendererSession, hardenWebContents } from './security'
+import { KodyUpdateManager } from './update-manager'
 
 let mainWindow: BrowserWindow | null = null
 let server: KodyServerManager | null = null
+let updateManager: KodyUpdateManager | null = null
 let shutdownStarted = false
 let shutdownComplete = false
 
 app.setName('Kody')
+
+const { autoUpdater } = electronUpdater
 
 interface SavedWindowState {
   x: number
@@ -64,6 +69,7 @@ function installApplicationMenu(): void {
           submenu: [
             { role: 'about' as const },
             { type: 'separator' as const },
+            { label: 'Check for Updates…', click: () => sendCommand('check-for-updates') },
             { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => sendCommand('open-settings') },
             { type: 'separator' as const },
             { role: 'services' as const },
@@ -107,6 +113,9 @@ function installApplicationMenu(): void {
     {
       role: 'help',
       submenu: [
+        ...(!isMac
+          ? [{ label: 'Check for Updates…', click: () => sendCommand('check-for-updates') }]
+          : []),
         {
           label: 'About Kody’s Workspace Model',
           click: () => {
@@ -241,12 +250,31 @@ void app.whenReady().then(() => {
     }
   })
   const currentServer = server
+  updateManager = new KodyUpdateManager({
+    updater: autoUpdater,
+    currentVersion: app.getVersion(),
+    enabled: app.isPackaged && process.platform === 'darwin',
+    disabledReason: app.isPackaged
+      ? 'Automatic updates are not available for this platform yet.'
+      : 'Updates are available in signed production builds.',
+    onStatus: (status) => broadcast('kody:update-status-changed', status),
+    beforeInstall: async () => {
+      shutdownStarted = true
+      try {
+        await currentServer.stop()
+      } finally {
+        shutdownComplete = true
+      }
+    }
+  })
+  const currentUpdateManager = updateManager
   let activeCodexLoginId: string | undefined
   registerIpcHandlers({
     getWindow: () => mainWindow,
     rendererUrl,
     server: currentServer,
     providerSettings,
+    updateManager: currentUpdateManager,
     configureProvider: (profile) => configureStoredProvider(
       providerSettings,
       profile,
@@ -280,6 +308,7 @@ void app.whenReady().then(() => {
   mainWindow = createMainWindow()
   installApplicationMenu()
   void server.start().catch((error) => console.error('Failed to start Kody engine:', error))
+  updateManager.start()
 
   app.on('activate', () => {
     if (!mainWindow) mainWindow = createMainWindow()
@@ -401,6 +430,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', (event) => {
+  updateManager?.stop()
   if (shutdownComplete) return
   event.preventDefault()
   if (shutdownStarted) return

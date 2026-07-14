@@ -11,10 +11,13 @@ import {
   X
 } from 'lucide-react'
 import type { ServerStatus, Thread } from '@shared/protocol'
+import type { DesktopUpdateStatus } from '@shared/bridge'
+import { UpdateIndicator } from './UpdateIndicator'
 
 interface TitleBarProps {
   thread?: Thread
   status: ServerStatus
+  updateStatus: DesktopUpdateStatus
   platform: NodeJS.Platform
   darkTheme: boolean
   railCollapsed: boolean
@@ -25,6 +28,7 @@ interface TitleBarProps {
   onOpenRail: () => void
   onOpenInspector: () => void
   onRetry: () => void
+  onUpdateAction: () => void
   onOpenSettings: () => void
   onToggleTheme: () => void
   onWindowAction: (action: 'minimize' | 'maximize' | 'close') => void
@@ -33,6 +37,7 @@ interface TitleBarProps {
 export function TitleBar({
   thread,
   status,
+  updateStatus,
   platform,
   darkTheme,
   railCollapsed,
@@ -43,6 +48,7 @@ export function TitleBar({
   onOpenRail,
   onOpenInspector,
   onRetry,
+  onUpdateAction,
   onOpenSettings,
   onToggleTheme,
   onWindowAction
@@ -73,6 +79,7 @@ export function TitleBar({
       </div>
 
       <div className="titlebar__actions no-drag">
+        <UpdateIndicator status={updateStatus} onAction={onUpdateAction} />
         {status.phase === 'connected' ? (
           <div className="server-pill server-pill--connected" role="status" aria-label="Local server connected">
             <span aria-hidden="true" />

@@ -708,6 +708,22 @@ export function createMockBridge(): KodyDesktopBridge {
     disconnectCodexAccount: async () => {
       codexAccount = { state: 'signed-out' }
     },
+    getUpdateStatus: async () => ({
+      phase: 'disabled',
+      currentVersion: 'browser-preview',
+      detail: 'Updates are available in signed production builds.'
+    }),
+    checkForUpdates: async () => ({
+      phase: 'disabled',
+      currentVersion: 'browser-preview',
+      detail: 'Updates are available in signed production builds.'
+    }),
+    downloadUpdate: async () => {
+      throw new Error('Updates are not available in browser preview mode.')
+    },
+    restartAndInstallUpdate: async () => {
+      throw new Error('Updates are not available in browser preview mode.')
+    },
     onEvent: (listener) => {
       store.events.add(listener)
       return () => store.events.delete(listener)
@@ -720,6 +736,7 @@ export function createMockBridge(): KodyDesktopBridge {
       store.statusListeners.add(listener)
       return () => store.statusListeners.delete(listener)
     },
+    onUpdateStatus: () => () => undefined,
     onCommand: () => () => undefined,
     windowAction: async () => undefined,
     platform: navigator.userAgent.includes('Mac')
@@ -762,12 +779,29 @@ function createDisconnectedBridge(): KodyDesktopBridge {
     disconnectCodexAccount: async () => {
       throw new Error(status.detail)
     },
+    getUpdateStatus: async () => ({
+      phase: 'disabled',
+      currentVersion: '',
+      detail: status.detail
+    }),
+    checkForUpdates: async () => ({
+      phase: 'disabled',
+      currentVersion: '',
+      detail: status.detail
+    }),
+    downloadUpdate: async () => {
+      throw new Error(status.detail)
+    },
+    restartAndInstallUpdate: async () => {
+      throw new Error(status.detail)
+    },
     onEvent: () => () => undefined,
     onProcessEvent: () => () => undefined,
     onServerStatus: (listener) => {
       listener(status)
       return () => undefined
     },
+    onUpdateStatus: () => () => undefined,
     onCommand: () => () => undefined,
     windowAction: async () => undefined,
     platform: 'linux'

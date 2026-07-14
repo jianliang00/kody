@@ -144,6 +144,12 @@ kbd { border: 1px solid var(--border); border-bottom-color: var(--border-strong)
 .server-pill { min-width: 0; background: transparent; }
 .server-pill:not(.server-pill--connected):hover { background: var(--hover); }
 .server-pill--error > span:first-child { background: var(--danger); }
+.update-pill { min-height: 1.75rem; padding: .2rem .5rem; display: inline-flex; align-items: center; gap: .32rem; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--muted); font-size: .64rem; font-weight: 650; white-space: nowrap; }
+.update-pill:not(:disabled):hover { border-color: var(--border-strong); background: var(--hover); color: var(--text); }
+.update-pill:disabled { cursor: default; opacity: .78; }
+.update-pill--available, .update-pill--downloaded { border-color: color-mix(in srgb,var(--thread) 35%,var(--border)); background: var(--thread-soft); color: var(--thread); }
+.update-pill--error { border-color: color-mix(in srgb,var(--danger) 30%,var(--border)); background: var(--danger-soft); color: var(--danger); }
+.update-pill--up-to-date { color: var(--success); }
 .window-controls { align-self: stretch; display: flex; margin-inline-start: .35rem; }
 .window-controls button { min-width: 2.5rem; background: transparent; color: var(--muted); }
 .window-controls button:hover { background: var(--hover); color: var(--text); }
@@ -479,6 +485,8 @@ kbd { border: 1px solid var(--border); border-bottom-color: var(--border-strong)
   .titlebar__identity h1 { max-width: 38vw; }
   .server-pill { padding-inline: .35rem; }
   .server-pill > span:nth-child(2), .thread-badge { display: none; }
+  .update-pill > span { display: none; }
+  .update-pill { min-width: 2rem; padding-inline: .4rem; justify-content: center; }
   .conversation-column { width: min(100% - 1.25rem,48rem); padding-block-start: 1.2rem; }
   .composer-dock { padding-inline: .55rem; }
   .composer__hint { display: none; }

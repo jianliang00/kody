@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build ${{ matrix.arch }} DMG
+    name: Build ${{ matrix.arch }} update
     strategy:
       fail-fast: false
       matrix:
@@ -79,18 +79,22 @@ jobs:
         run: |
           brew install asc
           npm ci
-      - name: Build signed DMG
+      - name: Build signed macOS artifacts
         run: |
           cargo build --release -p kody-app-server
           npm run build --workspace @kody/desktop
-          npx --workspace @kody/desktop electron-builder --mac dmg --${{ matrix.arch }} --publish never
+          npx --workspace @kody/desktop electron-builder --mac dmg zip --${{ matrix.arch }} --publish never
       - name: Verify, notarize, and staple
         run: |
           APP_PATH="$(find apps/desktop/dist -maxdepth 3 -type d -name 'Kody.app' -print -quit)"
           DMG_PATH="$(find apps/desktop/dist -maxdepth 1 -type f -name 'Kody-*-${{ matrix.arch }}.dmg' -print -quit)"
+          ZIP_PATH="$(find apps/desktop/dist -maxdepth 1 -type f -name 'Kody-*-${{ matrix.arch }}.zip' -print -quit)"
           test -n "$APP_PATH"
           test -n "$DMG_PATH"
+          test -n "$ZIP_PATH"
+          test -f apps/desktop/dist/latest-mac.yml
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          asc notarization submit --file "$ZIP_PATH" --wait --poll-interval 15s --timeout 2h --output table
           asc notarization submit --file "$DMG_PATH" --wait --poll-interval 15s --timeout 2h --output table
           xcrun stapler staple "$DMG_PATH"
           xcrun stapler validate "$DMG_PATH"
@@ -102,10 +106,19 @@ jobs:
           spctl --assess --type execute --verbose=4 "$MOUNT_DIR/Kody.app"
           hdiutil detach "$MOUNT_DIR" -quiet
           trap - EXIT
+          ZIP_VERIFY_DIR="$RUNNER_TEMP/kody-zip-${{ matrix.arch }}"
+          mkdir -p "$ZIP_VERIFY_DIR"
+          ditto -x -k "$ZIP_PATH" "$ZIP_VERIFY_DIR"
+          codesign --verify --deep --strict --verbose=2 "$ZIP_VERIFY_DIR/Kody.app"
+          spctl --assess --type execute --verbose=4 "$ZIP_VERIFY_DIR/Kody.app"
       - uses: actions/upload-artifact@v7
         with:
           name: kody-macos-${{ matrix.arch }}
-          path: apps/desktop/dist/Kody-*-mac-${{ matrix.arch }}.dmg
+          path: |
+            apps/desktop/dist/Kody-*-mac-${{ matrix.arch }}.dmg
+            apps/desktop/dist/Kody-*-mac-${{ matrix.arch }}.zip
+            apps/desktop/dist/Kody-*-mac-${{ matrix.arch }}.zip.blockmap
+            apps/desktop/dist/latest-mac.yml
           if-no-files-found: error
           retention-days: 14
 
@@ -113,13 +126,38 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           pattern: kody-macos-*
           path: release
-          merge-multiple: true
-      - name: Publish GitHub release
+      - name: Merge architecture update metadata
+        run: ruby scripts/merge-mac-update-metadata.rb release/latest-mac.yml release/kody-macos-*/latest-mac.yml
+      - name: Publish source and public update releases
         env:
-          GH_TOKEN: ${{ github.token }}
+          SOURCE_GITHUB_TOKEN: ${{ github.token }}
+          UPDATE_GITHUB_TOKEN: ${{ secrets.KODY_RELEASES_TOKEN }}
+          UPDATE_REPOSITORY: jianliang00/kody-releases
           TAG: ${{ inputs.tag }}
-        run: gh release create "$TAG" release/*.dmg --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --generate-notes --title "Kody ${TAG#v}"
+        run: |
+          test -n "$UPDATE_GITHUB_TOKEN"
+          mapfile -d '' ASSETS < <(find release -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.blockmap' \) -print0 | sort -z)
+          ASSETS+=(release/latest-mac.yml)
+          if GH_TOKEN="$SOURCE_GITHUB_TOKEN" gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            GH_TOKEN="$SOURCE_GITHUB_TOKEN" gh release upload "$TAG" "${ASSETS[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            GH_TOKEN="$SOURCE_GITHUB_TOKEN" gh release create "$TAG" "${ASSETS[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --generate-notes \
+              --title "Kody ${TAG#v}"
+          fi
+          if GH_TOKEN="$UPDATE_GITHUB_TOKEN" gh release view "$TAG" --repo "$UPDATE_REPOSITORY" >/dev/null 2>&1; then
+            GH_TOKEN="$UPDATE_GITHUB_TOKEN" gh release upload "$TAG" "${ASSETS[@]}" --clobber --repo "$UPDATE_REPOSITORY"
+          else
+            GH_TOKEN="$UPDATE_GITHUB_TOKEN" gh release create "$TAG" "${ASSETS[@]}" \
+              --repo "$UPDATE_REPOSITORY" \
+              --target main \
+              --title "Kody ${TAG#v}" \
+              --notes "Signed and notarized Kody update artifacts for macOS."
+          fi

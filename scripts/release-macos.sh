@@ -22,17 +22,25 @@ cd "$ROOT_DIR"
 rm -rf "$DIST_DIR"
 npm --workspace @kody/desktop run build:server
 npm --workspace @kody/desktop run build
-npx --workspace @kody/desktop electron-builder --mac dmg "--$ELECTRON_ARCH" --publish never
+npx --workspace @kody/desktop electron-builder --mac dmg zip "--$ELECTRON_ARCH" --publish never
 
 APP_PATH="$(find "$DIST_DIR" -maxdepth 3 -type d -name 'Kody.app' -print -quit)"
 DMG_PATH="$(find "$DIST_DIR" -maxdepth 1 -type f -name "Kody-*-${ELECTRON_ARCH}.dmg" -print -quit)"
-if [[ -z "$APP_PATH" || -z "$DMG_PATH" ]]; then
-  echo "Signed Kody.app or DMG was not produced" >&2
+ZIP_PATH="$(find "$DIST_DIR" -maxdepth 1 -type f -name "Kody-*-${ELECTRON_ARCH}.zip" -print -quit)"
+if [[ -z "$APP_PATH" || -z "$DMG_PATH" || -z "$ZIP_PATH" || ! -f "$DIST_DIR/latest-mac.yml" ]]; then
+  echo "Signed Kody.app, release archives, or update metadata were not produced" >&2
   exit 1
 fi
 
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 codesign -dvvv "$APP_PATH" 2>&1 | grep -E 'Authority=Developer ID Application|TeamIdentifier=|Timestamp='
+
+asc notarization submit \
+  --file "$ZIP_PATH" \
+  --wait \
+  --poll-interval 15s \
+  --timeout 2h \
+  --output table
 
 asc notarization submit \
   --file "$DMG_PATH" \
@@ -59,4 +67,12 @@ spctl --assess --type execute --verbose=4 "$MOUNT_DIR/Kody.app"
 cleanup_mount
 trap - EXIT
 
+ZIP_VERIFY_DIR="$(mktemp -d "${TMPDIR:-/tmp}/kody-zip.XXXXXX")"
+ditto -x -k "$ZIP_PATH" "$ZIP_VERIFY_DIR"
+codesign --verify --deep --strict --verbose=2 "$ZIP_VERIFY_DIR/Kody.app"
+spctl --assess --type execute --verbose=4 "$ZIP_VERIFY_DIR/Kody.app"
+rm -rf "$ZIP_VERIFY_DIR"
+
 echo "Release DMG: $DMG_PATH"
+echo "Updater ZIP: $ZIP_PATH"
+echo "Update metadata: $DIST_DIR/latest-mac.yml"

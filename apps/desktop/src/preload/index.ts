@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type {
   CodexAccountStatus,
   CodexConnectResult,
+  DesktopUpdateStatus,
   KodyDesktopBridge,
   DesktopCommand,
   DirectoryPickerPurpose,
@@ -49,6 +50,18 @@ const bridge: KodyDesktopBridge = Object.freeze({
   disconnectCodexAccount() {
     return ipcRenderer.invoke('kody:codex-account:disconnect') as Promise<void>
   },
+  getUpdateStatus() {
+    return ipcRenderer.invoke('kody:update:get') as Promise<DesktopUpdateStatus>
+  },
+  checkForUpdates() {
+    return ipcRenderer.invoke('kody:update:check') as Promise<DesktopUpdateStatus>
+  },
+  downloadUpdate() {
+    return ipcRenderer.invoke('kody:update:download') as Promise<DesktopUpdateStatus>
+  },
+  restartAndInstallUpdate() {
+    return ipcRenderer.invoke('kody:update:restart-and-install') as Promise<void>
+  },
   onEvent(listener: (event: EventEnvelope) => void) {
     const handler = (_event: Electron.IpcRendererEvent, envelope: EventEnvelope): void => listener(envelope)
     ipcRenderer.on('kody:turn-event', handler)
@@ -63,6 +76,11 @@ const bridge: KodyDesktopBridge = Object.freeze({
     const handler = (_event: Electron.IpcRendererEvent, status: ServerStatus): void => listener(status)
     ipcRenderer.on('kody:server-status-changed', handler)
     return () => ipcRenderer.removeListener('kody:server-status-changed', handler)
+  },
+  onUpdateStatus(listener: (status: DesktopUpdateStatus) => void) {
+    const handler = (_event: Electron.IpcRendererEvent, status: DesktopUpdateStatus): void => listener(status)
+    ipcRenderer.on('kody:update-status-changed', handler)
+    return () => ipcRenderer.removeListener('kody:update-status-changed', handler)
   },
   onCommand(listener: (command: DesktopCommand) => void) {
     const handler = (_event: Electron.IpcRendererEvent, command: DesktopCommand): void => listener(command)

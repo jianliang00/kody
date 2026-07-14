@@ -7,6 +7,7 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type {
   CodexAccountStatus,
+  DesktopUpdateStatus,
   KodyDesktopBridge,
   ProviderProfileUpdate,
   ProviderSettingsResult
@@ -138,6 +139,10 @@ const EMPTY_COMPOSER_DRAFT: ComposerDraftState = {
 export function App() {
   const bridge = useMemo(() => getKodyBridge(), [])
   const [status, setStatus] = useState<ServerStatus>({ phase: 'starting', detail: 'Starting local server…' })
+  const [updateStatus, setUpdateStatus] = useState<DesktopUpdateStatus>({
+    phase: 'disabled',
+    currentVersion: ''
+  })
   const [threads, setThreads] = useState<Thread[]>([])
   const [projects, setProjects] = useState<Project[]>([])
   const [providers, setProviders] = useState<ProviderDescriptor[]>([])
@@ -375,6 +380,50 @@ export function App() {
       setAppError(error instanceof Error ? error.message : 'Could not load provider settings.')
     })
   }, [refreshProviderSettings])
+
+  const checkForUpdates = useCallback((): void => {
+    void bridge.checkForUpdates()
+      .then(setUpdateStatus)
+      .catch((error) => {
+        setAppError(error instanceof Error ? error.message : 'Could not check for updates.')
+      })
+  }, [bridge])
+
+  const handleUpdateAction = useCallback((): void => {
+    const operation = updateStatus.phase === 'available'
+      ? bridge.downloadUpdate()
+      : updateStatus.phase === 'downloaded'
+        ? bridge.restartAndInstallUpdate()
+        : bridge.checkForUpdates()
+    void operation
+      .then((nextStatus) => {
+        if (nextStatus) setUpdateStatus(nextStatus)
+      })
+      .catch((error) => {
+        setAppError(error instanceof Error ? error.message : 'Could not update Kody.')
+      })
+  }, [bridge, updateStatus.phase])
+
+  useEffect(() => {
+    let cancelled = false
+    const removeUpdateListener = bridge.onUpdateStatus((nextStatus) => {
+      setUpdateStatus(nextStatus)
+      if (nextStatus.phase === 'available') {
+        setAnnouncement(`Kody ${nextStatus.availableVersion ?? 'update'} is available`)
+      } else if (nextStatus.phase === 'downloaded') {
+        setAnnouncement('Kody update downloaded and ready to install')
+      }
+    })
+    void bridge.getUpdateStatus()
+      .then((nextStatus) => {
+        if (!cancelled) setUpdateStatus(nextStatus)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+      removeUpdateListener()
+    }
+  }, [bridge])
 
   useEffect(() => {
     if (!providerSettingsOpen || codexAccount.state === 'signed-in' || codexAccount.state === 'unavailable') return
@@ -1105,6 +1154,10 @@ export function App() {
       openProviderSettings()
       return
     }
+    if (command === 'check-for-updates') {
+      checkForUpdates()
+      return
+    }
     if (command === 'toggle-rail') {
       if (railIsNarrow) setRailOpen((current) => !current)
       else setRailCollapsed((current) => !current)
@@ -1118,6 +1171,7 @@ export function App() {
   }), [
     beginDraft,
     bridge,
+    checkForUpdates,
     handleImportProject,
     inspectorIsNarrow,
     openProviderSettings,
@@ -1191,6 +1245,7 @@ export function App() {
         <TitleBar
           thread={snapshot?.thread}
           status={status}
+          updateStatus={updateStatus}
           platform={bridge.platform}
           darkTheme={darkTheme}
           railCollapsed={railCollapsed}
@@ -1205,6 +1260,7 @@ export function App() {
           onOpenInspector={openInspector}
           onOpenSettings={openProviderSettings}
           onRetry={() => void bootstrap()}
+          onUpdateAction={handleUpdateAction}
           onToggleTheme={() => setDarkTheme((current) => !current)}
           onWindowAction={(action) => void bridge.windowAction(action)}
         />
