@@ -314,7 +314,7 @@ function createMockStore() {
     switch (method) {
       case 'initialize':
         return {
-          server_info: { name: 'kody-browser-mock', version: '0.1.0' },
+          server_info: { name: 'kody-browser-mock', version: '0.1.1' },
           capabilities: {
             approvals: true,
             context_references: true,
