@@ -13,7 +13,7 @@ interface PersistedState {
   threads: Array<{ id: string; title: string; workspace_id: string }>
   workspaces: Array<{ id: string; thread_id: string; root: string }>
   messages: Array<{ id: string; thread_id: string; role: string }>
-  turns: Array<{ id: string; thread_id: string; status: string }>
+  turns: Array<{ id: string; thread_id: string; status: string; permission_mode: string }>
 }
 
 function isolatedEnvironment(): Record<string, string> {
@@ -81,6 +81,10 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expect(page.getByRole('heading', { name: 'What should Kody work on?' })).toBeVisible()
     await expect(page.getByRole('form', { name: 'Message composer' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Working directory', exact: true })).toBeVisible()
+    const permissionMode = page.getByLabel('Permission mode')
+    await expect(permissionMode).toHaveValue('ask')
+    await permissionMode.selectOption('read_only')
+    await expect(permissionMode).toHaveValue('read_only')
     await expect(page.getByRole('dialog')).toHaveCount(0)
     await expect(page.getByText('No Threads yet', { exact: true })).toBeVisible()
 
@@ -165,6 +169,7 @@ test('creates the first Thread through one idempotent draft request', async () =
     expect(durable.projects).toHaveLength(1)
     expect(durable.snapshot.turns).toHaveLength(1)
     expect(durable.snapshot.turns[0]?.status).toBe('completed')
+    expect(durable.snapshot.turns[0]?.permission_mode).toBe('read_only')
     expect(durable.snapshot.messages).toHaveLength(2)
     expect(durable.snapshot.processes).toEqual([])
     expect(durable.processResult.processes).toEqual([])
@@ -217,6 +222,7 @@ test('creates the first Thread through one idempotent draft request', async () =
     expect(persisted.threads).toHaveLength(1)
     expect(persisted.workspaces).toHaveLength(1)
     expect(persisted.turns).toHaveLength(1)
+    expect(persisted.turns[0]?.permission_mode).toBe('read_only')
     expect(persisted.messages).toHaveLength(2)
     expect(persisted.threads[0]?.title).toBe(prompt)
     expect(persisted.threads[0]?.id).toBe(durable.snapshot.thread.id)

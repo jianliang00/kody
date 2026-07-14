@@ -14,8 +14,8 @@ use kody_core::{
         ProviderCapabilities, ProviderDescriptor, ProviderHealth,
     },
     AgentEvent, ApprovalId, ExternalTurnBackend, InteractionId, KodyEngine, KodyError,
-    PendingApproval, PendingUserInput, ProjectAccess, ResolvedContext, Result, ThreadId, Turn,
-    TurnEventEmitter, UserInputOption, UserInputQuestion,
+    PendingApproval, PendingUserInput, PermissionMode, ProjectAccess, ResolvedContext, Result,
+    ThreadId, Turn, TurnEventEmitter, UserInputOption, UserInputQuestion,
 };
 use serde_json::{json, Map, Value};
 use tokio::sync::{broadcast, Mutex};
@@ -151,9 +151,9 @@ impl CodexService {
             let mut params = ThreadResumeParams::new(thread_id.clone());
             params.cwd = Some(context.workspace.root.clone());
             params.model = Some(turn.model.clone());
-            params.approval_policy = Some("on-request".into());
+            params.approval_policy = Some(codex_approval_policy(turn.permission_mode).into());
             params.approvals_reviewer = Some("user".into());
-            params.sandbox = Some("workspace-write".into());
+            params.sandbox = Some(codex_sandbox_mode(turn.permission_mode).into());
             client
                 .thread_resume(params)
                 .await
@@ -166,9 +166,9 @@ impl CodexService {
                 cwd: Some(context.workspace.root.clone()),
                 model: Some(turn.model.clone()),
                 model_provider: None,
-                approval_policy: Some("on-request".into()),
+                approval_policy: Some(codex_approval_policy(turn.permission_mode).into()),
                 approvals_reviewer: Some("user".into()),
-                sandbox: Some("workspace-write".into()),
+                sandbox: Some(codex_sandbox_mode(turn.permission_mode).into()),
                 developer_instructions: Some(
                     "You are running as Kody's Codex execution backend. Respect the supplied Kody Thread and Project context. Report only work you actually performed."
                         .into(),
@@ -273,10 +273,10 @@ impl ExternalTurnBackend for CodexService {
         let mut start = TurnStartParams::text(external_thread_id.clone(), prompt);
         start.model = Some(turn.model.clone());
         start.cwd = Some(context.workspace.root.clone());
-        start.approval_policy = Some("on-request".into());
+        start.approval_policy = Some(codex_approval_policy(turn.permission_mode).into());
         start.approvals_reviewer = Some("user".into());
         start.client_user_message_id = Some(turn.input_message_id.to_string());
-        start.sandbox_policy = Some(workspace_write_policy(&context));
+        start.sandbox_policy = Some(codex_sandbox_policy(turn.permission_mode, &context));
 
         events.emit(AgentEvent::ModelStarted {
             provider: PROVIDER_ID.into(),
@@ -541,6 +541,32 @@ fn model_descriptor(model: ModelInfo) -> ModelDescriptor {
 
 fn codex_provider_error(error: crate::codex::CodexError) -> KodyError {
     KodyError::Provider(format!("Codex app-server: {error}"))
+}
+
+fn codex_approval_policy(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Ask => "on-request",
+        PermissionMode::ReadOnly | PermissionMode::FullAccess => "never",
+    }
+}
+
+fn codex_sandbox_mode(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::ReadOnly => "read-only",
+        PermissionMode::Ask => "workspace-write",
+        PermissionMode::FullAccess => "danger-full-access",
+    }
+}
+
+fn codex_sandbox_policy(mode: PermissionMode, context: &ResolvedContext) -> Value {
+    match mode {
+        PermissionMode::ReadOnly => json!({
+            "type": "readOnly",
+            "networkAccess": false,
+        }),
+        PermissionMode::Ask => workspace_write_policy(context),
+        PermissionMode::FullAccess => json!({ "type": "dangerFullAccess" }),
+    }
 }
 
 fn workspace_write_policy(context: &ResolvedContext) -> Value {
@@ -931,4 +957,55 @@ fn approval_response(method: &str, params: &Value, approved: bool) -> Value {
             "decline"
         }
     })
+}
+
+#[cfg(test)]
+mod permission_tests {
+    use std::path::PathBuf;
+
+    use chrono::Utc;
+    use kody_core::{Workspace, WorkspaceId};
+
+    use super::*;
+
+    fn context() -> ResolvedContext {
+        ResolvedContext {
+            messages: Vec::new(),
+            workspace: Workspace {
+                id: WorkspaceId::new(),
+                thread_id: ThreadId::new(),
+                root: PathBuf::from("/tmp/kody-permission-test"),
+                created_at: Utc::now(),
+            },
+            projects: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn translates_permission_modes_to_current_codex_protocol_settings() {
+        let context = context();
+        assert_eq!(codex_approval_policy(PermissionMode::ReadOnly), "never");
+        assert_eq!(codex_sandbox_mode(PermissionMode::ReadOnly), "read-only");
+        assert_eq!(
+            codex_sandbox_policy(PermissionMode::ReadOnly, &context),
+            json!({ "type": "readOnly", "networkAccess": false })
+        );
+
+        assert_eq!(codex_approval_policy(PermissionMode::Ask), "on-request");
+        assert_eq!(codex_sandbox_mode(PermissionMode::Ask), "workspace-write");
+        assert_eq!(
+            codex_sandbox_policy(PermissionMode::Ask, &context)["type"],
+            "workspaceWrite"
+        );
+
+        assert_eq!(codex_approval_policy(PermissionMode::FullAccess), "never");
+        assert_eq!(
+            codex_sandbox_mode(PermissionMode::FullAccess),
+            "danger-full-access"
+        );
+        assert_eq!(
+            codex_sandbox_policy(PermissionMode::FullAccess, &context),
+            json!({ "type": "dangerFullAccess" })
+        );
+    }
 }

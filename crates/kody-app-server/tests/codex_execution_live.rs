@@ -1,7 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
 use kody_app_server::AppState;
-use kody_core::{AgentEvent, EngineConfig, KodyEngine, StartTurn, DEFAULT_THREAD_TITLE};
+use kody_core::{
+    AgentEvent, EngineConfig, KodyEngine, PermissionMode, StartTurn, DEFAULT_THREAD_TITLE,
+};
 
 /// Manual end-to-end proof that Kody can execute a durable Turn through the
 /// user's official Codex App Server login and receive the streamed answer.
@@ -41,6 +43,7 @@ async fn executes_a_real_turn_with_codex_plan_quota() {
                 references: Vec::new(),
                 provider: "codex".into(),
                 model: Some(model),
+                permission_mode: Some(PermissionMode::ReadOnly),
                 temperature: None,
                 max_output_tokens: None,
             },

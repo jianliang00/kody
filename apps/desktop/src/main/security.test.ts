@@ -56,4 +56,22 @@ describe('renderer RPC allowlist', () => {
       unexpected: true
     })).toThrow(/unsupported/)
   })
+
+  it('allows only explicit supported permission modes when starting a turn', () => {
+    const params = {
+      thread_id: 'thread-1',
+      message: 'Inspect the project',
+      references: [],
+      provider: 'codex',
+      model: 'codex-default',
+      permission_mode: 'ask'
+    }
+    expect(() => validateRpcInvocation('turn/start', params)).not.toThrow()
+    expect(() => validateRpcInvocation('turn/start', {
+      ...params,
+      permission_mode: 'unrestricted'
+    })).toThrow(/permission_mode/)
+    const { permission_mode: _omitted, ...withoutPermissionMode } = params
+    expect(() => validateRpcInvocation('turn/start', withoutPermissionMode)).toThrow(/missing/)
+  })
 })

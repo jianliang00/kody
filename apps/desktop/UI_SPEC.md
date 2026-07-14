@@ -12,6 +12,7 @@ The UI must preserve the framework's original domain model rather than copying C
 - Thread references expose summary/full/artifacts modes.
 - A blank composer is a local draft, not a persisted Thread. The first message creates the Thread, Workspace, and first Turn as one idempotent request.
 - A draft may stage a working directory; it becomes an imported Project and persistent read/write default only when the first message is sent.
+- Every composer draft carries a Turn permission mode: read-only, ask for commands, or full access. The last mode used in a Thread becomes that Thread's next composer default.
 - Placeholder Thread titles are replaced after the first completed Turn by a provider-extensible title generator with a deterministic local fallback.
 
 ## Layout
@@ -36,7 +37,7 @@ Borrow only broad traits from the Codex desktop aesthetic: quiet neutral surface
 4. Select a Thread and load its durable snapshot.
 5. Type `@` or press the context button to search Threads/Projects; add/remove/toggle reference modes.
 6. Start a Turn, stream events, stop a running Turn and refresh durable history at terminal event.
-7. Show command-execution approval inline with command/reason and explicit Allow/Deny actions.
+7. Choose the next Turn's permission mode inside the composer; show command-execution approval inline with command/reason and explicit Allow/Deny actions in ask mode.
 8. Inspect Workspace path, default references, draft references and changed-file events.
 9. Replace the placeholder title after the first completed Turn and reflect it in both title bar and Thread list.
 10. Keep the upper-right Current Thread card synchronized with effective references, pending next-message context, active operations, approvals and managed background-process state.

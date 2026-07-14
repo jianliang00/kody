@@ -27,7 +27,7 @@ HTTP requires `Authorization: Bearer <token>` and `Content-Type: application/jso
 | `thread/create-and-start` | Idempotently create a Thread/Workspace and prepare its first Turn from one draft request |
 | `thread/get`, `thread/list`, `thread/messages` | Read Thread state/history; `thread/get` also returns pending approvals, pending structured user input, and authoritative managed-process snapshots |
 | `thread/reference/add` | Add a persistent default Thread or Project reference |
-| `turn/start`, `turn/get`, `turn/cancel` | Run and control an Agent Turn |
+| `turn/start`, `turn/get`, `turn/cancel` | Run and control an Agent Turn, including its permission mode |
 | `approval/respond` | Resolve a pending command-execution approval |
 | `user-input/respond` | Resolve or cancel a pending structured question without persisting answer values |
 | `process/list`, `process/get` | Read managed processes owned by a Thread |
@@ -97,6 +97,16 @@ Authentication states are `not_required`, `configured`, `missing`, or `unknown`.
 ```
 
 Only `id`, `display_name`, and `is_default` are guaranteed; the remaining model metadata is optional. Model IDs are opaque and must be returned unchanged in `turn/start` or `thread/create-and-start`. If a Turn omits `model`, the selected Provider must advertise a `default_model`; otherwise preparation fails.
+
+## Turn permission modes
+
+`turn/start` and `thread/create-and-start` accept `permission_mode`. Supported values are:
+
+- `read_only`: inspection tools only; writes, commands, and process control are blocked.
+- `ask`: file work is allowed, while command execution requires an interactive user approval.
+- `full_access`: registered tools and commands run without an interactive approval; Codex also runs without its sandbox.
+
+The resolved mode is persisted on the returned Turn. Trusted non-desktop clients may omit the field to use the runtime default; the Electron Renderer always sends an explicit value. `initialize.capabilities.turn_permission_modes` advertises the supported values.
 
 The privileged native Provider configuration request is:
 

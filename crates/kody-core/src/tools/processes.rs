@@ -586,6 +586,7 @@ mod tests {
                 references: Vec::new(),
                 provider: "echo".to_owned(),
                 model: None,
+                permission_mode: None,
                 temperature: None,
                 max_output_tokens: None,
             })

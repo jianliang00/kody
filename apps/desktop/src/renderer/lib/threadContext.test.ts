@@ -17,6 +17,7 @@ function turn(id: string, status: Turn['status'] = 'running'): Turn {
     input_message_id: `message-${id}`,
     provider: 'echo',
     model: 'echo',
+    permission_mode: 'ask',
     status,
     created_at: now
   }

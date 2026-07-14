@@ -2,6 +2,7 @@ export type EntityId = string
 
 export type ThreadStatus = 'idle' | 'running' | 'archived'
 export type TurnStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+export type PermissionMode = 'read_only' | 'ask' | 'full_access'
 export type ProjectAccess = 'read_only' | 'read_write'
 export type ThreadReferenceMode = 'summary' | 'full' | 'messages' | 'artifacts'
 export type ProcessStatus = 'starting' | 'running' | 'stopping' | 'exited' | 'stopped' | 'failed' | 'lost'
@@ -111,6 +112,7 @@ export interface Turn {
   input_message_id: EntityId
   provider: string
   model: string
+  permission_mode: PermissionMode
   temperature?: number
   max_output_tokens?: number
   status: TurnStatus
@@ -308,6 +310,7 @@ export interface StartTurnInput {
   references: ContextReference[]
   provider: string
   model?: string
+  permission_mode: PermissionMode
 }
 
 export interface RpcMethodMap {
@@ -331,6 +334,7 @@ export interface RpcMethodMap {
       references: ContextReference[]
       provider: string
       model?: string
+      permission_mode: PermissionMode
       working_directory?: string
     }
     result: StartedThread

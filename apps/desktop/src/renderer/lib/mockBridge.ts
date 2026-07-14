@@ -125,6 +125,7 @@ const seedTurns: Turn[] = [
     input_message_id: 'message-electron-user',
     provider: 'echo',
     model: 'kody-demo',
+    permission_mode: 'ask',
     status: 'completed',
     created_at: iso(-20),
     started_at: iso(-20),
@@ -271,7 +272,17 @@ function createMockStore() {
       })
     )
 
-    const requiresApproval = /shell|command|cargo|test|build/i.test(prompt)
+    const turn = snapshots.get(threadId)?.turns.find((item) => item.id === turnId)
+    const isCommandPrompt = /shell|command|cargo|test|build/i.test(prompt)
+    if (isCommandPrompt && turn?.permission_mode === 'read_only') {
+      schedule(turnId, 980, () => finish(
+        threadId,
+        turnId,
+        'I kept this turn read-only, so the requested command was not executed.'
+      ))
+      return
+    }
+    const requiresApproval = isCommandPrompt && turn?.permission_mode !== 'full_access'
     if (requiresApproval) {
       const approvalId = id('approval')
       const command = prompt.toLocaleLowerCase().includes('build') ? 'cargo build --workspace' : 'cargo test --workspace'
@@ -466,7 +477,8 @@ function createMockStore() {
           message: input.message,
           references: input.references,
           provider: input.provider,
-          model: input.model
+          model: input.model,
+          permission_mode: input.permission_mode
         })
         const started = { ...created, turn }
         startedRequests.set(input.client_request_id, clone(started))
@@ -532,6 +544,7 @@ function createMockStore() {
           input_message_id: message.id,
           provider: input.provider,
           model: input.model || 'kody-demo',
+          permission_mode: input.permission_mode,
           status: 'running',
           created_at: createdAt,
           started_at: createdAt

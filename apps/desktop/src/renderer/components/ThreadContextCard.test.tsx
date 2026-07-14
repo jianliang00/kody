@@ -49,6 +49,7 @@ describe('ThreadContextCard', () => {
         input_message_id: 'message-current',
         provider: 'echo',
         model: 'echo',
+        permission_mode: 'ask',
         status: 'running',
         created_at: now
       }],

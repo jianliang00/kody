@@ -12,9 +12,9 @@ use kody_core::{
         ModelRole, ScriptedProvider,
     },
     AgentEvent, ContextReference, EngineConfig, ExternalTurnBackend, InMemoryStore, KodyEngine,
-    KodyError, Message, MessageId, MessagePart, MessageRole, ResolvedContext, Result, StartTurn,
-    ThreadReferenceMode, ThreadStatus, ThreadTitleGenerator, ThreadTitleRequest, Turn,
-    TurnEventEmitter, TurnStatus, DEFAULT_THREAD_TITLE,
+    KodyError, Message, MessageId, MessagePart, MessageRole, PermissionMode, ResolvedContext,
+    Result, StartTurn, ThreadReferenceMode, ThreadStatus, ThreadTitleGenerator, ThreadTitleRequest,
+    Turn, TurnEventEmitter, TurnStatus, DEFAULT_THREAD_TITLE,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -63,6 +63,7 @@ async fn first_completed_echo_turn_generates_one_deterministic_title() {
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
+            permission_mode: None,
             temperature: None,
             max_output_tokens: None,
         })
@@ -87,6 +88,7 @@ async fn first_completed_echo_turn_generates_one_deterministic_title() {
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
+            permission_mode: None,
             temperature: None,
             max_output_tokens: None,
         })
@@ -124,6 +126,7 @@ async fn an_explicit_thread_title_is_never_overwritten() {
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
+            permission_mode: None,
             temperature: None,
             max_output_tokens: None,
         })
@@ -194,6 +197,7 @@ async fn provider_backed_title_generation_never_blocks_turn_completion() {
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
+            permission_mode: None,
             temperature: None,
             max_output_tokens: None,
         })
@@ -233,6 +237,7 @@ async fn terminal_event_is_emitted_only_after_thread_is_idle() {
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
+            permission_mode: None,
             temperature: None,
             max_output_tokens: None,
         })
@@ -324,6 +329,7 @@ async fn external_backend_uses_durable_lifecycle_and_generates_title_after_termi
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
+            permission_mode: None,
             temperature: None,
             max_output_tokens: None,
         })
@@ -444,6 +450,7 @@ async fn external_backend_failure_is_terminal_and_releases_the_thread() {
         references: Vec::new(),
         provider: "echo".into(),
         model: None,
+        permission_mode: None,
         temperature: None,
         max_output_tokens: None,
     };
@@ -538,6 +545,7 @@ async fn external_backend_cancellation_persists_no_answer_and_releases_the_threa
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
+            permission_mode: None,
             temperature: None,
             max_output_tokens: None,
         })
@@ -582,6 +590,7 @@ async fn external_backend_cancellation_persists_no_answer_and_releases_the_threa
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
+            permission_mode: None,
             temperature: None,
             max_output_tokens: None,
         })
@@ -609,6 +618,7 @@ async fn queued_turn_keeps_its_provider_lease_across_registry_replace_and_remove
         references: Vec::new(),
         provider: "hot-provider".into(),
         model: None,
+        permission_mode: None,
         temperature: None,
         max_output_tokens: None,
     };
@@ -697,6 +707,7 @@ async fn agent_loop_executes_tools_persists_history_and_emits_ordered_events() {
             references: Vec::new(),
             provider: "test".into(),
             model: None,
+            permission_mode: None,
             temperature: Some(0.2),
             max_output_tokens: Some(1_024),
         })
@@ -816,6 +827,7 @@ async fn cancellation_cleans_up_and_a_duplicate_executor_cannot_claim_the_turn()
             references: Vec::new(),
             provider: "blocking".into(),
             model: None,
+            permission_mode: None,
             temperature: None,
             max_output_tokens: None,
         })
@@ -878,6 +890,7 @@ async fn shell_waits_for_an_explicit_approval_decision() {
             references: Vec::new(),
             provider: "approval-provider".into(),
             model: None,
+            permission_mode: None,
             temperature: None,
             max_output_tokens: None,
         })
@@ -941,6 +954,137 @@ async fn shell_waits_for_an_explicit_approval_decision() {
 }
 
 #[tokio::test]
+async fn read_only_mode_blocks_a_write_tool_even_if_the_provider_calls_it() {
+    let (engine, _state) = engine().await;
+    let (thread, workspace, _) = engine.create_thread("read only", None).await.unwrap();
+    let provider = Arc::new(ScriptedProvider::with_responses(
+        "read-only-provider",
+        [
+            ModelResponse {
+                content: vec![ModelContent::ToolCall {
+                    id: "call-shell-read-only".into(),
+                    name: "shell".into(),
+                    arguments: json!({ "command": "printf forbidden > forbidden.txt" }),
+                }],
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+            ModelResponse::text("The command was unavailable."),
+        ],
+    ));
+    engine.providers().register(provider.clone()).unwrap();
+    let turn = engine
+        .runtime()
+        .prepare_turn(StartTurn {
+            thread_id: thread.id,
+            message: "do not modify anything".into(),
+            references: Vec::new(),
+            provider: "read-only-provider".into(),
+            model: None,
+            permission_mode: Some(PermissionMode::ReadOnly),
+            temperature: None,
+            max_output_tokens: None,
+        })
+        .await
+        .unwrap();
+    let mut events = engine.events().subscribe();
+
+    let completed = engine
+        .runtime()
+        .execute_turn(turn.id, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(completed.permission_mode, PermissionMode::ReadOnly);
+    assert!(tokio::fs::metadata(workspace.root.join("forbidden.txt"))
+        .await
+        .is_err());
+    assert!(engine
+        .runtime()
+        .approvals()
+        .list(Some(thread.id))
+        .await
+        .is_empty());
+    assert!(provider
+        .requests()
+        .unwrap()
+        .iter()
+        .all(|request| request.tools.iter().all(|tool| tool.name != "shell")));
+
+    let mut saw_denial = false;
+    while let Ok(event) = events.try_recv() {
+        assert!(!matches!(event.event, AgentEvent::ApprovalRequested { .. }));
+        if let AgentEvent::ToolCompleted {
+            is_error: true,
+            metadata,
+            ..
+        } = event.event
+        {
+            saw_denial |= metadata["error_kind"] == "permission_denied";
+        }
+    }
+    assert!(saw_denial);
+}
+
+#[tokio::test]
+async fn full_access_mode_runs_a_command_without_creating_an_approval() {
+    let (engine, _state) = engine().await;
+    let (thread, workspace, _) = engine.create_thread("full access", None).await.unwrap();
+    let provider = Arc::new(ScriptedProvider::with_responses(
+        "full-access-provider",
+        [
+            ModelResponse {
+                content: vec![ModelContent::ToolCall {
+                    id: "call-shell-full-access".into(),
+                    name: "shell".into(),
+                    arguments: json!({ "command": "printf allowed > allowed.txt" }),
+                }],
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+            ModelResponse::text("The command completed."),
+        ],
+    ));
+    engine.providers().register(provider).unwrap();
+    let turn = engine
+        .runtime()
+        .prepare_turn(StartTurn {
+            thread_id: thread.id,
+            message: "run without asking".into(),
+            references: Vec::new(),
+            provider: "full-access-provider".into(),
+            model: None,
+            permission_mode: Some(PermissionMode::FullAccess),
+            temperature: None,
+            max_output_tokens: None,
+        })
+        .await
+        .unwrap();
+
+    let completed = tokio::time::timeout(
+        Duration::from_secs(2),
+        engine
+            .runtime()
+            .execute_turn(turn.id, CancellationToken::new()),
+    )
+    .await
+    .expect("full-access command unexpectedly waited for approval")
+    .unwrap();
+    assert_eq!(completed.permission_mode, PermissionMode::FullAccess);
+    assert!(engine
+        .runtime()
+        .approvals()
+        .list(Some(thread.id))
+        .await
+        .is_empty());
+    assert_eq!(
+        tokio::fs::read_to_string(workspace.root.join("allowed.txt"))
+            .await
+            .unwrap(),
+        "allowed"
+    );
+}
+
+#[tokio::test]
 async fn managed_process_start_uses_command_approval_and_outlives_its_turn() {
     let (engine, _state) = engine().await;
     let (thread, workspace, _) = engine
@@ -973,6 +1117,7 @@ async fn managed_process_start_uses_command_approval_and_outlives_its_turn() {
             references: Vec::new(),
             provider: "process-approval-provider".into(),
             model: None,
+            permission_mode: None,
             temperature: None,
             max_output_tokens: None,
         })
@@ -1077,6 +1222,7 @@ async fn referenced_thread_context_is_resolved_without_copying_messages() {
             }],
             provider: "test-ref".into(),
             model: Some("test-model".into()),
+            permission_mode: None,
             temperature: None,
             max_output_tokens: None,
         })
@@ -1129,6 +1275,7 @@ async fn provider_failure_releases_thread_for_the_next_turn() {
         references: Vec::new(),
         provider: "failing".into(),
         model: Some("model".into()),
+        permission_mode: None,
         temperature: None,
         max_output_tokens: None,
     };
@@ -1180,6 +1327,7 @@ async fn durable_engine_recovers_an_interrupted_queued_turn_on_restart() {
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
+            permission_mode: None,
             temperature: None,
             max_output_tokens: None,
         })

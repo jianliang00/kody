@@ -1952,7 +1952,7 @@ mod tests {
 
     use super::*;
     use crate::domain::{
-        MessagePart, MessageRole, ProjectAccess, ProjectKind, ThreadReferenceMode,
+        MessagePart, MessageRole, PermissionMode, ProjectAccess, ProjectKind, ThreadReferenceMode,
     };
 
     fn timestamp(second: i64) -> chrono::DateTime<Utc> {
@@ -2074,6 +2074,7 @@ mod tests {
             input_message_id: input.id,
             provider: "test".into(),
             model: "test-model".into(),
+            permission_mode: PermissionMode::Ask,
             temperature: None,
             max_output_tokens: None,
             status: TurnStatus::Queued,
@@ -2177,6 +2178,7 @@ mod tests {
             input_message_id: referenced.id,
             provider: "test".into(),
             model: "test-model".into(),
+            permission_mode: PermissionMode::Ask,
             temperature: None,
             max_output_tokens: None,
             status: TurnStatus::Queued,
@@ -2310,6 +2312,7 @@ mod tests {
             input_message_id: input.id,
             provider: "test".into(),
             model: "test-model".into(),
+            permission_mode: PermissionMode::Ask,
             temperature: None,
             max_output_tokens: None,
             status: TurnStatus::Queued,
@@ -2525,6 +2528,7 @@ mod tests {
             input_message_id: input.id,
             provider: "test".into(),
             model: "test-model".into(),
+            permission_mode: PermissionMode::Ask,
             temperature: Some(0.25),
             max_output_tokens: Some(512),
             status: TurnStatus::Queued,

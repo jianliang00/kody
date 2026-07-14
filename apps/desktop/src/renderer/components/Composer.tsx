@@ -1,8 +1,9 @@
-import { AtSign, FolderOpen, Send, Square, X } from 'lucide-react'
+import { AtSign, FolderOpen, Send, ShieldCheck, Square, X } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import type {
   ContextReference,
   ModelDescriptor,
+  PermissionMode,
   Project,
   ProviderDescriptor,
   Thread
@@ -29,6 +30,7 @@ interface ComposerProps {
   providerId: string
   models: ModelDescriptor[]
   model: string
+  permissionMode: PermissionMode
   modelsLoading?: boolean
   running: boolean
   message: string
@@ -38,6 +40,7 @@ interface ComposerProps {
   onReferencesChange: (references: ContextReference[]) => void
   onProviderChange: (providerId: string) => void
   onModelChange: (model: string) => void
+  onPermissionModeChange: (mode: PermissionMode) => void
   onMessageChange: (message: string) => void
   onPickWorkingDirectory?: () => Promise<void>
   onClearWorkingDirectory?: () => void
@@ -45,7 +48,8 @@ interface ComposerProps {
     message: string,
     references: ContextReference[],
     providerId: string,
-    model: string
+    model: string,
+    permissionMode: PermissionMode
   ) => Promise<boolean>
   onCancel: () => Promise<void>
 }
@@ -59,6 +63,7 @@ export function Composer({
   providerId,
   models,
   model,
+  permissionMode,
   modelsLoading = false,
   running,
   message,
@@ -68,6 +73,7 @@ export function Composer({
   onReferencesChange,
   onProviderChange,
   onModelChange,
+  onPermissionModeChange,
   onMessageChange,
   onPickWorkingDirectory,
   onClearWorkingDirectory,
@@ -176,7 +182,7 @@ export function Composer({
     setSubmitting(true)
     setValidationError('')
     try {
-      const sent = await onSend(trimmed, references, providerId, model)
+      const sent = await onSend(trimmed, references, providerId, model, permissionMode)
       if (sent) {
         onMessageChange('')
         onReferencesChange([])
@@ -333,6 +339,34 @@ export function Composer({
             <AtSign aria-hidden="true" size={16} />
             <span>Add context</span>
           </button>
+          <label
+            className={`permission-mode-control permission-mode-control--${permissionMode}`}
+            title={permissionMode === 'read_only'
+              ? 'Only inspection tools can run for this turn.'
+              : permissionMode === 'full_access'
+                ? 'Tools and commands run without approval or a Codex sandbox.'
+                : 'File changes are allowed; commands ask for approval.'}
+          >
+            <ShieldCheck aria-hidden="true" size={15} />
+            <span className="sr-only">Permission mode</span>
+            <select
+              value={permissionMode}
+              disabled={unavailable || running}
+              onChange={(event) => onPermissionModeChange(event.target.value as PermissionMode)}
+              aria-describedby="permission-mode-description"
+            >
+              <option value="read_only">Read only</option>
+              <option value="ask">Ask for commands</option>
+              <option value="full_access">Full access</option>
+            </select>
+          </label>
+          <span id="permission-mode-description" className="sr-only">
+            {permissionMode === 'read_only'
+              ? 'Only inspection tools can run for this turn.'
+              : permissionMode === 'full_access'
+                ? 'Tools and commands run without approval or a Codex sandbox.'
+                : 'File changes are allowed; commands ask for approval.'}
+          </span>
           {draft && workingDirectory ? (
             <div className="working-directory-chip" title={workingDirectory}>
               <FolderOpen aria-hidden="true" size={15} />

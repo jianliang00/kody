@@ -322,7 +322,8 @@ async fn websocket_create_and_start_is_idempotent_and_streams_from_the_first_eve
                 "client_request_id": "stable-draft-request",
                 "message": "Explain the provider neutral agent loop",
                 "references": [],
-                "provider": "echo"
+                "provider": "echo",
+                "permission_mode": "full_access"
             }
         })
     };
@@ -340,6 +341,7 @@ async fn websocket_create_and_start_is_idempotent_and_streams_from_the_first_eve
         .as_str()
         .context("create-and-start returned no Turn")?
         .to_owned();
+    assert_eq!(created["result"]["turn"]["permission_mode"], "full_access");
     let mut event_types = Vec::new();
     let mut last_sequence = 0_u64;
     for _ in 0..48 {
@@ -471,7 +473,8 @@ async fn authorized_websocket_runs_echo_turn_and_streams_subscribed_events() -> 
             "params": {
                 "thread_id": thread_id,
                 "message": "echo across the network",
-                "provider": "echo"
+                "provider": "echo",
+                "permission_mode": "read_only"
             }
         }),
     )
@@ -484,6 +487,7 @@ async fn authorized_websocket_runs_echo_turn_and_streams_subscribed_events() -> 
         let message = receive_json(&mut socket).await?;
         if message["id"] == "start-turn" {
             assert_eq!(message["result"]["status"], "queued");
+            assert_eq!(message["result"]["permission_mode"], "read_only");
             turn_id = message["result"]["id"].as_str().map(str::to_owned);
             continue;
         }
@@ -588,6 +592,7 @@ async fn websocket_exposes_managed_process_events_output_and_stop() -> Result<()
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
+            permission_mode: None,
             temperature: None,
             max_output_tokens: None,
         })

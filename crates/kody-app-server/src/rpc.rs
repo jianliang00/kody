@@ -659,6 +659,7 @@ impl RpcDispatcher {
             references: params.references,
             provider: params.provider,
             model: params.model,
+            permission_mode: params.permission_mode,
             temperature: None,
             max_output_tokens: None,
         };
@@ -699,6 +700,7 @@ struct CreateRequestFingerprint<'a> {
     references: &'a [ContextReference],
     provider: &'a str,
     model: &'a Option<String>,
+    permission_mode: &'a Option<kody_core::PermissionMode>,
     working_directory: &'a Option<PathBuf>,
 }
 
@@ -708,6 +710,7 @@ fn create_request_fingerprint(params: &CreateThreadAndStartParams) -> Result<Str
         references: &params.references,
         provider: &params.provider,
         model: &params.model,
+        permission_mode: &params.permission_mode,
         working_directory: &params.working_directory,
     })
     .map_err(RpcError::invalid_params)
@@ -766,6 +769,7 @@ fn initialize_result() -> Value {
             "thread_create_and_start": true,
             "thread_auto_titles": true,
             "turn_cancellation": true,
+            "turn_permission_modes": ["read_only", "ask", "full_access"],
             "tool_approvals": true,
             "structured_user_input": true,
             "managed_processes": true,
@@ -839,6 +843,8 @@ struct CreateThreadAndStartParams {
     provider: String,
     #[serde(default)]
     model: Option<String>,
+    #[serde(default)]
+    permission_mode: Option<kody_core::PermissionMode>,
     #[serde(default)]
     working_directory: Option<PathBuf>,
 }

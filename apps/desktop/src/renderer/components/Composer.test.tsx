@@ -8,6 +8,7 @@ afterEach(cleanup)
 describe('Composer provider and model selection', () => {
   it('uses two labelled selectors and sends an explicit provider/model pair', async () => {
     const send = vi.fn(async () => true)
+    const permissionChange = vi.fn()
     render(
       <Composer
         threads={[]}
@@ -30,11 +31,13 @@ describe('Composer provider and model selection', () => {
         providerId="codex"
         models={[{ id: 'codex-default', display_name: 'Codex default' }]}
         model="codex-default"
+        permissionMode="ask"
         running={false}
         message="Inspect the workspace"
         onReferencesChange={vi.fn()}
         onProviderChange={vi.fn()}
         onModelChange={vi.fn()}
+        onPermissionModeChange={permissionChange}
         onMessageChange={vi.fn()}
         onSend={send}
         onCancel={vi.fn()}
@@ -43,14 +46,19 @@ describe('Composer provider and model selection', () => {
 
     expect((screen.getByLabelText('Provider') as HTMLSelectElement).value).toBe('codex')
     expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('codex-default')
+    expect((screen.getByLabelText('Permission mode') as HTMLSelectElement).value).toBe('ask')
     expect(screen.getByText('Uses the Codex agent loop and tools for this Turn.')).toBeTruthy()
+
+    fireEvent.change(screen.getByLabelText('Permission mode'), { target: { value: 'read_only' } })
+    expect(permissionChange).toHaveBeenCalledWith('read_only')
 
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(send).toHaveBeenCalledWith(
       'Inspect the workspace',
       [],
       'codex',
-      'codex-default'
+      'codex-default',
+      'ask'
     ))
   })
 
@@ -77,11 +85,13 @@ describe('Composer provider and model selection', () => {
         providerId=""
         models={[]}
         model=""
+        permissionMode="ask"
         running={false}
         message="Hello"
         onReferencesChange={vi.fn()}
         onProviderChange={vi.fn()}
         onModelChange={vi.fn()}
+        onPermissionModeChange={vi.fn()}
         onMessageChange={vi.fn()}
         onSend={vi.fn()}
         onCancel={vi.fn()}

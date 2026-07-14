@@ -15,8 +15,8 @@ use tracing::warn;
 use crate::{
     context::{ContextBuilder, ResolvedContext},
     domain::{
-        ApprovalId, ContextReference, Message, MessageId, MessagePart, MessageRole, ProjectId,
-        ThreadId, ThreadStatus, Turn, TurnId, TurnStatus,
+        ApprovalId, ContextReference, Message, MessageId, MessagePart, MessageRole, PermissionMode,
+        ProjectId, ThreadId, ThreadStatus, Turn, TurnId, TurnStatus,
     },
     engine::validate_reference,
     error::{KodyError, Result},
@@ -66,6 +66,8 @@ pub struct StartTurn {
     pub provider: String,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub permission_mode: Option<PermissionMode>,
     #[serde(default)]
     pub temperature: Option<f32>,
     #[serde(default)]
@@ -278,12 +280,18 @@ impl AgentRuntime {
         };
         self.store.append_message(input.clone()).await?;
 
+        let default_permission_mode = if self.config.require_command_approval {
+            PermissionMode::Ask
+        } else {
+            PermissionMode::FullAccess
+        };
         let turn = Turn {
             id: turn_id,
             thread_id: thread.id,
             input_message_id,
             provider: request.provider,
             model,
+            permission_mode: request.permission_mode.unwrap_or(default_permission_mode),
             temperature: request.temperature.or(self.config.temperature),
             max_output_tokens: request.max_output_tokens.or(self.config.max_output_tokens),
             status: TurnStatus::Queued,
@@ -531,6 +539,13 @@ impl AgentRuntime {
             .tools
             .definitions()
             .into_iter()
+            .filter(|definition| {
+                turn.permission_mode != PermissionMode::ReadOnly
+                    || matches!(
+                        self.tools.risk(&definition.name),
+                        Ok(crate::tools::ToolRisk::ReadOnly)
+                    )
+            })
             .map(|definition| ProviderToolDefinition {
                 name: definition.name,
                 description: definition.description,
@@ -597,8 +612,27 @@ impl AgentRuntime {
 
             for call in tool_calls {
                 check_cancelled(&cancellation)?;
-                let requires_approval = self.config.require_command_approval
-                    && self.tools.risk(&call.name)? == crate::tools::ToolRisk::CommandExecution;
+                let risk = self.tools.risk(&call.name)?;
+                if turn.permission_mode == PermissionMode::ReadOnly
+                    && risk != crate::tools::ToolRisk::ReadOnly
+                {
+                    let result = ToolResult::error(
+                        &call,
+                        format!("tool '{}' is disabled in read-only mode", call.name),
+                        json!({ "error_kind": "permission_denied", "permission_mode": "read_only" }),
+                    );
+                    emitter.emit(AgentEvent::ToolCompleted {
+                        tool_call_id: result.tool_call_id.clone(),
+                        name: result.name.clone(),
+                        content: result.content.clone(),
+                        is_error: true,
+                        metadata: result.metadata.clone(),
+                    });
+                    self.persist_tool_result(turn, result).await?;
+                    continue;
+                }
+                let requires_approval = turn.permission_mode == PermissionMode::Ask
+                    && risk == crate::tools::ToolRisk::CommandExecution;
                 if requires_approval {
                     let approved = self
                         .request_tool_approval(turn, &call, &cancellation, &emitter)

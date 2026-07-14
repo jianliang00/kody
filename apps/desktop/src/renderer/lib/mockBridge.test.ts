@@ -16,7 +16,8 @@ describe('browser mock approvals', () => {
       message: 'Run cargo test for this project',
       references: [],
       provider: 'echo',
-      model: 'kody-demo'
+      model: 'kody-demo',
+      permission_mode: 'ask'
     })
 
     await vi.advanceTimersByTimeAsync(300)

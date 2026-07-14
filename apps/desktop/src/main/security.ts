@@ -1,7 +1,7 @@
 import type { Session, WebContents } from 'electron'
 import { shell } from 'electron'
 
-import type { ContextReference, RpcMethod } from '../shared/protocol'
+import type { ContextReference, PermissionMode, RpcMethod } from '../shared/protocol'
 
 const RPC_METHODS = new Set<RpcMethod>([
   'initialize',
@@ -57,12 +57,13 @@ export function validateRpcInvocation(method: unknown, params: unknown): asserts
     case 'thread/create-and-start':
       requireKeys(
         params,
-        ['client_request_id', 'message', 'references', 'provider'],
+        ['client_request_id', 'message', 'references', 'provider', 'permission_mode'],
         ['model', 'working_directory']
       )
       requireId(params.client_request_id, 'client_request_id')
       requireString(params.message, 'message', 128_000)
       requireString(params.provider, 'provider', 256)
+      requirePermissionMode(params.permission_mode)
       requireOptionalString(params.model, 'model', 256)
       requireOptionalString(params.working_directory, 'working_directory', 32_768)
       if (!Array.isArray(params.references) || params.references.length > 128) {
@@ -80,10 +81,15 @@ export function validateRpcInvocation(method: unknown, params: unknown): asserts
       if (!isContextReference(params.reference)) throw new Error('Invalid context reference')
       break
     case 'turn/start':
-      requireKeys(params, ['thread_id', 'message', 'references', 'provider'], ['model'])
+      requireKeys(
+        params,
+        ['thread_id', 'message', 'references', 'provider', 'permission_mode'],
+        ['model']
+      )
       requireId(params.thread_id, 'thread_id')
       requireString(params.message, 'message', 128_000)
       requireString(params.provider, 'provider', 256)
+      requirePermissionMode(params.permission_mode)
       requireOptionalString(params.model, 'model', 256)
       if (!Array.isArray(params.references) || params.references.length > 128) {
         throw new Error('Invalid Turn references')
@@ -147,6 +153,12 @@ export function validateRpcInvocation(method: unknown, params: unknown): asserts
       break
     default:
       throw new Error('Unsupported Kody RPC method')
+  }
+}
+
+function requirePermissionMode(value: unknown): asserts value is PermissionMode {
+  if (value !== 'read_only' && value !== 'ask' && value !== 'full_access') {
+    throw new Error("'permission_mode' must be read_only, ask, or full_access")
   }
 }
 

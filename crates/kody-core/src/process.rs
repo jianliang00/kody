@@ -2286,8 +2286,8 @@ mod tests {
     use super::*;
     use crate::{
         domain::{
-            Message, MessageId, MessagePart, MessageRole, Thread, ThreadStatus, Turn, TurnId,
-            TurnStatus, Workspace, WorkspaceId,
+            Message, MessageId, MessagePart, MessageRole, PermissionMode, Thread, ThreadStatus,
+            Turn, TurnId, TurnStatus, Workspace, WorkspaceId,
         },
         event::ProcessEvent,
         store::InMemoryStore,
@@ -2357,6 +2357,7 @@ mod tests {
                     input_message_id: message_id,
                     provider: "scripted".into(),
                     model: "test".into(),
+                    permission_mode: PermissionMode::Ask,
                     temperature: None,
                     max_output_tokens: None,
                     status: TurnStatus::Completed,

@@ -219,6 +219,23 @@ pub enum TurnStatus {
     Cancelled,
 }
 
+/// The user-selected execution boundary for a single Turn.
+///
+/// This is provider-neutral: the native loop uses it to expose/gate tools and
+/// external agent backends translate it to their own approval and sandbox
+/// settings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionMode {
+    /// Only tools declared as read-only may run.
+    ReadOnly,
+    /// Filesystem work is allowed, while command execution asks the user.
+    #[default]
+    Ask,
+    /// All registered tools may run without an interactive approval.
+    FullAccess,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Turn {
     pub id: TurnId,
@@ -226,6 +243,8 @@ pub struct Turn {
     pub input_message_id: MessageId,
     pub provider: String,
     pub model: String,
+    #[serde(default)]
+    pub permission_mode: PermissionMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]

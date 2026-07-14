@@ -17,6 +17,7 @@ import type {
   ContextReference,
   EventEnvelope,
   ModelDescriptor,
+  PermissionMode,
   ProcessEventEnvelope,
   ProcessOutputPage,
   Project,
@@ -127,13 +128,15 @@ interface ComposerDraftState {
   references: ContextReference[]
   providerId: string
   model: string
+  permissionMode: PermissionMode
 }
 
 const EMPTY_COMPOSER_DRAFT: ComposerDraftState = {
   message: '',
   references: [],
   providerId: '',
-  model: ''
+  model: '',
+  permissionMode: 'ask'
 }
 
 export function App() {
@@ -715,8 +718,13 @@ export function App() {
   const initialComposerDraft = useMemo<ComposerDraftState>(() => latestThreadTurn ? {
     ...EMPTY_COMPOSER_DRAFT,
     providerId: latestThreadTurn.provider,
-    model: latestThreadTurn.model
-  } : EMPTY_COMPOSER_DRAFT, [latestThreadTurn?.model, latestThreadTurn?.provider])
+    model: latestThreadTurn.model,
+    permissionMode: latestThreadTurn.permission_mode
+  } : EMPTY_COMPOSER_DRAFT, [
+    latestThreadTurn?.model,
+    latestThreadTurn?.permission_mode,
+    latestThreadTurn?.provider
+  ])
   useEffect(() => {
     if (!activeThreadId || !latestThreadTurn) return
     const threadDraftKey = `thread:${activeThreadId}`
@@ -769,6 +777,12 @@ export function App() {
       }
     })
   }, [composerDraftKey, composerProviderId, initialComposerDraft])
+  const setComposerPermissionMode = useCallback((permissionMode: PermissionMode): void => {
+    setComposerDrafts((current) => {
+      const existing = current[composerDraftKey] ?? initialComposerDraft
+      return { ...current, [composerDraftKey]: { ...existing, permissionMode } }
+    })
+  }, [composerDraftKey, initialComposerDraft])
 
   useEffect(() => {
     if (
@@ -869,7 +883,8 @@ export function App() {
     message: string,
     references: ContextReference[],
     providerId: string,
-    model: string
+    model: string,
+    permissionMode: PermissionMode
   ): Promise<boolean> => {
     if (!providerId || !model || startTurnRef.current || isRunning) return false
     startTurnRef.current = true
@@ -883,6 +898,7 @@ export function App() {
           references,
           provider: providerId,
           model,
+          permission_mode: permissionMode,
           working_directory: draftWorkingDirectory
         })
         if (started.imported_project) {
@@ -898,7 +914,8 @@ export function App() {
             message: '',
             references: [],
             providerId,
-            model
+            model,
+            permissionMode
           }
         }))
         setThreads((current) => [
@@ -935,7 +952,8 @@ export function App() {
         message,
         references,
         provider: providerId,
-        model
+        model,
+        permission_mode: permissionMode
       })
       setRunningTurns((current) => ({ ...current, [snapshot.thread.id]: turn.id }))
       setSnapshot((current) => {
@@ -1339,6 +1357,7 @@ export function App() {
                   providerId={composerProviderId}
                   models={composerModels}
                   model={composerModel}
+                  permissionMode={composerDraft.permissionMode}
                   modelsLoading={loadingModelProviders.has(composerProviderId)}
                   running={isRunning}
                   message={composerDraft.message}
@@ -1346,6 +1365,7 @@ export function App() {
                   onReferencesChange={setDraftReferences}
                   onProviderChange={setComposerProvider}
                   onModelChange={setComposerModel}
+                  onPermissionModeChange={setComposerPermissionMode}
                   onMessageChange={setComposerMessage}
                   onSend={handleStartTurn}
                   onCancel={handleCancelTurn}
@@ -1365,6 +1385,7 @@ export function App() {
                   providerId={composerProviderId}
                   models={composerModels}
                   model={composerModel}
+                  permissionMode={composerDraft.permissionMode}
                   modelsLoading={loadingModelProviders.has(composerProviderId)}
                   running={false}
                   message={composerDraft.message}
@@ -1374,6 +1395,7 @@ export function App() {
                   onReferencesChange={setDraftReferences}
                   onProviderChange={setComposerProvider}
                   onModelChange={setComposerModel}
+                  onPermissionModeChange={setComposerPermissionMode}
                   onMessageChange={setComposerMessage}
                   onPickWorkingDirectory={async () => {
                     const path = await bridge.pickDirectory('working-directory')
