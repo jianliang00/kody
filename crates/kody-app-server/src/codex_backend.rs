@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt,
     sync::{
         atomic::{AtomicU8, Ordering},
@@ -7,14 +8,13 @@ use std::{
 };
 
 use async_trait::async_trait;
-use chrono::Utc;
 use kody_core::{
     provider::{
         AuthState, ModelDescriptor, ModelProvider, ModelRequest, ModelResponse,
         ProviderCapabilities, ProviderDescriptor, ProviderHealth,
     },
     AgentEvent, ApprovalId, ExternalTurnBackend, InteractionId, KodyEngine, KodyError,
-    PendingApproval, PendingUserInput, ProjectAccess, ResolvedContext, Result, Turn,
+    PendingApproval, PendingUserInput, ProjectAccess, ResolvedContext, Result, ThreadId, Turn,
     TurnEventEmitter, UserInputOption, UserInputQuestion,
 };
 use serde_json::{json, Map, Value};
@@ -35,6 +35,11 @@ const MAX_FINAL_TEXT_BYTES: usize = 8 * 1024 * 1024;
 pub struct CodexService {
     engine: Arc<KodyEngine>,
     client: Mutex<Option<Arc<CodexClient>>>,
+    /// Codex threads are backend-private and intentionally ephemeral. Keeping
+    /// their IDs in memory prevents Codex Desktop from discovering and joining
+    /// Kody's active execution thread while still preserving continuity for
+    /// turns handled by this sidecar process.
+    thread_bindings: Mutex<HashMap<ThreadId, String>>,
     options: CodexClientOptions,
     auth_state: AtomicU8,
 }
@@ -65,6 +70,7 @@ impl CodexService {
         Arc::new(Self {
             engine,
             client: Mutex::new(None),
+            thread_bindings: Mutex::new(HashMap::new()),
             options,
             auth_state: AtomicU8::new(0),
         })
@@ -82,6 +88,10 @@ impl CodexService {
             return Ok(client.clone());
         }
         let client = Arc::new(CodexClient::discover_and_spawn(self.options.clone()).await?);
+        // Ephemeral thread IDs belong to the sidecar process that created them.
+        // A restarted sidecar must start fresh bindings and rebuild context
+        // from Kody's durable Thread history.
+        self.thread_bindings.lock().await.clear();
         if let Ok(account) = client.account_read().await {
             self.auth_state.store(
                 if account.account.is_some() { 2 } else { 1 },
@@ -111,6 +121,7 @@ impl CodexService {
         if let Some(client) = self.client.lock().await.take() {
             let _ = client.shutdown().await;
         }
+        self.thread_bindings.lock().await.clear();
     }
 
     pub async fn models(&self) -> Result<Vec<ModelDescriptor>> {
@@ -130,12 +141,18 @@ impl CodexService {
         turn: &Turn,
         context: &ResolvedContext,
     ) -> Result<(String, bool)> {
-        let mut thread = self.engine.store().get_thread(turn.thread_id).await?;
-        if let Some(thread_id) = thread.external_thread_ids.get(PROVIDER_ID).cloned() {
+        if let Some(thread_id) = self
+            .thread_bindings
+            .lock()
+            .await
+            .get(&turn.thread_id)
+            .cloned()
+        {
             let mut params = ThreadResumeParams::new(thread_id.clone());
             params.cwd = Some(context.workspace.root.clone());
             params.model = Some(turn.model.clone());
             params.approval_policy = Some("on-request".into());
+            params.approvals_reviewer = Some("user".into());
             params.sandbox = Some("workspace-write".into());
             client
                 .thread_resume(params)
@@ -150,24 +167,24 @@ impl CodexService {
                 model: Some(turn.model.clone()),
                 model_provider: None,
                 approval_policy: Some("on-request".into()),
+                approvals_reviewer: Some("user".into()),
                 sandbox: Some("workspace-write".into()),
                 developer_instructions: Some(
                     "You are running as Kody's Codex execution backend. Respect the supplied Kody Thread and Project context. Report only work you actually performed."
                         .into(),
                 ),
                 base_instructions: None,
-                ephemeral: Some(false),
+                ephemeral: Some(true),
                 service_tier: None,
                 config: None,
             })
             .await
             .map_err(codex_provider_error)?;
         let external_id = started.thread.id;
-        thread
-            .external_thread_ids
-            .insert(PROVIDER_ID.into(), external_id.clone());
-        thread.updated_at = Utc::now();
-        self.engine.store().update_thread(thread).await?;
+        self.thread_bindings
+            .lock()
+            .await
+            .insert(turn.thread_id, external_id.clone());
         Ok((external_id, true))
     }
 }
@@ -257,6 +274,7 @@ impl ExternalTurnBackend for CodexService {
         start.model = Some(turn.model.clone());
         start.cwd = Some(context.workspace.root.clone());
         start.approval_policy = Some("on-request".into());
+        start.approvals_reviewer = Some("user".into());
         start.client_user_message_id = Some(turn.input_message_id.to_string());
         start.sandbox_policy = Some(workspace_write_policy(&context));
 
@@ -418,6 +436,11 @@ impl CodexService {
                 biased;
                 _ = cancellation.cancelled() => {
                     self.engine.runtime().user_inputs().remove(interaction_id).await;
+                    let _ = client.reject_server_request(
+                        request.id.clone(),
+                        -32800,
+                        "Kody turn was cancelled",
+                    ).await;
                     return Err(KodyError::Cancelled);
                 }
                 resolution = receiver => resolution.map_err(|_| {
@@ -476,6 +499,11 @@ impl CodexService {
             biased;
             _ = cancellation.cancelled() => {
                 self.engine.runtime().approvals().remove(approval_id).await;
+                let _ = client.reject_server_request(
+                    request.id.clone(),
+                    -32800,
+                    "Kody turn was cancelled",
+                ).await;
                 return Err(KodyError::Cancelled);
             }
             decision = receiver => decision.map_err(|_| {

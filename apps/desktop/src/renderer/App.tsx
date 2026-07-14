@@ -978,9 +978,12 @@ export function App() {
     setResolvingApprovals((current) => new Set(current).add(approvalId))
     try {
       const result = await bridge.rpc('approval/respond', { approval_id: approvalId, approved })
-      if (!result.resolved) throw new Error('This approval was already resolved.')
-      setAnnouncement(approved ? 'Command execution allowed once' : 'Command execution denied')
-      if (activeThreadRef.current) void refreshThread(activeThreadRef.current)
+      if (result.resolved) {
+        setAnnouncement(approved ? 'Command execution allowed once' : 'Command execution denied')
+      } else {
+        setAnnouncement('Command approval was already handled; Thread state refreshed')
+      }
+      if (activeThreadRef.current) await refreshThread(activeThreadRef.current)
     } catch (error) {
       setAppError(error instanceof Error ? error.message : 'Could not respond to approval.')
       approvalRef.current.delete(approvalId)

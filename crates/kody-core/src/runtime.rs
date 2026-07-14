@@ -908,20 +908,15 @@ impl ApprovalBroker {
             .collect()
     }
 
-    pub async fn respond(&self, approval_id: ApprovalId, approved: bool) -> Result<()> {
-        let entry = self
-            .pending
-            .lock()
-            .await
-            .remove(&approval_id)
-            .ok_or_else(|| {
-                KodyError::InvalidInput(format!(
-                    "approval {approval_id} does not exist or was already resolved"
-                ))
-            })?;
-        entry.decision.send(approved).map_err(|_| {
-            KodyError::Conflict(format!("approval {approval_id} is no longer waiting"))
-        })
+    /// Resolves an approval if it is still actionable. A missing entry or a
+    /// receiver that has already gone away is a normal stale-client race, not
+    /// an RPC failure: callers can refresh the durable Thread snapshot and
+    /// converge on the already-resolved state.
+    pub async fn respond(&self, approval_id: ApprovalId, approved: bool) -> Result<bool> {
+        let Some(entry) = self.pending.lock().await.remove(&approval_id) else {
+            return Ok(false);
+        };
+        Ok(entry.decision.send(approved).is_ok())
     }
 
     pub async fn remove(&self, approval_id: ApprovalId) {

@@ -160,7 +160,6 @@ fn options_for(executable: PathBuf) -> CodexClientOptions {
         startup_timeout: Duration::from_secs(2),
         request_timeout: Duration::from_secs(2),
         shutdown_timeout: Duration::from_millis(300),
-        server_request_timeout: Duration::from_secs(2),
         ..Default::default()
     }
 }
@@ -179,6 +178,34 @@ fn write_fake_version(directory: &TempDir, name: &str, version: &str, mode: &str
     permissions.set_mode(0o700);
     std::fs::set_permissions(&path, permissions).unwrap();
     path
+}
+
+#[test]
+fn serializes_kody_owned_ephemeral_threads_and_user_review() {
+    let started = serde_json::to_value(ThreadStartParams {
+        ephemeral: Some(true),
+        approval_policy: Some("on-request".into()),
+        approvals_reviewer: Some("user".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(started["ephemeral"], true);
+    assert_eq!(started["approvalPolicy"], "on-request");
+    assert_eq!(started["approvalsReviewer"], "user");
+
+    let mut resumed = ThreadResumeParams::new("codex-thread-1");
+    resumed.approval_policy = Some("on-request".into());
+    resumed.approvals_reviewer = Some("user".into());
+    let resumed = serde_json::to_value(resumed).unwrap();
+    assert_eq!(resumed["approvalPolicy"], "on-request");
+    assert_eq!(resumed["approvalsReviewer"], "user");
+
+    let mut turn = TurnStartParams::text("codex-thread-1", "hello");
+    turn.approval_policy = Some("on-request".into());
+    turn.approvals_reviewer = Some("user".into());
+    let turn = serde_json::to_value(turn).unwrap();
+    assert_eq!(turn["approvalPolicy"], "on-request");
+    assert_eq!(turn["approvalsReviewer"], "user");
 }
 
 #[tokio::test]
@@ -287,6 +314,25 @@ async fn publishes_typed_auth_notifications_and_server_requests() {
         }
         other => panic!("unexpected notification: {other:?}"),
     }
+    client.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn interactive_server_requests_do_not_expire_while_waiting_for_the_user() {
+    let fixture = fixture("normal", |options| {
+        options.request_timeout = Duration::from_millis(100);
+    })
+    .await;
+    let client = &fixture.client;
+    let mut requests = client.subscribe_server_requests();
+
+    client.request_raw("test/emit", json!({})).await.unwrap();
+    let request = requests.recv().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    client
+        .respond_server_request(request.id, json!({ "decision": "accept" }))
+        .await
+        .unwrap();
     client.shutdown().await.unwrap();
 }
 

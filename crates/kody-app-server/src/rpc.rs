@@ -535,14 +535,15 @@ impl RpcDispatcher {
             }
             "approval/respond" | "approval.respond" => {
                 let params: ApprovalResponseParams = parse_params(params)?;
-                self.state
+                let resolved = self
+                    .state
                     .engine
                     .runtime()
                     .approvals()
                     .respond(params.approval_id, params.approved)
                     .await
                     .map_err(RpcError::from)?;
-                Ok(json!({ "resolved": true }))
+                Ok(json!({ "resolved": resolved }))
             }
             "user-input/respond" | "user-input.respond" => {
                 let params: UserInputResponseParams = parse_params(params)?;

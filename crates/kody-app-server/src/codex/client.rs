@@ -62,7 +62,6 @@ pub struct CodexClientOptions {
     pub startup_timeout: Duration,
     pub request_timeout: Duration,
     pub shutdown_timeout: Duration,
-    pub server_request_timeout: Duration,
     pub request_queue_capacity: usize,
     pub event_queue_capacity: usize,
     pub max_model_pages: usize,
@@ -83,7 +82,6 @@ impl Default for CodexClientOptions {
             startup_timeout: Duration::from_secs(15),
             request_timeout: Duration::from_secs(60),
             shutdown_timeout: Duration::from_secs(3),
-            server_request_timeout: Duration::from_secs(120),
             request_queue_capacity: 128,
             event_queue_capacity: 512,
             max_model_pages: 1_024,
@@ -100,7 +98,6 @@ impl CodexClientOptions {
             ("startup_timeout", self.startup_timeout),
             ("request_timeout", self.request_timeout),
             ("shutdown_timeout", self.shutdown_timeout),
-            ("server_request_timeout", self.server_request_timeout),
         ] {
             if duration.is_zero() {
                 return Err(CodexError::InvalidOptions(format!(
@@ -946,27 +943,6 @@ fn handle_server_request(
         return Ok(());
     }
 
-    let weak = Arc::downgrade(inner);
-    let duration = inner.options.server_request_timeout;
-    tokio::spawn(async move {
-        tokio::time::sleep(duration).await;
-        let Some(inner) = weak.upgrade() else {
-            return;
-        };
-        let expired = inner
-            .incoming_requests
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .remove(&id);
-        if expired {
-            send_automatic_rejection(
-                Arc::downgrade(&inner),
-                id,
-                -32001,
-                "Kody server-request handler timed out",
-            );
-        }
-    });
     Ok(())
 }
 

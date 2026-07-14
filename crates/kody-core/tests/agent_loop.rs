@@ -909,12 +909,18 @@ async fn shell_waits_for_an_explicit_approval_decision() {
     assert_eq!(pending[0].approval_id, approval_id);
     assert_eq!(pending[0].turn_id, turn_id);
     assert_eq!(pending[0].name, "shell");
-    engine
+    assert!(engine
         .runtime()
         .approvals()
         .respond(approval_id, true)
         .await
-        .unwrap();
+        .unwrap());
+    assert!(!engine
+        .runtime()
+        .approvals()
+        .respond(approval_id, true)
+        .await
+        .unwrap());
     assert!(engine
         .runtime()
         .approvals()

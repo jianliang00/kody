@@ -77,5 +77,12 @@ async fn executes_a_real_turn_with_codex_plan_quota() {
         .iter()
         .any(|message| message.role == kody_core::MessageRole::Assistant
             && message.text().contains("KODY_CODEX_SMOKE_OK")));
+    assert!(!engine
+        .store()
+        .get_thread(thread.id)
+        .await
+        .unwrap()
+        .external_thread_ids
+        .contains_key("codex"));
     state.codex.shutdown().await;
 }

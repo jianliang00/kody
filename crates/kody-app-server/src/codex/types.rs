@@ -209,6 +209,8 @@ pub struct ThreadStartParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_policy: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub approvals_reviewer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub developer_instructions: Option<String>,
@@ -233,6 +235,8 @@ pub struct ThreadResumeParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_policy: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub approvals_reviewer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<String>,
 }
 
@@ -243,6 +247,7 @@ impl ThreadResumeParams {
             cwd: None,
             model: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox: None,
         }
     }
@@ -289,6 +294,8 @@ pub struct TurnStartParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_policy: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub approvals_reviewer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox_policy: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_user_message_id: Option<String>,
@@ -303,6 +310,7 @@ impl TurnStartParams {
             model: None,
             effort: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             client_user_message_id: None,
         }
