@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
-import type { PendingUserInput, ThreadSnapshot } from '@shared/protocol'
+import type { PendingApproval, PendingUserInput, ThreadSnapshot } from '@shared/protocol'
 import { Conversation } from './Conversation'
 
 beforeAll(() => {
@@ -81,6 +81,7 @@ function renderConversation(onUserInput = vi.fn(async () => undefined)) {
       running
       resolvingApprovals={new Set()}
       resolvingUserInputs={new Set()}
+      bottomInset={140}
       onApproval={vi.fn(async () => undefined)}
       onUserInput={onUserInput}
     />
@@ -119,5 +120,46 @@ describe('structured user input', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel request' }))
     await waitFor(() => expect(respond).toHaveBeenCalledWith('interaction-1', {}, true))
+  })
+})
+
+describe('conversation bottom safe area', () => {
+  it('keeps pending approval controls above a growing composer', async () => {
+    const scrollIntoView = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>
+    scrollIntoView.mockClear()
+    const approval: PendingApproval = {
+      approval_id: 'approval-1',
+      thread_id: snapshot.thread.id,
+      turn_id: 'turn-1',
+      tool_call_id: 'tool-1',
+      name: 'shell',
+      arguments: { command: 'cargo test --workspace', cwd: '/tmp/workspace-1' },
+      reason: 'This command executes code.'
+    }
+    const props = {
+      snapshot,
+      threads: [snapshot.thread],
+      projects: [],
+      events: [],
+      pendingUserInputs: [],
+      running: true,
+      resolvingApprovals: new Set<string>(),
+      resolvingUserInputs: new Set<string>(),
+      onApproval: vi.fn(async () => undefined),
+      onUserInput: vi.fn(async () => undefined)
+    }
+    const { container, rerender } = render(
+      <Conversation {...props} pendingApprovals={[]} bottomInset={120} />
+    )
+
+    scrollIntoView.mockClear()
+    rerender(<Conversation {...props} pendingApprovals={[approval]} bottomInset={120} />)
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled())
+    expect(container.querySelector('.conversation-end-spacer')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Allow once' })).toBeTruthy()
+
+    scrollIntoView.mockClear()
+    rerender(<Conversation {...props} pendingApprovals={[approval]} bottomInset={240} />)
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled())
   })
 })

@@ -34,6 +34,7 @@ interface ConversationProps {
   running: boolean
   resolvingApprovals: Set<string>
   resolvingUserInputs: Set<string>
+  bottomInset: number
   onApproval: (approvalId: string, approved: boolean) => Promise<void>
   onUserInput: (
     interactionId: string,
@@ -337,6 +338,7 @@ export function Conversation({
   running,
   resolvingApprovals,
   resolvingUserInputs,
+  bottomInset,
   onApproval,
   onUserInput
 }: ConversationProps) {
@@ -361,6 +363,10 @@ export function Conversation({
   const latestFailure = [...events].reverse().find(
     (envelope) => envelope.event.type === 'turn_failed' || envelope.event.type === 'turn_cancelled'
   )
+  const pendingInteractionKey = [
+    ...pendingApprovals.map((approval) => `approval:${approval.approval_id}`),
+    ...pendingUserInputs.map((request) => `input:${request.interaction_id}`)
+  ].join('|')
 
   useEffect(() => {
     const lastMessage = snapshot.messages.at(-1)
@@ -369,7 +375,7 @@ export function Conversation({
     if (!nearBottomRef.current && !newUserMessage) return
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     endRef.current?.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'end' })
-  }, [snapshot.messages.length, events.length])
+  }, [snapshot.messages.length, events.length, pendingInteractionKey, bottomInset])
 
   return (
     <div
@@ -475,7 +481,7 @@ export function Conversation({
               : 'Turn stopped by user.'}
           </div>
         ) : null}
-        <div ref={endRef} aria-hidden="true" />
+        <div ref={endRef} className="conversation-end-spacer" aria-hidden="true" />
       </div>
     </div>
   )

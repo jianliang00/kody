@@ -178,6 +178,7 @@ export function App() {
     () => window.localStorage.getItem('kody.inspectorCollapsed') !== 'false'
   )
   const [darkTheme, setDarkTheme] = useState(initialTheme)
+  const [composerDockHeight, setComposerDockHeight] = useState(0)
   const inspectorIsNarrow = useMediaQuery('(max-width: 72rem)')
   const railIsNarrow = useMediaQuery('(max-width: 48rem)')
 
@@ -472,9 +473,14 @@ export function App() {
 
   useLayoutEffect(() => {
     const dock = document.querySelector<HTMLElement>('.composer-dock')
-    if (!dock || typeof ResizeObserver === 'undefined') return
+    if (!dock || typeof ResizeObserver === 'undefined') {
+      setComposerDockHeight(0)
+      return
+    }
     const updateOffset = (): void => {
-      document.documentElement.style.setProperty('--composer-dock-height', `${dock.getBoundingClientRect().height}px`)
+      const height = Math.ceil(dock.getBoundingClientRect().height)
+      document.documentElement.style.setProperty('--composer-dock-height', `${height}px`)
+      setComposerDockHeight((current) => current === height ? current : height)
     }
     const observer = new ResizeObserver(updateOffset)
     observer.observe(dock)
@@ -1315,6 +1321,7 @@ export function App() {
                 running={isRunning}
                 resolvingApprovals={resolvingApprovals}
                 resolvingUserInputs={resolvingUserInputs}
+                bottomInset={composerDockHeight}
                 onApproval={handleApproval}
                 onUserInput={handleUserInput}
               />

@@ -283,7 +283,20 @@ function createMockStore() {
         toolCallId: id('tool-call'),
         resolved: false
       })
-      schedule(turnId, 980, () =>
+      schedule(turnId, 980, () => {
+        const snapshot = snapshots.get(threadId)
+        const approval = approvals.get(approvalId)
+        if (snapshot && approval) {
+          snapshot.pending_approvals.push({
+            approval_id: approval.approvalId,
+            thread_id: approval.threadId,
+            turn_id: approval.turnId,
+            tool_call_id: approval.toolCallId,
+            name: 'shell',
+            arguments: { command: approval.command, cwd: '/Users/demo/Code/kody' },
+            reason: 'This command executes inside the referenced Project and may create build artifacts.'
+          })
+        }
         emit(threadId, turnId, {
           type: 'approval_requested',
           approval_id: approvalId,
@@ -292,7 +305,7 @@ function createMockStore() {
           arguments: { command, cwd: '/Users/demo/Code/kody' },
           reason: 'This command executes inside the referenced Project and may create build artifacts.'
         })
-      )
+      })
       return
     }
 
@@ -554,6 +567,12 @@ function createMockStore() {
           return { resolved: false } as RpcMethodMap[M]['result']
         }
         approval.resolved = true
+        const snapshot = snapshots.get(approval.threadId)
+        if (snapshot) {
+          snapshot.pending_approvals = snapshot.pending_approvals.filter(
+            (item) => item.approval_id !== approval.approvalId
+          )
+        }
         emit(approval.threadId, approval.turnId, {
           type: 'approval_resolved',
           approval_id: approval.approvalId,
