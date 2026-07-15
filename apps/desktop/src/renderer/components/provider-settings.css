@@ -53,7 +53,7 @@
 
 .provider-settings__header h2 {
   margin-block: .12rem .22rem;
-  font-size: var(--font-2xl);
+  font-size: var(--font-heading-md);
   line-height: 1.25;
   letter-spacing: -.02em;
 }
@@ -61,7 +61,7 @@
 .provider-settings__header > div > p:last-child {
   max-width: 62ch;
   color: var(--muted);
-  font-size: var(--font-sm);
+  font-size: var(--font-body);
 }
 
 .provider-settings__body {
@@ -82,7 +82,7 @@
 .provider-profile-nav > p {
   margin: .8rem .55rem;
   color: var(--faint);
-  font-size: var(--font-sm);
+  font-size: var(--font-caption);
 }
 
 .provider-profile-nav ul {
@@ -119,7 +119,7 @@
 
 .provider-profile-nav li span {
   overflow: hidden;
-  font-size: var(--font-sm);
+  font-size: var(--font-body);
   font-weight: var(--weight-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -127,7 +127,7 @@
 
 .provider-profile-nav li small {
   color: var(--muted);
-  font-size: var(--font-xs);
+  font-size: var(--font-caption);
 }
 
 .provider-profile-add {
@@ -136,7 +136,7 @@
   gap: .45rem;
   border: 1px solid var(--border);
   background: var(--surface) !important;
-  font-size: var(--font-sm);
+  font-size: var(--font-body);
   font-weight: var(--weight-medium);
 }
 
@@ -174,13 +174,13 @@
 }
 
 .codex-account-status h3 {
-  font-size: var(--font-sm);
+  font-size: var(--font-body);
 }
 
 .codex-account-status p,
 .codex-account-status small {
   color: var(--muted);
-  font-size: var(--font-xs);
+  font-size: var(--font-caption);
 }
 
 .codex-account-status .codex-account-status__error {
@@ -206,13 +206,13 @@
 }
 
 .provider-storage-warning strong {
-  font-size: var(--font-sm);
+  font-size: var(--font-body);
 }
 
 .provider-storage-warning p,
 .provider-delete-confirmation p,
 .provider-form-error {
-  font-size: var(--font-xs);
+  font-size: var(--font-caption);
 }
 
 .provider-profile-form {
@@ -232,7 +232,7 @@
 .provider-profile-form__heading h3 {
   margin-block-start: .1rem;
   overflow: hidden;
-  font-size: var(--font-xl);
+  font-size: var(--font-heading-sm);
   line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -269,7 +269,7 @@
 .provider-secret-field label,
 .provider-secret-fieldset legend {
   color: var(--text);
-  font-size: var(--font-xs);
+  font-size: var(--font-caption);
   font-weight: var(--weight-medium);
 }
 
@@ -300,13 +300,13 @@
 
 .provider-field__hint {
   color: var(--muted);
-  font-size: var(--font-xs);
+  font-size: var(--font-caption);
   line-height: 1.45;
 }
 
 .provider-field__error {
   color: var(--danger);
-  font-size: var(--font-xs);
+  font-size: var(--font-caption);
 }
 
 .provider-secret-fieldset {
@@ -335,7 +335,7 @@
 
 .provider-secret-field p {
   color: var(--muted);
-  font-size: var(--font-xs);
+  font-size: var(--font-caption);
 }
 
 .provider-secret-field input:disabled {
@@ -354,7 +354,7 @@
   justify-content: center;
   gap: .35rem;
   border-radius: 8px;
-  font-size: var(--font-sm);
+  font-size: var(--font-body);
   font-weight: var(--weight-medium);
 }
 

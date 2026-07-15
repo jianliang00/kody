@@ -1,6 +1,6 @@
 {
   "name": "@kody/desktop",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "A local-first coding agent workspace powered by Rust and Electron.",
   "author": "Jianliang Wang",
   "license": "MIT OR Apache-2.0",
@@ -37,6 +37,7 @@
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-markdown": "^10.1.0",
+    "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
     "ws": "^8.18.3"
   },

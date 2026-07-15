@@ -29,12 +29,12 @@ export function UpdateIndicator({ status, onAction }: UpdateIndicatorProps) {
       aria-label={presentation.label}
       title={status.detail ?? presentation.label}
     >
-      <span className="sidebar-utility__icon" aria-hidden="true">{presentation.icon}</span>
-      <span className="sidebar-utility__copy">
+      <span className="update-status__icon" aria-hidden="true">{presentation.icon}</span>
+      <span className="update-status__copy">
         <strong>Updates</strong>
         <span>{presentation.text}</span>
       </span>
-      {!presentation.disabled ? <ChevronRight className="sidebar-utility__chevron" aria-hidden="true" size={14} /> : null}
+      {!presentation.disabled ? <ChevronRight className="update-status__chevron" aria-hidden="true" size={13} /> : null}
     </button>
   )
 }
@@ -49,7 +49,7 @@ function updatePresentation(status: DesktopUpdateStatus): {
   if (status.phase === 'disabled') {
     return {
       label: 'Kody updates unavailable',
-      text: `${currentVersion} · Unavailable in this build`,
+      text: `${currentVersion} · Unavailable`,
       icon: <RefreshCcw aria-hidden="true" size={13} />,
       disabled: true
     }
@@ -58,7 +58,7 @@ function updatePresentation(status: DesktopUpdateStatus): {
     const upToDate = Boolean(status.checkedAt)
     return {
       label: upToDate ? `${currentVersion} is up to date. Check again` : 'Check for Kody updates',
-      text: `${currentVersion} · ${upToDate ? 'Up to date' : 'Check for updates'}`,
+      text: `${currentVersion} · ${upToDate ? 'Current' : 'Check'}`,
       icon: upToDate
         ? <Check aria-hidden="true" size={13} />
         : <RefreshCcw aria-hidden="true" size={13} />
@@ -67,7 +67,7 @@ function updatePresentation(status: DesktopUpdateStatus): {
   if (status.phase === 'checking') {
     return {
       label: 'Checking for Kody updates',
-      text: `${currentVersion} · Checking…`,
+      text: 'Checking…',
       icon: <LoaderCircle className="spin" aria-hidden="true" size={13} />,
       disabled: true
     }
@@ -83,7 +83,7 @@ function updatePresentation(status: DesktopUpdateStatus): {
     const percent = Math.round(status.percent ?? 0)
     return {
       label: `Downloading Kody update, ${percent}%`,
-      text: `Downloading · ${percent}%`,
+      text: `${percent}%`,
       icon: <LoaderCircle className="spin" aria-hidden="true" size={13} />,
       disabled: true
     }
@@ -98,13 +98,13 @@ function updatePresentation(status: DesktopUpdateStatus): {
   if (status.phase === 'up-to-date') {
     return {
       label: 'Kody is up to date. Check again',
-      text: `${currentVersion} · Up to date`,
+      text: `${currentVersion} · Current`,
       icon: <Check aria-hidden="true" size={13} />
     }
   }
   return {
     label: 'Update check failed. Try again',
-    text: 'Check failed · Try again',
+    text: 'Try again',
     icon: <RefreshCcw aria-hidden="true" size={13} />
   }
 }

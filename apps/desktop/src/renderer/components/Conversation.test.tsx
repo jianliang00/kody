@@ -163,3 +163,94 @@ describe('conversation bottom safe area', () => {
     await waitFor(() => expect(scrollTo).toHaveBeenCalled())
   })
 })
+
+describe('assistant Markdown line breaks', () => {
+  const markdown = [
+    'First line',
+    'Second line',
+    '',
+    'Third paragraph',
+    '',
+    '- item one',
+    '- item two',
+    '',
+    '```text',
+    'alpha',
+    'beta',
+    '```'
+  ].join('\n')
+
+  it('preserves soft line breaks without changing paragraphs, lists, or code blocks', () => {
+    const assistantSnapshot: ThreadSnapshot = {
+      ...snapshot,
+      messages: [{
+        id: 'assistant-message',
+        thread_id: snapshot.thread.id,
+        role: 'assistant',
+        parts: [{ type: 'text', text: markdown }],
+        references: [],
+        created_at: '2026-07-13T00:00:01Z'
+      }]
+    }
+    const { container } = render(
+      <Conversation
+        snapshot={assistantSnapshot}
+        threads={[snapshot.thread]}
+        projects={[]}
+        events={[]}
+        pendingApprovals={[]}
+        pendingUserInputs={[]}
+        running={false}
+        resolvingApprovals={new Set()}
+        resolvingUserInputs={new Set()}
+        bottomInset={140}
+        onApproval={vi.fn(async () => undefined)}
+        onUserInput={vi.fn(async () => undefined)}
+      />
+    )
+
+    const renderedMarkdown = container.querySelector('.message--assistant .markdown')
+    expect(renderedMarkdown?.querySelectorAll('p')).toHaveLength(2)
+    expect(renderedMarkdown?.querySelector('p br')).toBeTruthy()
+    expect(renderedMarkdown?.querySelectorAll('li')).toHaveLength(2)
+    expect(renderedMarkdown?.querySelector('pre code')?.textContent).toBe('alpha\nbeta\n')
+  })
+
+  it('preserves a soft line break split across streaming deltas', () => {
+    const { container } = render(
+      <Conversation
+        snapshot={{ ...snapshot, messages: [] }}
+        threads={[snapshot.thread]}
+        projects={[]}
+        events={[
+          {
+            id: 'event-1',
+            thread_id: snapshot.thread.id,
+            turn_id: 'turn-1',
+            sequence: 1,
+            created_at: '2026-07-13T00:00:01Z',
+            event: { type: 'model_output_delta', delta: 'First line\n' }
+          },
+          {
+            id: 'event-2',
+            thread_id: snapshot.thread.id,
+            turn_id: 'turn-1',
+            sequence: 2,
+            created_at: '2026-07-13T00:00:02Z',
+            event: { type: 'model_output_delta', delta: 'Second line' }
+          }
+        ]}
+        pendingApprovals={[]}
+        pendingUserInputs={[]}
+        running
+        resolvingApprovals={new Set()}
+        resolvingUserInputs={new Set()}
+        bottomInset={140}
+        onApproval={vi.fn(async () => undefined)}
+        onUserInput={vi.fn(async () => undefined)}
+      />
+    )
+
+    expect(container.querySelector('.message--live .markdown p br')).toBeTruthy()
+  })
+})

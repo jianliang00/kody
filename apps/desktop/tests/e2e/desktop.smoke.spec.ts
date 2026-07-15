@@ -52,17 +52,63 @@ test('creates the first Thread through one idempotent draft request', async () =
     expect(actualUserDataRoot).toBe(await realpath(userDataRoot))
 
     const page = await application.firstWindow()
+    const consoleProblems: string[] = []
+    page.on('console', (message) => {
+      if (message.type() === 'error' || message.type() === 'warning') {
+        consoleProblems.push(`${message.type()}: ${message.text()}`)
+      }
+    })
+    page.on('pageerror', (error) => consoleProblems.push(`pageerror: ${error.message}`))
     await page.waitForLoadState('domcontentloaded')
     expect(page.url()).toMatch(/^file:/)
+    expect(await page.title()).toBe('Kody')
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0)
     await expect(page.getByLabel('Local server connected')).toBeVisible({ timeout: 30_000 })
     const assetRail = page.getByLabel('Kody assets')
     const applicationControls = assetRail.getByLabel('Application controls')
     const openModelSettings = applicationControls.getByRole('button', { name: 'Open model settings' })
+    const updateCapsule = applicationControls.getByRole('button', { name: 'Kody updates unavailable' })
     await expect(openModelSettings).toBeVisible()
-    await expect(applicationControls.getByRole('button', { name: 'Kody updates unavailable' })).toBeVisible()
+    await expect(updateCapsule).toBeVisible()
+    const [updateCapsuleBox, applicationControlsBox] = await Promise.all([
+      updateCapsule.boundingBox(),
+      applicationControls.boundingBox()
+    ])
+    const updateCapsuleStyle = await updateCapsule.evaluate((element) => ({
+      borderRadius: getComputedStyle(element).borderRadius,
+      copyWhiteSpace: getComputedStyle(element.querySelector('.update-status__copy')!).whiteSpace
+    }))
+    expect(updateCapsuleBox).not.toBeNull()
+    expect(applicationControlsBox).not.toBeNull()
+    expect(updateCapsuleBox?.width ?? Infinity).toBeLessThan(applicationControlsBox?.width ?? 0)
+    expect(updateCapsuleBox?.height ?? Infinity).toBeLessThanOrEqual(36)
+    expect(updateCapsuleStyle).toEqual({ borderRadius: '999px', copyWhiteSpace: 'nowrap' })
     await expect(page.locator('.titlebar').getByRole('button', { name: 'Open model settings' })).toHaveCount(0)
     await openModelSettings.click()
-    await expect(page.getByRole('dialog', { name: 'Provider settings' })).toBeVisible()
+    const providerSettings = page.getByRole('dialog', { name: 'Provider settings' })
+    await expect(providerSettings).toBeVisible()
+    const settingsTypography = await providerSettings.evaluate((dialog) => {
+      const fontSize = (selector: string) => {
+        const element = dialog.querySelector(selector)
+        if (!(element instanceof HTMLElement)) throw new Error(`Missing typography fixture: ${selector}`)
+        return getComputedStyle(element).fontSize
+      }
+      return {
+        headerCopy: fontSize('.provider-settings__header > div > p:last-child'),
+        navigationAction: fontSize('.provider-profile-add'),
+        navigationEmpty: fontSize('.provider-profile-nav > p'),
+        fieldLabel: fontSize('.provider-field > label')
+      }
+    })
+    expect(settingsTypography).toEqual({
+      headerCopy: '13px',
+      navigationAction: '13px',
+      navigationEmpty: '12px',
+      fieldLabel: '12px'
+    })
+    if (process.env.KODY_QA_SETTINGS_SCREENSHOT) {
+      await page.screenshot({ path: process.env.KODY_QA_SETTINGS_SCREENSHOT, animations: 'disabled' })
+    }
     await page.getByRole('button', { name: 'Close provider settings' }).click()
     await expect(page.getByRole('dialog', { name: 'Provider settings' })).toHaveCount(0)
     await expect(openModelSettings).toBeFocused()
@@ -237,7 +283,7 @@ test('creates the first Thread through one idempotent draft request', async () =
       groupLabel: getComputedStyle(card.querySelector('.thread-context-card__group-label')!).fontSize,
       itemName: getComputedStyle(card.querySelector('.thread-context-card__group li strong')!).fontSize
     }))
-    expect(contextTypography).toEqual({ metricLabel: '11px', groupLabel: '11px', itemName: '11px' })
+    expect(contextTypography).toEqual({ metricLabel: '12px', groupLabel: '12px', itemName: '13px' })
     const rightRail = page.locator('#right-rail')
     const expandContentActivity = contextCard.getByRole('button', { name: 'Expand Content & activity' })
     await expect(expandContentActivity).toBeVisible()
@@ -247,6 +293,38 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expect(inspector).toBeVisible()
     await expect(inspector.getByRole('button', { name: 'Collapse Content & activity' })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Context & activity', exact: true })).toBeVisible()
+    const applicationTypography = await page.evaluate(() => {
+      const fontSize = (selector: string) => {
+        const element = document.querySelector(selector)
+        if (!(element instanceof HTMLElement)) throw new Error(`Missing typography fixture: ${selector}`)
+        return getComputedStyle(element).fontSize
+      }
+      return {
+        body: [
+          '.asset-row__body strong',
+          '.titlebar__identity h1',
+          '.message--assistant .markdown',
+          '.composer textarea',
+          '.workspace-card h3',
+          '.project-shelf__copy strong'
+        ].map(fontSize),
+        caption: [
+          '.asset-row__body span',
+          '.message > header',
+          '.workspace-card > p',
+          '.project-shelf__copy span'
+        ].map(fontSize),
+        brandHeading: fontSize('.brand-lockup strong')
+      }
+    })
+    expect(applicationTypography).toEqual({
+      body: Array(6).fill('13px'),
+      caption: Array(4).fill('12px'),
+      brandHeading: '16px'
+    })
+    if (process.env.KODY_QA_SCREENSHOT) {
+      await page.screenshot({ path: process.env.KODY_QA_SCREENSHOT, animations: 'disabled' })
+    }
     await inspector.getByRole('button', { name: 'Collapse Content & activity' }).click()
     await expect(inspector).toBeHidden()
     await expect(expandContentActivity).toBeFocused()
@@ -374,6 +452,35 @@ test('creates the first Thread through one idempotent draft request', async () =
       durable.snapshot.thread.id
     ])
 
+    const multilinePrompt = [
+      'First output line',
+      'Second output line',
+      '',
+      '- first list item',
+      '- second list item',
+      '',
+      '```text',
+      'alpha',
+      'beta',
+      '```'
+    ].join('\n')
+    const completedAssistantMessages = page.locator('.message--assistant:not(.message--live)')
+    const assistantCount = await completedAssistantMessages.count()
+    await composer.fill(multilinePrompt)
+    await page.getByRole('button', { name: 'Send', exact: true }).click()
+    await expect(completedAssistantMessages).toHaveCount(assistantCount + 1, { timeout: 20_000 })
+    const multilineAssistant = completedAssistantMessages.last()
+    const firstOutputParagraph = multilineAssistant.locator('.markdown p').first()
+    await expect(firstOutputParagraph).toContainText('First output line')
+    await expect(firstOutputParagraph).toContainText('Second output line')
+    await expect(firstOutputParagraph.locator('br')).toHaveCount(1)
+    await expect(multilineAssistant.locator('.markdown li')).toHaveCount(2)
+    await expect(multilineAssistant.locator('.markdown pre code')).toContainText('alpha\nbeta')
+    if (process.env.KODY_QA_LINEBREAK_SCREENSHOT) {
+      await multilineAssistant.scrollIntoViewIfNeeded()
+      await page.screenshot({ path: process.env.KODY_QA_LINEBREAK_SCREENSHOT, animations: 'disabled' })
+    }
+
     // Keep a compact responsive smoke for both independent drawers.
     await application.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.setSize(700, 700)
@@ -406,6 +513,7 @@ test('creates the first Thread through one idempotent draft request', async () =
     const reopenInspector = page.getByRole('button', { name: 'Show right sidebar' })
     await expect(reopenInspector).toHaveAttribute('aria-expanded', 'false')
     await expect(reopenInspector).toBeFocused()
+    expect(consoleProblems).toEqual([])
   } finally {
     await application?.close().catch(() => undefined)
     await rm(temporaryRoot, { recursive: true, force: true })

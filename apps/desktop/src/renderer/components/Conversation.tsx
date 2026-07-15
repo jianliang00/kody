@@ -9,7 +9,8 @@ import {
   X
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { type Components } from 'react-markdown'
+import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 import type {
   ChatMessage,
@@ -41,6 +42,11 @@ interface ConversationProps {
     answers: UserInputAnswers,
     cancelled: boolean
   ) => Promise<void>
+}
+
+const markdownRemarkPlugins = [remarkGfm, remarkBreaks]
+const markdownComponents: Components = {
+  a: (props) => <a {...props} target="_blank" rel="noreferrer" />
 }
 
 function formatTime(value: string): string {
@@ -79,11 +85,9 @@ function Markdown({ children }: { children: string }) {
   return (
     <div className="markdown" dir="auto">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={markdownRemarkPlugins}
         skipHtml
-        components={{
-          a: (props) => <a {...props} target="_blank" rel="noreferrer" />
-        }}
+        components={markdownComponents}
       >
         {children}
       </ReactMarkdown>

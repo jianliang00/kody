@@ -106,6 +106,18 @@ function runningTurn(snapshot?: ThreadSnapshot): Turn | undefined {
   return snapshot?.turns.findLast((turn) => turn.status === 'running' || turn.status === 'queued')
 }
 
+function withoutPendingApproval(snapshot: ThreadSnapshot, approvalId: string): ThreadSnapshot {
+  if (!snapshot.pending_approvals.some((approval) => approval.approval_id === approvalId)) {
+    return snapshot
+  }
+  return {
+    ...snapshot,
+    pending_approvals: snapshot.pending_approvals.filter(
+      (approval) => approval.approval_id !== approvalId
+    )
+  }
+}
+
 function optimisticMessage(
   threadId: string,
   turn: Turn,
@@ -578,6 +590,21 @@ export function App() {
       } else if (envelope.event.type === 'approval_requested') {
         setAnnouncement(`Approval required for ${envelope.event.name}`)
         void refreshThread(envelope.thread_id)
+      } else if (envelope.event.type === 'approval_resolved') {
+        const approvalId = envelope.event.approval_id
+        approvalRef.current.delete(approvalId)
+        setResolvingApprovals((current) => {
+          const next = new Set(current)
+          next.delete(approvalId)
+          return next
+        })
+        setSnapshot((current) => current?.thread.id === envelope.thread_id
+          ? withoutPendingApproval(current, approvalId)
+          : current)
+        setAnnouncement(envelope.event.approved
+          ? 'Command execution allowed once'
+          : 'Command execution denied')
+        void refreshThread(envelope.thread_id)
       } else if (envelope.event.type === 'user_input_requested') {
         setAnnouncement('Kody needs your input to continue')
         void refreshThread(envelope.thread_id)
@@ -999,20 +1026,27 @@ export function App() {
 
   const handleApproval = async (approvalId: string, approved: boolean): Promise<void> => {
     if (approvalRef.current.has(approvalId)) return
+    const approvalThreadId = activeThreadRef.current
     approvalRef.current.add(approvalId)
     setResolvingApprovals((current) => new Set(current).add(approvalId))
     try {
       const result = await bridge.rpc('approval/respond', { approval_id: approvalId, approved })
+      // Both outcomes mean the request is no longer actionable. `resolved: false`
+      // is the expected stale-client race when another client answered first.
+      setSnapshot((current) => {
+        if (!current || !approvalThreadId || current.thread.id !== approvalThreadId) return current
+        return withoutPendingApproval(current, approvalId)
+      })
       if (result.resolved) {
         setAnnouncement(approved ? 'Command execution allowed once' : 'Command execution denied')
       } else {
         setAnnouncement('Command approval was already handled; Thread state refreshed')
       }
-      if (activeThreadRef.current) await refreshThread(activeThreadRef.current)
+      if (approvalThreadId) void refreshThread(approvalThreadId)
     } catch (error) {
       setAppError(error instanceof Error ? error.message : 'Could not respond to approval.')
-      approvalRef.current.delete(approvalId)
     } finally {
+      approvalRef.current.delete(approvalId)
       setResolvingApprovals((current) => {
         const next = new Set(current)
         next.delete(approvalId)

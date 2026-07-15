@@ -45,7 +45,7 @@ describe('UpdateIndicator', () => {
         onAction={vi.fn()}
       />
     )
-    expect(screen.getByRole('button', { name: 'v0.1.1 is up to date. Check again' }).textContent).toContain('Up to date')
+    expect(screen.getByRole('button', { name: 'v0.1.1 is up to date. Check again' }).textContent).toContain('v0.1.1 · Current')
   })
 
   it('explains when updates are unavailable without exposing an action', () => {
@@ -57,6 +57,7 @@ describe('UpdateIndicator', () => {
     )
     const indicator = screen.getByRole('button', { name: 'Kody updates unavailable' }) as HTMLButtonElement
     expect(indicator.disabled).toBe(true)
-    expect(indicator.textContent).toContain('Unavailable in this build')
+    expect(indicator.textContent).toContain('v0.1.1 · Unavailable')
+    expect(indicator.classList).toContain('update-status')
   })
 })
