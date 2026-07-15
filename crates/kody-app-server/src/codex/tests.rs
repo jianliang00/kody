@@ -170,13 +170,15 @@ fn write_fake(directory: &TempDir, name: &str, mode: &str) -> PathBuf {
 
 fn write_fake_version(directory: &TempDir, name: &str, version: &str, mode: &str) -> PathBuf {
     let path = directory.path().join(name);
+    let staging_path = directory.path().join(format!(".{name}.staging"));
     let script = FAKE_CODEX
         .replace("__MODE__", mode)
         .replace("__VERSION__", version);
-    std::fs::write(&path, script).unwrap();
-    let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+    std::fs::write(&staging_path, script).unwrap();
+    let mut permissions = std::fs::metadata(&staging_path).unwrap().permissions();
     permissions.set_mode(0o700);
-    std::fs::set_permissions(&path, permissions).unwrap();
+    std::fs::set_permissions(&staging_path, permissions).unwrap();
+    std::fs::rename(staging_path, &path).unwrap();
     path
 }
 
