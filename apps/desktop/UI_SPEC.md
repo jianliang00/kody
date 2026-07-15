@@ -19,17 +19,21 @@ The UI must preserve the framework's original domain model rather than copying C
 
 Desktop uses three regions:
 
-1. Asset rail (approximately 17rem): new-draft action, search, and durable Thread list.
-2. Conversation workspace (fluid): title/status, linear messages, live agent activity, composer.
+1. Asset rail (approximately 17rem): a dedicated macOS window-control gutter above the Kody identity, new-draft action, search, durable Thread list, settings, update state, and server status.
+2. Conversation workspace (fluid): Thread title/status, linear messages, live agent activity, composer.
 3. Context rail (approximately 20rem): a persistent Current Thread context card at the upper-right, the detailed Thread inspector below it, and a separate Project shelf anchored at the bottom-right.
 
-The context card summarizes effective Thread/Project references using the same last-reference-wins semantics as the runtime. Runtime operations and pending approvals are shown separately from real Process Manager records; ordinary blocking shell tools must never be mislabeled as background processes. It shows at most two active managed processes while the inspector owns the complete lifecycle list. At narrow widths, the summary collapses into the title-bar Context trigger and the inspector becomes a drawer. The asset rail can collapse, and the conversation must remain usable at 320 CSS pixels.
+The context card summarizes effective Thread/Project references using the same last-reference-wins semantics as the runtime. Runtime operations and pending approvals are shown separately from real Process Manager records; ordinary blocking shell tools must never be mislabeled as background processes. It shows at most two active managed processes while the inspector owns the complete lifecycle list. The context card and `Context & activity` header own the detailed inspector's expand/collapse controls; they never appear in the conversation title bar. The conversation title bar has a separate control for the entire right sidebar. At narrow widths, that control opens the inspector as a drawer. The asset rail can collapse, and the conversation must remain usable at 320 CSS pixels.
 
 ## Visual direction
 
 Borrow only broad traits from the Codex desktop aesthetic: quiet neutral surfaces, compact information density, precise typography, thin borders and restrained status color. Kody's own signature is the “context constellation”: Thread references use violet nodes, Project references use cyan nodes, and Workspace uses a warm amber node. Avoid cloning Codex icons, spacing, exact sidebar hierarchy or component layout.
 
 Typography uses one shared token scale across the conversation, asset rail, context rail, and settings surfaces: `2xs` (10px), `xs` (11px), `sm` (12px), `md` (13px), `lg` (14px), and a small heading scale. UI copy uses regular 400 weight, controls and local emphasis use medium 500, and headings/status badges use semibold 600 at most. New components must use these tokens instead of introducing arbitrary sizes or weights. The composer starts at two text rows and may resize vertically up to its bounded maximum; its measured dock height remains authoritative for timeline and floating-shelf clearance.
+
+The Current Thread card follows the same hierarchy as the rest of the context rail: primary labels and item names use `xs`, secondary metadata may use `2xs`, and card headings use `md`. Settings and update state belong to the bottom of the asset rail rather than the Thread title bar. On macOS, the Kody brand row begins below the native traffic-light gutter instead of sharing its horizontal band.
+
+The app shell is viewport-bound. Long Thread histories scroll only inside the conversation timeline; the title bar, composer, asset rail, and context rail remain fixed. Automatic bottom-following must scroll the timeline element directly and must not use viewport-level `scrollIntoView` behavior.
 
 ## Essential flows
 

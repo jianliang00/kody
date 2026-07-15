@@ -1,12 +1,12 @@
 import {
   Check,
   ChevronDown,
+  ChevronUp,
   CircleDot,
   Clipboard,
   Code2,
   FileCode2,
   FolderCog,
-  PanelRightClose,
   ShieldCheck,
   Terminal,
   X
@@ -164,9 +164,14 @@ export function Inspector({
           <p className="eyebrow">Thread lens</p>
           <h2>Context &amp; activity</h2>
         </div>
-        <button className="icon-button" type="button" onClick={onClose} aria-label="Close context drawer">
-          <X className="inspector-mobile-close" aria-hidden="true" size={17} />
-          <PanelRightClose className="inspector-desktop-close" aria-hidden="true" size={17} />
+        <button
+          className="icon-button"
+          type="button"
+          onClick={onClose}
+          aria-label={modal ? 'Close right sidebar' : 'Collapse Content & activity'}
+          title={modal ? 'Close right sidebar' : 'Collapse Content & activity'}
+        >
+          {modal ? <X aria-hidden="true" size={17} /> : <ChevronUp aria-hidden="true" size={17} />}
         </button>
       </header>
 

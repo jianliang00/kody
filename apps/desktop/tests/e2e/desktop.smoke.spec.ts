@@ -55,6 +55,17 @@ test('creates the first Thread through one idempotent draft request', async () =
     await page.waitForLoadState('domcontentloaded')
     expect(page.url()).toMatch(/^file:/)
     await expect(page.getByLabel('Local server connected')).toBeVisible({ timeout: 30_000 })
+    const assetRail = page.getByLabel('Kody assets')
+    const applicationControls = assetRail.getByLabel('Application controls')
+    const openModelSettings = applicationControls.getByRole('button', { name: 'Open model settings' })
+    await expect(openModelSettings).toBeVisible()
+    await expect(applicationControls.getByRole('button', { name: 'Kody updates unavailable' })).toBeVisible()
+    await expect(page.locator('.titlebar').getByRole('button', { name: 'Open model settings' })).toHaveCount(0)
+    await openModelSettings.click()
+    await expect(page.getByRole('dialog', { name: 'Provider settings' })).toBeVisible()
+    await page.getByRole('button', { name: 'Close provider settings' }).click()
+    await expect(page.getByRole('dialog', { name: 'Provider settings' })).toHaveCount(0)
+    await expect(openModelSettings).toBeFocused()
 
     const bridgeProbe = await page.evaluate(async () => {
       if (!window.kody) return null
@@ -76,6 +87,16 @@ test('creates the first Thread through one idempotent draft request', async () =
     expect(bridgeProbe?.capabilities.managed_processes).toBe(true)
     expect(bridgeProbe?.capabilities.process_output).toBe(true)
     expect(bridgeProbe?.hasProcessEvents).toBe(true)
+
+    if (bridgeProbe?.platform === 'darwin') {
+      const [windowDragBox, brandBox] = await Promise.all([
+        assetRail.locator('.asset-rail__window-drag').boundingBox(),
+        assetRail.locator('.asset-rail__brand').boundingBox()
+      ])
+      expect(windowDragBox).not.toBeNull()
+      expect(brandBox).not.toBeNull()
+      expect(brandBox?.y ?? 0).toBeGreaterThanOrEqual((windowDragBox?.y ?? 0) + (windowDragBox?.height ?? 0) - 1)
+    }
 
     await expect(page.getByRole('heading', { level: 1, name: 'New conversation' })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'What should Kody work on?' })).toBeVisible()
@@ -211,6 +232,99 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expect(contextCard.getByLabel('Referenced Projects')).toContainText(durable.projects[0]?.name ?? '')
     await expect(contextCard.getByLabel('Referenced Projects')).toContainText('Read & write')
     await expect(contextCard.getByText('No active managed processes', { exact: true })).toBeVisible()
+    const contextTypography = await contextCard.evaluate((card) => ({
+      metricLabel: getComputedStyle(card.querySelector('.thread-context-card__metric dt')!).fontSize,
+      groupLabel: getComputedStyle(card.querySelector('.thread-context-card__group-label')!).fontSize,
+      itemName: getComputedStyle(card.querySelector('.thread-context-card__group li strong')!).fontSize
+    }))
+    expect(contextTypography).toEqual({ metricLabel: '11px', groupLabel: '11px', itemName: '11px' })
+    const rightRail = page.locator('#right-rail')
+    const expandContentActivity = contextCard.getByRole('button', { name: 'Expand Content & activity' })
+    await expect(expandContentActivity).toBeVisible()
+    await expect(page.locator('.titlebar').getByRole('button', { name: 'Expand Content & activity' })).toHaveCount(0)
+    await expandContentActivity.click()
+    const inspector = page.getByLabel('Thread context and activity')
+    await expect(inspector).toBeVisible()
+    await expect(inspector.getByRole('button', { name: 'Collapse Content & activity' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Context & activity', exact: true })).toBeVisible()
+    await inspector.getByRole('button', { name: 'Collapse Content & activity' }).click()
+    await expect(inspector).toBeHidden()
+    await expect(expandContentActivity).toBeFocused()
+
+    const hideRightSidebar = page.getByRole('button', { name: 'Hide right sidebar' })
+    await expect(hideRightSidebar).toHaveAttribute('aria-controls', 'right-rail')
+    await expect(hideRightSidebar).toHaveAttribute('aria-expanded', 'true')
+    await hideRightSidebar.click()
+    await expect(rightRail).toBeHidden()
+    const showRightSidebar = page.getByRole('button', { name: 'Show right sidebar' })
+    await expect(showRightSidebar).toHaveAttribute('aria-expanded', 'false')
+    await showRightSidebar.click()
+    await expect(rightRail).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Hide right sidebar' })).toBeFocused()
+
+    const longConversationBefore = await page.evaluate(() => {
+      const column = document.querySelector('.conversation-column')
+      const spacer = document.querySelector('.conversation-end-spacer')
+      const messages = [...document.querySelectorAll('.message')]
+      if (!column || !spacer || messages.length === 0) throw new Error('Conversation fixture unavailable')
+      for (let index = 0; index < 24; index += 1) {
+        for (const message of messages) {
+          const clone = message.cloneNode(true)
+          if (!(clone instanceof HTMLElement)) throw new Error('Message clone is not an element')
+          clone.classList.add('scroll-regression-clone')
+          column.insertBefore(clone, spacer)
+        }
+      }
+      const scroll = document.querySelector('.conversation-scroll')
+      const shell = document.querySelector('.app-shell')
+      const workspace = document.querySelector('.conversation-workspace')
+      const titlebar = document.querySelector('.titlebar')
+      const composerDock = document.querySelector('.composer-dock')
+      if (!(scroll instanceof HTMLElement) || !shell || !workspace || !titlebar || !composerDock) {
+        throw new Error('Conversation layout unavailable')
+      }
+      scroll.scrollTop = 0
+      return {
+        shellHeight: shell.getBoundingClientRect().height,
+        workspaceHeight: workspace.getBoundingClientRect().height,
+        scrollClientHeight: scroll.clientHeight,
+        scrollHeight: scroll.scrollHeight,
+        titlebarTop: titlebar.getBoundingClientRect().top,
+        composerBottom: composerDock.getBoundingClientRect().bottom,
+        windowScrollY: scrollY,
+        documentScrollTop: document.scrollingElement?.scrollTop ?? -1
+      }
+    })
+    expect(longConversationBefore.shellHeight).toBe(viewport.height)
+    expect(longConversationBefore.workspaceHeight).toBe(viewport.height)
+    expect(longConversationBefore.scrollHeight).toBeGreaterThan(longConversationBefore.scrollClientHeight)
+    expect(longConversationBefore.titlebarTop).toBe(0)
+    expect(longConversationBefore.composerBottom).toBe(viewport.height)
+    expect(longConversationBefore.windowScrollY).toBe(0)
+    expect(longConversationBefore.documentScrollTop).toBe(0)
+
+    const conversationScroll = page.getByLabel('Conversation')
+    await conversationScroll.hover()
+    await page.mouse.wheel(0, 900)
+    await expect.poll(() => conversationScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+    const longConversationAfter = await page.evaluate(() => ({
+      shellTop: document.querySelector('.app-shell')?.getBoundingClientRect().top,
+      titlebarTop: document.querySelector('.titlebar')?.getBoundingClientRect().top,
+      composerBottom: document.querySelector('.composer-dock')?.getBoundingClientRect().bottom,
+      windowScrollY: scrollY,
+      documentScrollTop: document.scrollingElement?.scrollTop ?? -1
+    }))
+    expect(longConversationAfter).toEqual({
+      shellTop: 0,
+      titlebarTop: 0,
+      composerBottom: viewport.height,
+      windowScrollY: 0,
+      documentScrollTop: 0
+    })
+    await page.evaluate(() => {
+      document.querySelectorAll('.scroll-regression-clone').forEach((element) => element.remove())
+    })
+
     const contextCardBox = await contextCard.boundingBox()
     expect(contextCardBox).not.toBeNull()
     expect(contextCardBox?.x ?? 0).toBeGreaterThan(viewport.width / 2)
@@ -264,7 +378,6 @@ test('creates the first Thread through one idempotent draft request', async () =
     await application.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.setSize(700, 700)
     })
-    const assetRail = page.getByLabel('Kody assets')
     const openAssetDrawer = page.getByRole('button', { name: 'Open asset drawer' })
     await expect(assetRail).toBeHidden()
     await openAssetDrawer.click()
@@ -273,25 +386,26 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expect(assetRail).toBeHidden()
     await expect(openAssetDrawer).toBeFocused()
 
-    const inspector = page.getByLabel('Thread context and activity')
-    const openInspector = page.getByRole('button', { name: 'Open context inspector' })
+    const openInspector = page.getByRole('button', { name: 'Show right sidebar' })
     await expect(contextCard).toBeHidden()
     await expect(inspector).toBeHidden()
-    await expect(openInspector).toHaveAttribute('aria-controls', 'thread-inspector')
+    await expect(openInspector).toHaveAttribute('aria-controls', 'right-rail')
     await expect(openInspector).toHaveAttribute('aria-expanded', 'false')
     await openInspector.focus()
     await page.keyboard.press('Enter')
     await expect(inspector).toBeVisible()
     await expect(inspector).toHaveAttribute('role', 'dialog')
     await expect(inspector).toHaveAttribute('aria-modal', 'true')
-    await expect(openInspector).toHaveAttribute('aria-expanded', 'true')
+    const closeInspector = page.getByRole('button', { name: 'Hide right sidebar' })
+    await expect(closeInspector).toHaveAttribute('aria-expanded', 'true')
     await expect(page.getByRole('heading', { name: 'Workspace', exact: true })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Background processes', exact: true })).toBeVisible()
     await expect(inspector.getByText('No managed background processes.', { exact: true })).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(inspector).toBeHidden()
-    await expect(openInspector).toHaveAttribute('aria-expanded', 'false')
-    await expect(openInspector).toBeFocused()
+    const reopenInspector = page.getByRole('button', { name: 'Show right sidebar' })
+    await expect(reopenInspector).toHaveAttribute('aria-expanded', 'false')
+    await expect(reopenInspector).toBeFocused()
   } finally {
     await application?.close().catch(() => undefined)
     await rm(temporaryRoot, { recursive: true, force: true })

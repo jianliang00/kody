@@ -342,7 +342,6 @@ export function Conversation({
   onApproval,
   onUserInput
 }: ConversationProps) {
-  const endRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const nearBottomRef = useRef(true)
   const previousLastMessageRef = useRef<string | undefined>(undefined)
@@ -374,7 +373,12 @@ export function Conversation({
     previousLastMessageRef.current = lastMessage?.id
     if (!nearBottomRef.current && !newUserMessage) return
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    endRef.current?.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'end' })
+    const scrollContainer = scrollRef.current
+    if (!scrollContainer) return
+    scrollContainer.scrollTo({
+      top: scrollContainer.scrollHeight,
+      behavior: reduced ? 'auto' : 'smooth'
+    })
   }, [snapshot.messages.length, events.length, pendingInteractionKey, bottomInset])
 
   return (
@@ -481,7 +485,7 @@ export function Conversation({
               : 'Turn stopped by user.'}
           </div>
         ) : null}
-        <div ref={endRef} className="conversation-end-spacer" aria-hidden="true" />
+        <div className="conversation-end-spacer" aria-hidden="true" />
       </div>
     </div>
   )

@@ -13,7 +13,7 @@ beforeAll(() => {
       removeEventListener: vi.fn()
     }))
   })
-  Element.prototype.scrollIntoView = vi.fn()
+  HTMLElement.prototype.scrollTo = vi.fn()
 })
 
 afterEach(cleanup)
@@ -125,8 +125,8 @@ describe('structured user input', () => {
 
 describe('conversation bottom safe area', () => {
   it('keeps pending approval controls above a growing composer', async () => {
-    const scrollIntoView = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>
-    scrollIntoView.mockClear()
+    const scrollTo = HTMLElement.prototype.scrollTo as ReturnType<typeof vi.fn>
+    scrollTo.mockClear()
     const approval: PendingApproval = {
       approval_id: 'approval-1',
       thread_id: snapshot.thread.id,
@@ -152,14 +152,14 @@ describe('conversation bottom safe area', () => {
       <Conversation {...props} pendingApprovals={[]} bottomInset={120} />
     )
 
-    scrollIntoView.mockClear()
+    scrollTo.mockClear()
     rerender(<Conversation {...props} pendingApprovals={[approval]} bottomInset={120} />)
-    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled())
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled())
     expect(container.querySelector('.conversation-end-spacer')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Allow once' })).toBeTruthy()
 
-    scrollIntoView.mockClear()
+    scrollTo.mockClear()
     rerender(<Conversation {...props} pendingApprovals={[approval]} bottomInset={240} />)
-    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled())
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled())
   })
 })

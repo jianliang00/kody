@@ -38,13 +38,25 @@ describe('UpdateIndicator', () => {
     expect(progress.textContent).toContain('42%')
   })
 
-  it('stays out of the title bar while idle', () => {
-    const { container } = render(
+  it('keeps the current update state visible while idle', () => {
+    render(
       <UpdateIndicator
-        status={{ phase: 'idle', currentVersion: '0.1.1' }}
+        status={{ phase: 'idle', currentVersion: '0.1.1', checkedAt: '2026-07-15T00:00:00Z' }}
         onAction={vi.fn()}
       />
     )
-    expect(container.childElementCount).toBe(0)
+    expect(screen.getByRole('button', { name: 'v0.1.1 is up to date. Check again' }).textContent).toContain('Up to date')
+  })
+
+  it('explains when updates are unavailable without exposing an action', () => {
+    render(
+      <UpdateIndicator
+        status={{ phase: 'disabled', currentVersion: '0.1.1' }}
+        onAction={vi.fn()}
+      />
+    )
+    const indicator = screen.getByRole('button', { name: 'Kody updates unavailable' }) as HTMLButtonElement
+    expect(indicator.disabled).toBe(true)
+    expect(indicator.textContent).toContain('Unavailable in this build')
   })
 })

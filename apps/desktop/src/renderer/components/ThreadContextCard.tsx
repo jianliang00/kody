@@ -1,9 +1,10 @@
 import {
   Activity,
+  ChevronDown,
+  ChevronUp,
   FolderCog,
   FolderGit2,
   MessagesSquare,
-  PanelRightOpen,
   ShieldAlert,
   TerminalSquare
 } from 'lucide-react'
@@ -54,12 +55,14 @@ export function ThreadContextCard({
           className="icon-button icon-button--small"
           type="button"
           onClick={onOpenDetails}
-          aria-label={detailsOpen ? 'Hide full context inspector' : 'Open full context inspector'}
+          aria-label={detailsOpen ? 'Collapse Content & activity' : 'Expand Content & activity'}
           aria-controls="thread-inspector"
           aria-expanded={detailsOpen}
-          title={detailsOpen ? 'Hide full context inspector' : 'Open full context inspector'}
+          title={detailsOpen ? 'Collapse Content & activity' : 'Expand Content & activity'}
         >
-          <PanelRightOpen aria-hidden="true" size={15} />
+          {detailsOpen
+            ? <ChevronUp aria-hidden="true" size={15} />
+            : <ChevronDown aria-hidden="true" size={15} />}
         </button>
       </header>
 

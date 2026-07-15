@@ -4,8 +4,17 @@ All notable changes to Kody are documented in this file. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-07-15
+
+### Changed
+
+- Moved settings and update status into the left sidebar and placed the Kody title below the macOS window controls.
+- Separated the controls for collapsing the entire right sidebar and expanding its Content & activity details.
+- Unified the context card typography with the rest of the desktop interface.
+
 ### Fixed
 
+- Keep the application shell fixed while long conversations scroll only inside the message timeline.
 - Recompute updater hashes and sizes from final notarized/stapled artifacts and use the Intel ZIP as the legacy macOS update path.
 
 ## [0.1.6] - 2026-07-15
@@ -43,7 +52,8 @@ All notable changes to Kody are documented in this file. The format follows [Kee
 
 - Signed in-app updates backed by public GitHub Release artifacts.
 
-[Unreleased]: https://github.com/jianliang00/kody/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/jianliang00/kody/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/jianliang00/kody/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/jianliang00/kody/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/jianliang00/kody/releases/tag/v0.1.5
 [0.1.4]: https://github.com/jianliang00/kody/releases/tag/v0.1.4

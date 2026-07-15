@@ -180,6 +180,9 @@ export function App() {
   const [inspectorCollapsed, setInspectorCollapsed] = useState(
     () => window.localStorage.getItem('kody.inspectorCollapsed') !== 'false'
   )
+  const [rightRailCollapsed, setRightRailCollapsed] = useState(
+    () => window.localStorage.getItem('kody.rightRailCollapsed') === 'true'
+  )
   const [darkTheme, setDarkTheme] = useState(initialTheme)
   const [composerDockHeight, setComposerDockHeight] = useState(0)
   const inspectorIsNarrow = useMediaQuery('(max-width: 72rem)')
@@ -501,6 +504,10 @@ export function App() {
   useEffect(() => {
     window.localStorage.setItem('kody.inspectorCollapsed', String(inspectorCollapsed))
   }, [inspectorCollapsed])
+
+  useEffect(() => {
+    window.localStorage.setItem('kody.rightRailCollapsed', String(rightRailCollapsed))
+  }, [rightRailCollapsed])
 
   useEffect(() => {
     if (!railOpen && !inspectorOpen) return
@@ -1191,8 +1198,11 @@ export function App() {
       return
     }
     if (inspectorIsNarrow) {
+      setRightRailCollapsed(false)
+      setInspectorCollapsed(false)
       setInspectorOpen((current) => !current)
     } else {
+      setRightRailCollapsed(false)
       setInspectorCollapsed((current) => !current)
     }
   }), [
@@ -1226,20 +1236,21 @@ export function App() {
       || snapshot?.processes.some(isProcessActive))
   )
 
-  const openInspector = (): void => {
-    setInspectorCollapsed(false)
-    if (inspectorIsNarrow) setInspectorOpen(true)
+  const toggleInspectorDetails = (): void => {
+    setInspectorCollapsed((current) => !current)
   }
-  const toggleInspector = (): void => {
+  const toggleRightSidebar = (): void => {
     if (inspectorIsNarrow) {
+      setRightRailCollapsed(false)
+      setInspectorCollapsed(false)
       setInspectorOpen((current) => !current)
     } else {
-      setInspectorCollapsed((current) => !current)
+      setRightRailCollapsed((current) => !current)
     }
   }
 
   return (
-    <div className={`app-shell${railCollapsed ? ' app-shell--rail-collapsed' : ''}${inspectorCollapsed ? ' app-shell--inspector-collapsed' : ''}${bridge.platform === 'darwin' ? ' app-shell--darwin' : ''}`}>
+    <div className={`app-shell${railCollapsed ? ' app-shell--rail-collapsed' : ''}${inspectorCollapsed ? ' app-shell--inspector-collapsed' : ''}${rightRailCollapsed && !inspectorIsNarrow ? ' app-shell--right-rail-collapsed' : ''}${bridge.platform === 'darwin' ? ' app-shell--darwin' : ''}`}>
       <a className="skip-link" href="#main-content">Skip to conversation</a>
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {announcement}
@@ -1249,11 +1260,14 @@ export function App() {
         threads={threads}
         activeThreadId={activeThreadId}
         status={status}
+        updateStatus={updateStatus}
         open={railOpen}
         onClose={() => setRailOpen(false)}
         onCollapse={() => setRailCollapsed(true)}
         onNewThread={() => beginDraft()}
         onSelectThread={(threadId) => void selectThread(threadId)}
+        onOpenSettings={openProviderSettings}
+        onUpdateAction={handleUpdateAction}
       />
 
       {((railOpen && railIsNarrow) || (inspectorOpen && inspectorIsNarrow)) ? (
@@ -1272,22 +1286,19 @@ export function App() {
         <TitleBar
           thread={snapshot?.thread}
           status={status}
-          updateStatus={updateStatus}
           platform={bridge.platform}
           darkTheme={darkTheme}
           railCollapsed={railCollapsed}
-          showInspector={Boolean(snapshot)}
-          inspectorExpanded={inspectorIsNarrow ? inspectorOpen : !inspectorCollapsed}
+          showRightSidebar={!inspectorIsNarrow || Boolean(snapshot)}
+          rightSidebarExpanded={inspectorIsNarrow ? inspectorOpen : !rightRailCollapsed}
           contextCount={contextCount}
           contextActive={contextActive}
           onOpenRail={() => {
             setRailCollapsed(false)
             setRailOpen(true)
           }}
-          onOpenInspector={openInspector}
-          onOpenSettings={openProviderSettings}
+          onToggleRightSidebar={toggleRightSidebar}
           onRetry={() => void bootstrap()}
-          onUpdateAction={handleUpdateAction}
           onToggleTheme={() => setDarkTheme((current) => !current)}
           onWindowAction={(action) => void bridge.windowAction(action)}
         />
@@ -1412,7 +1423,7 @@ export function App() {
         </main>
       </section>
 
-      <div className="right-rail">
+      <div id="right-rail" className="right-rail">
         {snapshot && threadContext ? (
           <ThreadContextCard
             snapshot={snapshot}
@@ -1420,7 +1431,7 @@ export function App() {
             projects={projects}
             context={threadContext}
             detailsOpen={!inspectorCollapsed}
-            onOpenDetails={toggleInspector}
+            onOpenDetails={toggleInspectorDetails}
           />
         ) : null}
         {snapshot ? (

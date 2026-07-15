@@ -102,7 +102,7 @@ describe('ThreadContextCard', () => {
     expect(screen.getByText('+1 more managed processes')).toBeTruthy()
     expect(screen.getByTitle('Active managed background processes').parentElement?.textContent).toContain('3')
     expect(screen.getByTitle('References pending for the next message').textContent).toBe('+1')
-    expect(screen.getByRole('button', { name: 'Open full context inspector' }).getAttribute('aria-expanded')).toBe('false')
+    expect(screen.getByRole('button', { name: 'Expand Content & activity' }).getAttribute('aria-expanded')).toBe('false')
   })
 })
 

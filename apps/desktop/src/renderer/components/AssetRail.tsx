@@ -1,22 +1,29 @@
 import {
+  ChevronRight,
   MessageCircle,
   PanelLeftClose,
   Plus,
   Search,
+  Settings2,
   X
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import type { DesktopUpdateStatus } from '@shared/bridge'
 import type { ServerStatus, Thread } from '@shared/protocol'
+import { UpdateIndicator } from './UpdateIndicator'
 
 interface AssetRailProps {
   threads: Thread[]
   activeThreadId?: string
   status: ServerStatus
+  updateStatus: DesktopUpdateStatus
   open: boolean
   onClose: () => void
   onCollapse: () => void
   onNewThread: () => void
   onSelectThread: (threadId: string) => void
+  onOpenSettings: () => void
+  onUpdateAction: () => void
 }
 
 function relativeTime(value: string): string {
@@ -32,11 +39,14 @@ export function AssetRail({
   threads,
   activeThreadId,
   status,
+  updateStatus,
   open,
   onClose,
   onCollapse,
   onNewThread,
-  onSelectThread
+  onSelectThread,
+  onOpenSettings,
+  onUpdateAction
 }: AssetRailProps) {
   const [query, setQuery] = useState('')
   const normalizedQuery = query.trim().toLocaleLowerCase()
@@ -47,6 +57,7 @@ export function AssetRail({
 
   return (
     <aside className={`asset-rail${open ? ' asset-rail--open' : ''}`} aria-label="Kody assets">
+      <div className="asset-rail__window-drag" aria-hidden="true" />
       <header className="asset-rail__brand">
         <div className="brand-lockup">
           <span className="brand-mark" aria-hidden="true"><span /><span /><span /></span>
@@ -128,8 +139,29 @@ export function AssetRail({
       </nav>
 
       <footer className="asset-rail__footer">
-        <span className={`connection-dot connection-dot--${status.phase}`} aria-hidden="true" />
-        <span>{status.phase === 'connected' ? 'Local server connected' : status.phase}</span>
+        <div className="asset-rail__utilities" role="group" aria-label="Application controls">
+          <button
+            className="sidebar-utility"
+            type="button"
+            onClick={() => {
+              onOpenSettings()
+              onClose()
+            }}
+            aria-label="Open model settings"
+          >
+            <span className="sidebar-utility__icon" aria-hidden="true"><Settings2 size={15} /></span>
+            <span className="sidebar-utility__copy">
+              <strong>Settings</strong>
+              <span>Models, providers & account</span>
+            </span>
+            <ChevronRight className="sidebar-utility__chevron" aria-hidden="true" size={14} />
+          </button>
+          <UpdateIndicator status={updateStatus} onAction={onUpdateAction} />
+        </div>
+        <div className="asset-rail__connection" role="status">
+          <span className={`connection-dot connection-dot--${status.phase}`} aria-hidden="true" />
+          <span>{status.phase === 'connected' ? 'Local server connected' : status.phase}</span>
+        </div>
       </footer>
     </aside>
   )

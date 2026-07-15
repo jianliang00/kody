@@ -4,32 +4,27 @@ import {
   Minus,
   Moon,
   PanelLeftOpen,
+  PanelRightClose,
   PanelRightOpen,
   RefreshCcw,
-  Settings2,
   Sun,
   X
 } from 'lucide-react'
 import type { ServerStatus, Thread } from '@shared/protocol'
-import type { DesktopUpdateStatus } from '@shared/bridge'
-import { UpdateIndicator } from './UpdateIndicator'
 
 interface TitleBarProps {
   thread?: Thread
   status: ServerStatus
-  updateStatus: DesktopUpdateStatus
   platform: NodeJS.Platform
   darkTheme: boolean
   railCollapsed: boolean
-  showInspector: boolean
-  inspectorExpanded: boolean
+  showRightSidebar: boolean
+  rightSidebarExpanded: boolean
   contextCount: number
   contextActive: boolean
   onOpenRail: () => void
-  onOpenInspector: () => void
+  onToggleRightSidebar: () => void
   onRetry: () => void
-  onUpdateAction: () => void
-  onOpenSettings: () => void
   onToggleTheme: () => void
   onWindowAction: (action: 'minimize' | 'maximize' | 'close') => void
 }
@@ -37,19 +32,16 @@ interface TitleBarProps {
 export function TitleBar({
   thread,
   status,
-  updateStatus,
   platform,
   darkTheme,
   railCollapsed,
-  showInspector,
-  inspectorExpanded,
+  showRightSidebar,
+  rightSidebarExpanded,
   contextCount,
   contextActive,
   onOpenRail,
-  onOpenInspector,
+  onToggleRightSidebar,
   onRetry,
-  onUpdateAction,
-  onOpenSettings,
   onToggleTheme,
   onWindowAction
 }: TitleBarProps) {
@@ -79,7 +71,6 @@ export function TitleBar({
       </div>
 
       <div className="titlebar__actions no-drag">
-        <UpdateIndicator status={updateStatus} onAction={onUpdateAction} />
         {status.phase === 'connected' ? (
           <div className="server-pill server-pill--connected" role="status" aria-label="Local server connected">
             <span aria-hidden="true" />
@@ -97,24 +88,24 @@ export function TitleBar({
             <RefreshCcw aria-hidden="true" size={12} />
           </button>
         )}
-        <button className="icon-button" type="button" onClick={onOpenSettings} aria-label="Open model settings">
-          <Settings2 aria-hidden="true" size={17} />
-        </button>
         <button className="icon-button" type="button" onClick={onToggleTheme} aria-label={`Use ${darkTheme ? 'light' : 'dark'} theme`}>
           {darkTheme ? <Sun aria-hidden="true" size={17} /> : <Moon aria-hidden="true" size={17} />}
         </button>
-        {showInspector ? (
+        {showRightSidebar ? (
           <button
-            className="icon-button inspector-trigger"
+            className="icon-button right-rail-trigger"
             type="button"
-            onClick={onOpenInspector}
-            aria-label={`Open context inspector. ${contextCount} active references${contextActive ? ', runtime active' : ''}`}
-            aria-controls="thread-inspector"
-            aria-expanded={inspectorExpanded}
+            onClick={onToggleRightSidebar}
+            aria-label={rightSidebarExpanded ? 'Hide right sidebar' : 'Show right sidebar'}
+            aria-controls="right-rail"
+            aria-expanded={rightSidebarExpanded}
+            title={`${rightSidebarExpanded ? 'Hide' : 'Show'} right sidebar · ${contextCount} active references${contextActive ? ' · runtime active' : ''}`}
           >
-            <PanelRightOpen aria-hidden="true" size={17} />
-            {contextCount > 0 ? <span className="inspector-trigger__count" aria-hidden="true">{contextCount}</span> : null}
-            {contextActive ? <span className="inspector-trigger__activity" aria-hidden="true" /> : null}
+            {rightSidebarExpanded
+              ? <PanelRightClose aria-hidden="true" size={17} />
+              : <PanelRightOpen aria-hidden="true" size={17} />}
+            {contextCount > 0 ? <span className="right-rail-trigger__count" aria-hidden="true">{contextCount}</span> : null}
+            {contextActive ? <span className="right-rail-trigger__activity" aria-hidden="true" /> : null}
           </button>
         ) : null}
         {platform !== 'darwin' ? (
