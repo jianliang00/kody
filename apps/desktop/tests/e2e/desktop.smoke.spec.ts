@@ -80,6 +80,22 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expect(page.getByRole('heading', { level: 1, name: 'New conversation' })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'What should Kody work on?' })).toBeVisible()
     await expect(page.getByRole('form', { name: 'Message composer' })).toBeVisible()
+    const composer = page.getByRole('combobox', { name: 'Message' })
+    await expect(composer).toHaveAttribute('rows', '2')
+    const typography = await composer.evaluate((element) => {
+      const textarea = element as HTMLTextAreaElement
+      const sendButton = textarea.form?.querySelector<HTMLButtonElement>('.turn-button')
+      return {
+        bodyFontSize: getComputedStyle(document.body).fontSize,
+        composerHeight: textarea.getBoundingClientRect().height,
+        composerMinHeight: getComputedStyle(textarea).minHeight,
+        sendButtonWeight: sendButton ? getComputedStyle(sendButton).fontWeight : ''
+      }
+    })
+    expect(typography.bodyFontSize).toBe('13px')
+    expect(typography.composerMinHeight).toBe('48px')
+    expect(typography.composerHeight).toBeLessThanOrEqual(56)
+    expect(typography.sendButtonWeight).toBe('500')
     await expect(page.getByRole('button', { name: 'Working directory', exact: true })).toBeVisible()
     const permissionMode = page.getByLabel('Permission mode')
     await expect(permissionMode).toHaveValue('ask')
@@ -137,7 +153,6 @@ test('creates the first Thread through one idempotent draft request', async () =
     expect(await readdir(join(actualUserDataRoot, 'engine', 'workspaces'))).toHaveLength(0)
 
     const prompt = 'Explain the provider neutral agent loop'
-    const composer = page.getByRole('combobox', { name: 'Message' })
     await composer.fill(prompt)
     await page.getByLabel('Provider').selectOption('echo')
 

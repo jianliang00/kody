@@ -53,7 +53,7 @@
 
 .provider-settings__header h2 {
   margin-block: .12rem .22rem;
-  font-size: 1.15rem;
+  font-size: var(--font-2xl);
   line-height: 1.25;
   letter-spacing: -.02em;
 }
@@ -61,7 +61,7 @@
 .provider-settings__header > div > p:last-child {
   max-width: 62ch;
   color: var(--muted);
-  font-size: .76rem;
+  font-size: var(--font-sm);
 }
 
 .provider-settings__body {
@@ -82,7 +82,7 @@
 .provider-profile-nav > p {
   margin: .8rem .55rem;
   color: var(--faint);
-  font-size: .72rem;
+  font-size: var(--font-sm);
 }
 
 .provider-profile-nav ul {
@@ -119,15 +119,15 @@
 
 .provider-profile-nav li span {
   overflow: hidden;
-  font-size: .78rem;
-  font-weight: 650;
+  font-size: var(--font-sm);
+  font-weight: var(--weight-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .provider-profile-nav li small {
   color: var(--muted);
-  font-size: .66rem;
+  font-size: var(--font-xs);
 }
 
 .provider-profile-add {
@@ -136,8 +136,8 @@
   gap: .45rem;
   border: 1px solid var(--border);
   background: var(--surface) !important;
-  font-size: .76rem;
-  font-weight: 650;
+  font-size: var(--font-sm);
+  font-weight: var(--weight-medium);
 }
 
 .provider-settings__content {
@@ -174,13 +174,13 @@
 }
 
 .codex-account-status h3 {
-  font-size: .78rem;
+  font-size: var(--font-sm);
 }
 
 .codex-account-status p,
 .codex-account-status small {
   color: var(--muted);
-  font-size: .69rem;
+  font-size: var(--font-xs);
 }
 
 .codex-account-status .codex-account-status__error {
@@ -206,13 +206,13 @@
 }
 
 .provider-storage-warning strong {
-  font-size: .74rem;
+  font-size: var(--font-sm);
 }
 
 .provider-storage-warning p,
 .provider-delete-confirmation p,
 .provider-form-error {
-  font-size: .7rem;
+  font-size: var(--font-xs);
 }
 
 .provider-profile-form {
@@ -232,7 +232,7 @@
 .provider-profile-form__heading h3 {
   margin-block-start: .1rem;
   overflow: hidden;
-  font-size: 1rem;
+  font-size: var(--font-xl);
   line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -269,8 +269,8 @@
 .provider-secret-field label,
 .provider-secret-fieldset legend {
   color: var(--text);
-  font-size: .71rem;
-  font-weight: 650;
+  font-size: var(--font-xs);
+  font-weight: var(--weight-medium);
 }
 
 .provider-field input,
@@ -300,13 +300,13 @@
 
 .provider-field__hint {
   color: var(--muted);
-  font-size: .66rem;
+  font-size: var(--font-xs);
   line-height: 1.45;
 }
 
 .provider-field__error {
   color: var(--danger);
-  font-size: .68rem;
+  font-size: var(--font-xs);
 }
 
 .provider-secret-fieldset {
@@ -335,7 +335,7 @@
 
 .provider-secret-field p {
   color: var(--muted);
-  font-size: .66rem;
+  font-size: var(--font-xs);
 }
 
 .provider-secret-field input:disabled {
@@ -354,8 +354,8 @@
   justify-content: center;
   gap: .35rem;
   border-radius: 8px;
-  font-size: .72rem;
-  font-weight: 650;
+  font-size: var(--font-sm);
+  font-weight: var(--weight-medium);
 }
 
 .provider-primary-button {

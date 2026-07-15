@@ -305,7 +305,7 @@ export function Composer({
         ref={textareaRef}
         id="composer-message"
         value={message}
-        rows={3}
+        rows={2}
         disabled={unavailable}
         placeholder="Ask Kody to inspect, explain, or change something…"
         aria-describedby={`composer-hint${validationError ? ' composer-error' : ''}`}

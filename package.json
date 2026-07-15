@@ -1,10 +1,16 @@
 {
   "name": "kody-workspace",
   "private": true,
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jianliang00/kody.git"
+  },
   "workspaces": [
     "apps/desktop"
   ],
   "scripts": {
+    "docs:check": "node scripts/check-markdown-links.mjs",
     "desktop:dev": "npm --workspace @kody/desktop run dev",
     "desktop:build": "npm --workspace @kody/desktop run build",
     "desktop:test": "npm --workspace @kody/desktop run test",

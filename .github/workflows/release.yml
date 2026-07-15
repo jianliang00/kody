@@ -16,8 +16,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate:
+    name: Validate release version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Match tag and package versions
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          DESKTOP_VERSION="$(node -p "require('./apps/desktop/package.json').version")"
+          RUST_VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+          test -n "$DESKTOP_VERSION"
+          test -n "$RUST_VERSION"
+          test "$DESKTOP_VERSION" = "$RUST_VERSION"
+          test "$RELEASE_TAG" = "v$DESKTOP_VERSION"
+
   build:
     name: Build ${{ matrix.arch }} update
+    needs: validate
     strategy:
       fail-fast: false
       matrix:

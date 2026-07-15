@@ -47,6 +47,7 @@ describe('Composer provider and model selection', () => {
     expect((screen.getByLabelText('Provider') as HTMLSelectElement).value).toBe('codex')
     expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('codex-default')
     expect((screen.getByLabelText('Permission mode') as HTMLSelectElement).value).toBe('ask')
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).rows).toBe(2)
     expect(screen.getByText('Uses the Codex agent loop and tools for this Turn.')).toBeTruthy()
 
     fireEvent.change(screen.getByLabelText('Permission mode'), { target: { value: 'read_only' } })

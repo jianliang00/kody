@@ -1,0 +1,35 @@
+name: Feature request
+description: Propose a focused improvement to Kody
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user or contributor problem should Kody solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the desired behavior without assuming a particular implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: model
+    attributes:
+      label: Domain and security impact
+      description: Note effects on Threads, Projects, Workspaces, providers, permissions, persistence, or the App Server protocol.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched for an existing issue or proposal.
+          required: true

@@ -5,9 +5,10 @@ submitted to Apple's notary service, stapled, and checked with Gatekeeper before
 GitHub publishes it. The release workflow builds native Apple Silicon and Intel
 DMGs and updater ZIPs on separate GitHub-hosted runners.
 
-The source repository remains private. Signed public artifacts are mirrored to
-the artifact-only [`jianliang00/kody-releases`](https://github.com/jianliang00/kody-releases)
-repository so installed clients can update without embedding a GitHub token.
+The source repository is public. Signed artifacts are also mirrored to the
+artifact-only [`jianliang00/kody-releases`](https://github.com/jianliang00/kody-releases)
+repository so installed clients can update from a minimal public feed without
+embedding a GitHub token.
 
 ## Local release
 

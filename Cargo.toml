@@ -6,11 +6,13 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.6"
 edition = "2021"
 rust-version = "1.87"
 license = "MIT OR Apache-2.0"
 authors = ["Kody contributors"]
+homepage = "https://github.com/jianliang00/kody"
+repository = "https://github.com/jianliang00/kody"
 
 [workspace.dependencies]
 anyhow = "1"

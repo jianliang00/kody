@@ -4,6 +4,14 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Authenticated JSON-RPC App Server and Codex integration for the Kody coding agent"
+readme = "README.md"
+keywords = ["agent", "coding-agent", "json-rpc", "websocket"]
+categories = ["development-tools", "web-programming::http-server"]
+publish = false
 
 [dependencies]
 anyhow.workspace = true

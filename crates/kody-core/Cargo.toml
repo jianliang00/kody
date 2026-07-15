@@ -4,6 +4,14 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Provider-neutral coding agent runtime, domain model, tools, and persistence for Kody"
+readme = "README.md"
+keywords = ["agent", "coding-agent", "llm", "tools"]
+categories = ["development-tools", "asynchronous"]
+publish = false
 
 [dependencies]
 async-trait.workspace = true

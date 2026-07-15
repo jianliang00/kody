@@ -29,6 +29,8 @@ The context card summarizes effective Thread/Project references using the same l
 
 Borrow only broad traits from the Codex desktop aesthetic: quiet neutral surfaces, compact information density, precise typography, thin borders and restrained status color. Kody's own signature is the “context constellation”: Thread references use violet nodes, Project references use cyan nodes, and Workspace uses a warm amber node. Avoid cloning Codex icons, spacing, exact sidebar hierarchy or component layout.
 
+Typography uses one shared token scale across the conversation, asset rail, context rail, and settings surfaces: `2xs` (10px), `xs` (11px), `sm` (12px), `md` (13px), `lg` (14px), and a small heading scale. UI copy uses regular 400 weight, controls and local emphasis use medium 500, and headings/status badges use semibold 600 at most. New components must use these tokens instead of introducing arbitrary sizes or weights. The composer starts at two text rows and may resize vertically up to its bounded maximum; its measured dock height remains authoritative for timeline and floating-shelf clearance.
+
 ## Essential flows
 
 1. First launch shows a ready composer without creating any durable entity; disconnected state has a readable status and retry affordance.

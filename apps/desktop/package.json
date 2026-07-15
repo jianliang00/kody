@@ -1,8 +1,17 @@
 {
   "name": "@kody/desktop",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "A local-first coding agent workspace powered by Rust and Electron.",
   "author": "Jianliang Wang",
+  "license": "MIT OR Apache-2.0",
+  "homepage": "https://github.com/jianliang00/kody",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jianliang00/kody.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jianliang00/kody/issues"
+  },
   "private": true,
   "type": "module",
   "main": "out/main/index.js",
@@ -65,6 +74,14 @@
           "kody-app-server",
           "kody-app-server.exe"
         ]
+      },
+      {
+        "from": "../../LICENSE-MIT",
+        "to": "licenses/LICENSE-MIT"
+      },
+      {
+        "from": "../../LICENSE-APACHE",
+        "to": "licenses/LICENSE-APACHE"
       }
     ],
     "publish": [
