@@ -49,6 +49,12 @@ the source release, and publish DMGs, architecture-specific ZIPs, blockmaps, and
 merged `latest-mac.yml` metadata to the public update repository. Secrets are
 only exposed to the release jobs and never passed into the packaged application.
 
+The merge step recalculates SHA-512 digests and byte sizes from the final
+artifacts after notarization and DMG stapling. This is required because stapling
+changes the DMG after electron-builder first writes architecture metadata. The
+legacy top-level update path points to the Intel ZIP; current clients select the
+matching architecture-specific ZIP from `files`.
+
 ## Client update flow
 
 Packaged macOS builds check for updates shortly after launch and every four

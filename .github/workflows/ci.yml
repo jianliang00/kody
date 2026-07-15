@@ -38,6 +38,8 @@ jobs:
         run: npm ci
       - name: Check documentation links
         run: npm run docs:check
+      - name: Test release metadata tooling
+        run: ruby scripts/merge-mac-update-metadata_test.rb
       - name: Typecheck
         run: npm run typecheck --workspace @kody/desktop
       - name: Test
