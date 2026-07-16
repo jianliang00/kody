@@ -26,7 +26,8 @@ describe('ProviderSettingsDialog', () => {
     await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText(/Profile name/)))
 
     fireEvent.change(screen.getByLabelText(/Profile name/), { target: { value: 'Team gateway' } })
-    fireEvent.change(screen.getByLabelText(/Provider kind/), { target: { value: 'openai-compatible' } })
+    fireEvent.click(screen.getByRole('combobox', { name: /Provider kind/ }))
+    fireEvent.click(screen.getByRole('option', { name: 'OpenAI-compatible' }))
     fireEvent.change(screen.getByLabelText(/Default model/), { target: { value: 'team-coder' } })
     fireEvent.change(screen.getByLabelText(/Custom models/), { target: { value: 'fast\nfast, precise' } })
     const baseUrl = screen.getByLabelText(/Base URL/)

@@ -30,8 +30,9 @@ describe('command approval lifecycle', () => {
 
     const composer = await screen.findByRole('combobox', { name: 'Message' })
     fireEvent.change(composer, { target: { value: 'Run cargo test for this project' } })
-    fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'echo' } })
-    expect((screen.getByLabelText('Permission mode') as HTMLSelectElement).value).toBe('ask')
+    fireEvent.click(screen.getByRole('combobox', { name: 'Provider' }))
+    fireEvent.click(screen.getByRole('option', { name: 'Echo demo' }))
+    expect(screen.getByRole('combobox', { name: 'Permission mode' }).getAttribute('data-value')).toBe('ask')
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
     const allowOnce = await screen.findByRole('button', { name: 'Allow once' }, { timeout: 4_000 })

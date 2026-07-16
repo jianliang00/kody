@@ -1,0 +1,176 @@
+.kody-select__trigger {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .45rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  outline: 0;
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-weight: var(--weight-regular);
+  line-height: 1.25;
+  text-align: start;
+}
+
+.kody-select__trigger > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kody-select__trigger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--text) 30%, var(--border-strong));
+  background: var(--hover);
+}
+
+.kody-select__trigger:focus-visible {
+  outline: 2px solid var(--thread);
+  outline-offset: 2px;
+}
+
+.kody-select__trigger[data-state="open"] {
+  border-color: color-mix(in srgb, var(--thread) 58%, var(--border-strong));
+  background: var(--selected);
+}
+
+.kody-select__trigger:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.kody-select__trigger-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--faint);
+  transition: transform 150ms ease;
+}
+
+.kody-select__trigger[data-state="open"] .kody-select__trigger-icon {
+  transform: rotate(180deg);
+}
+
+.kody-select__trigger--field {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: .52rem .65rem;
+  font-size: var(--font-body);
+}
+
+.kody-select__trigger--toolbar {
+  max-width: 11rem;
+  min-height: 1.75rem;
+  padding: .26rem .42rem;
+  border-color: transparent;
+  border-radius: 6px;
+  background: var(--hover);
+  color: var(--muted);
+  font-size: var(--font-caption);
+  font-weight: var(--weight-medium);
+}
+
+.kody-select__trigger--compact {
+  max-width: 9.5rem;
+  min-height: 1.65rem;
+  padding: .12rem .18rem;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font-size: var(--font-caption);
+  font-weight: var(--weight-medium);
+}
+
+.kody-select__trigger--chip {
+  max-width: 7rem;
+  min-height: 1.4rem;
+  padding: 0 .15rem;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font-size: var(--font-caption);
+}
+
+.kody-select__content {
+  z-index: 120;
+  min-width: var(--radix-select-trigger-width);
+  max-width: min(22rem, calc(100vw - 1rem));
+  max-height: min(18rem, var(--radix-select-content-available-height));
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-strong);
+  color: var(--text);
+  box-shadow: 0 12px 34px rgb(0 0 0 / 16%);
+  transform-origin: var(--radix-select-content-transform-origin);
+  animation: kody-select-in 120ms ease-out;
+}
+
+.kody-select__viewport {
+  padding: .3rem;
+}
+
+.kody-select__item {
+  position: relative;
+  min-height: 2.25rem;
+  padding: .42rem .65rem .42rem 2rem;
+  display: flex;
+  align-items: center;
+  border-radius: 7px;
+  outline: 0;
+  color: var(--text);
+  font-size: var(--font-body);
+  line-height: 1.35;
+  user-select: none;
+}
+
+.kody-select__item[data-highlighted] {
+  background: var(--hover);
+}
+
+.kody-select__item[data-state="checked"] {
+  background: var(--selected);
+  font-weight: var(--weight-medium);
+}
+
+.kody-select__item[data-disabled] {
+  color: var(--faint);
+  opacity: .65;
+}
+
+.kody-select__item-indicator {
+  position: absolute;
+  inset-inline-start: .55rem;
+  display: inline-flex;
+  color: var(--thread);
+}
+
+.kody-select__scroll-button {
+  height: 1.65rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-strong);
+  color: var(--muted);
+}
+
+@keyframes kody-select-in {
+  from {
+    opacity: 0;
+    transform: scale(.98) translateY(-2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kody-select__content {
+    animation: none;
+  }
+
+  .kody-select__trigger-icon {
+    transition: none;
+  }
+}

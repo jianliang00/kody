@@ -10,6 +10,8 @@ import {
   type ReactNode
 } from 'react'
 
+import { KodySelect } from './KodySelect'
+
 import './provider-settings.css'
 
 export type ProviderKind = 'openai' | 'openai-compatible'
@@ -81,6 +83,10 @@ const FOCUSABLE = [
 ].join(',')
 
 const LOOPBACK_HTTP_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
+const PROVIDER_KIND_OPTIONS = [
+  { value: 'openai', label: 'OpenAI API' },
+  { value: 'openai-compatible', label: 'OpenAI-compatible' }
+]
 
 const EMPTY_DRAFT: ProfileDraft = {
   name: '',
@@ -189,6 +195,10 @@ export function ProviderSettingsDialog({
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDialogElement>) => {
     if (event.key === 'Escape') {
+      if (
+        event.defaultPrevented
+        || (event.target instanceof Element && event.target.closest('.kody-select__content'))
+      ) return
       event.preventDefault()
       onClose()
       return
@@ -345,17 +355,16 @@ export function ProviderSettingsDialog({
                 </Field>
 
                 <Field label="Provider kind" required error={errors.kind} id={`${id}-kind`}>
-                  <select
+                  <KodySelect
                     id={`${id}-kind`}
                     name="provider-kind"
                     value={draft.kind}
                     required
-                    aria-invalid={Boolean(errors.kind)}
-                    onChange={(event) => setDraft((current) => ({ ...current, kind: event.target.value as ProviderKind }))}
-                  >
-                    <option value="openai">OpenAI API</option>
-                    <option value="openai-compatible">OpenAI-compatible</option>
-                  </select>
+                    ariaInvalid={Boolean(errors.kind)}
+                    ariaDescribedBy={errors.kind ? `${id}-kind-error` : undefined}
+                    options={PROVIDER_KIND_OPTIONS}
+                    onValueChange={(kind) => setDraft((current) => ({ ...current, kind: kind as ProviderKind }))}
+                  />
                 </Field>
               </div>
 

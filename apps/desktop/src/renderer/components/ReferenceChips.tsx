@@ -5,6 +5,17 @@ import {
   referenceModeLabel,
   resolveReferenceName
 } from '../lib/references'
+import { KodySelect } from './KodySelect'
+
+const PROJECT_ACCESS_OPTIONS = [
+  { value: 'read_only', label: 'Read only' },
+  { value: 'read_write', label: 'Read & write' }
+]
+const THREAD_REFERENCE_MODE_OPTIONS = [
+  { value: 'summary', label: 'Summary' },
+  { value: 'full', label: 'Full context' },
+  { value: 'artifacts', label: 'Artifacts' }
+]
 
 interface ReferenceChipsProps {
   references: ContextReference[]
@@ -60,41 +71,31 @@ export function ReferenceChips({
               {name}
             </span>
             {mutable ? (
-              <label className="reference-chip__mode reference-chip__mode--select">
+              <span className="reference-chip__mode reference-chip__mode--select">
                 <ModeIcon reference={reference} />
-                <span className="sr-only">{name} context mode</span>
-                <select
+                <KodySelect
                   value={reference.kind === 'project' ? reference.access : reference.mode}
-                  aria-label={`${name} context mode`}
-                  onChange={(event) => {
+                  variant="chip"
+                  ariaLabel={`${name} context mode`}
+                  options={reference.kind === 'project'
+                    ? PROJECT_ACCESS_OPTIONS
+                    : THREAD_REFERENCE_MODE_OPTIONS}
+                  onValueChange={(value) => {
                     if (reference.kind === 'project') {
                       onChange?.({
                         ...reference,
-                        access: event.target.value as 'read_only' | 'read_write'
+                        access: value as 'read_only' | 'read_write'
                       })
                     } else {
                       onChange?.({
                         ...reference,
-                        mode: event.target.value as 'summary' | 'full' | 'artifacts',
+                        mode: value as 'summary' | 'full' | 'artifacts',
                         message_ids: undefined
                       })
                     }
                   }}
-                >
-                  {reference.kind === 'project' ? (
-                    <>
-                      <option value="read_only">Read only</option>
-                      <option value="read_write">Read &amp; write</option>
-                    </>
-                  ) : (
-                    <>
-                      <option value="summary">Summary</option>
-                      <option value="full">Full context</option>
-                      <option value="artifacts">Artifacts</option>
-                    </>
-                  )}
-                </select>
-              </label>
+                />
+              </span>
             ) : (
               <span className="reference-chip__mode reference-chip__mode--static">
                 <ModeIcon reference={reference} />

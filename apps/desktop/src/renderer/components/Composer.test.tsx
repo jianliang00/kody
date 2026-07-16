@@ -44,13 +44,14 @@ describe('Composer provider and model selection', () => {
       />
     )
 
-    expect((screen.getByLabelText('Provider') as HTMLSelectElement).value).toBe('codex')
-    expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('codex-default')
-    expect((screen.getByLabelText('Permission mode') as HTMLSelectElement).value).toBe('ask')
+    expect(screen.getByRole('combobox', { name: 'Provider' }).getAttribute('data-value')).toBe('codex')
+    expect(screen.getByRole('combobox', { name: 'Model' }).getAttribute('data-value')).toBe('codex-default')
+    expect(screen.getByRole('combobox', { name: 'Permission mode' }).getAttribute('data-value')).toBe('ask')
     expect((screen.getByLabelText('Message') as HTMLTextAreaElement).rows).toBe(2)
     expect(screen.getByText('Uses the Codex agent loop and tools for this Turn.')).toBeTruthy()
 
-    fireEvent.change(screen.getByLabelText('Permission mode'), { target: { value: 'read_only' } })
+    fireEvent.click(screen.getByRole('combobox', { name: 'Permission mode' }))
+    fireEvent.click(screen.getByRole('option', { name: 'Read only' }))
     expect(permissionChange).toHaveBeenCalledWith('read_only')
 
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
@@ -99,8 +100,9 @@ describe('Composer provider and model selection', () => {
       />
     )
 
-    const option = screen.getByRole('option', { name: 'Team gateway · setup required' }) as HTMLOptionElement
-    expect(option.disabled).toBe(true)
     expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('combobox', { name: 'Provider' }))
+    const option = screen.getByRole('option', { name: 'Team gateway · setup required' })
+    expect(option.getAttribute('aria-disabled')).toBe('true')
   })
 })

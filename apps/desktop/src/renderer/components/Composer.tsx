@@ -18,8 +18,15 @@ import {
   type MentionMatch,
   type ReferenceCandidate
 } from '../lib/references'
+import { KodySelect } from './KodySelect'
 import { MentionPalette } from './MentionPalette'
 import { ReferenceChips } from './ReferenceChips'
+
+const PERMISSION_MODE_OPTIONS = [
+  { value: 'read_only', label: 'Read only' },
+  { value: 'ask', label: 'Ask for commands' },
+  { value: 'full_access', label: 'Full access' }
+]
 
 interface ComposerProps {
   currentThreadId?: string
@@ -254,33 +261,29 @@ export function Composer({
         <label htmlFor="composer-message">Message</label>
         <div className="composer__provider">
           <label htmlFor="composer-provider">Provider</label>
-          <select
+          <KodySelect
             id="composer-provider"
             value={providerId}
-            onChange={(event) => onProviderChange(event.target.value)}
+            variant="toolbar"
+            placeholder={providers.length === 0 ? 'Unavailable' : 'No configured provider'}
+            options={providers.map((item) => ({
+              value: item.id,
+              label: `${item.display_name}${item.auth === 'missing' ? ' · setup required' : ''}`,
+              disabled: item.auth === 'missing'
+            }))}
+            onValueChange={onProviderChange}
             disabled={running || unavailable || providers.length === 0}
-          >
-            {providers.length === 0 ? <option>Unavailable</option> : null}
-            {providers.length > 0 && !providerId ? <option value="">No configured provider</option> : null}
-            {providers.map((item) => (
-              <option value={item.id} key={item.id} disabled={item.auth === 'missing'}>
-                {item.display_name}{item.auth === 'missing' ? ' · setup required' : ''}
-              </option>
-            ))}
-          </select>
+          />
           <label htmlFor="composer-model">Model</label>
-          <select
+          <KodySelect
             id="composer-model"
             value={model}
-            onChange={(event) => onModelChange(event.target.value)}
+            variant="toolbar"
+            placeholder={modelsLoading ? 'Loading models…' : 'Unavailable'}
+            options={modelOptions.map((item) => ({ value: item.id, label: item.display_name }))}
+            onValueChange={onModelChange}
             disabled={running || unavailable || !providerId || modelOptions.length === 0}
-          >
-            {modelsLoading ? <option value="">Loading models…</option> : null}
-            {!modelsLoading && modelOptions.length === 0 ? <option value="">Unavailable</option> : null}
-            {modelOptions.map((item) => (
-              <option value={item.id} key={item.id}>{item.display_name}</option>
-            ))}
-          </select>
+          />
         </div>
       </div>
 
@@ -339,7 +342,7 @@ export function Composer({
             <AtSign aria-hidden="true" size={16} />
             <span>Add context</span>
           </button>
-          <label
+          <div
             className={`permission-mode-control permission-mode-control--${permissionMode}`}
             title={permissionMode === 'read_only'
               ? 'Only inspection tools can run for this turn.'
@@ -348,18 +351,16 @@ export function Composer({
                 : 'File changes are allowed; commands ask for approval.'}
           >
             <ShieldCheck aria-hidden="true" size={15} />
-            <span className="sr-only">Permission mode</span>
-            <select
+            <KodySelect
               value={permissionMode}
+              variant="compact"
+              ariaLabel="Permission mode"
               disabled={unavailable || running}
-              onChange={(event) => onPermissionModeChange(event.target.value as PermissionMode)}
-              aria-describedby="permission-mode-description"
-            >
-              <option value="read_only">Read only</option>
-              <option value="ask">Ask for commands</option>
-              <option value="full_access">Full access</option>
-            </select>
-          </label>
+              ariaDescribedBy="permission-mode-description"
+              options={PERMISSION_MODE_OPTIONS}
+              onValueChange={(mode) => onPermissionModeChange(mode as PermissionMode)}
+            />
+          </div>
           <span id="permission-mode-description" className="sr-only">
             {permissionMode === 'read_only'
               ? 'Only inspection tools can run for this turn.'

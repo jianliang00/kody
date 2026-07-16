@@ -1,4 +1,4 @@
-import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test'
+import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test'
 import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -14,6 +14,14 @@ interface PersistedState {
   workspaces: Array<{ id: string; thread_id: string; root: string }>
   messages: Array<{ id: string; thread_id: string; role: string }>
   turns: Array<{ id: string; thread_id: string; status: string; permission_mode: string }>
+}
+
+async function selectKodyOption(page: Page, label: string | RegExp, option: string): Promise<void> {
+  const trigger = page.getByRole('combobox', { name: label })
+  await trigger.click()
+  await expect(page.locator('.kody-select__content')).toBeVisible()
+  await page.getByRole('option', { name: option, exact: true }).click()
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false')
 }
 
 function isolatedEnvironment(): Record<string, string> {
@@ -101,11 +109,65 @@ test('creates the first Thread through one idempotent draft request', async () =
       }
     })
     expect(settingsTypography).toEqual({
-      headerCopy: '13px',
-      navigationAction: '13px',
-      navigationEmpty: '12px',
-      fieldLabel: '12px'
+      headerCopy: '14px',
+      navigationAction: '14px',
+      navigationEmpty: '13px',
+      fieldLabel: '13px'
     })
+    const providerKind = providerSettings.getByRole('combobox', { name: /Provider kind/ })
+    await providerKind.click()
+    const selectContent = page.locator('.kody-select__content')
+    await expect(selectContent).toBeVisible()
+    const selectSurface = await selectContent.evaluate((content) => {
+      const item = content.querySelector('.kody-select__item')
+      if (!(item instanceof HTMLElement)) throw new Error('Missing Kody select item')
+      return {
+        borderRadius: getComputedStyle(content).borderRadius,
+        boxShadow: getComputedStyle(content).boxShadow,
+        itemFontSize: getComputedStyle(item).fontSize,
+        itemMinHeight: getComputedStyle(item).minHeight
+      }
+    })
+    expect(selectSurface.borderRadius).toBe('10px')
+    expect(selectSurface.boxShadow).not.toBe('none')
+    expect(selectSurface.itemFontSize).toBe('14px')
+    expect(selectSurface.itemMinHeight).toBe('36px')
+    if (process.env.KODY_QA_SELECT_SCREENSHOT) {
+      await page.screenshot({ path: process.env.KODY_QA_SELECT_SCREENSHOT, animations: 'disabled' })
+    }
+    await page.getByRole('option', { name: 'OpenAI-compatible', exact: true }).click()
+    await expect(providerKind).toHaveAttribute('data-value', 'openai-compatible')
+    await selectKodyOption(page, /Provider kind/, 'OpenAI API')
+    await expect(providerKind).toHaveAttribute('data-value', 'openai')
+    await providerKind.focus()
+    await page.keyboard.press('ArrowDown')
+    await expect(selectContent).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(selectContent).toHaveCount(0)
+    await expect(providerSettings).toBeVisible()
+    await expect(providerKind).toBeFocused()
+    const settingsControlTops = async () => {
+      const controls = {
+        profileName: providerSettings.getByLabel(/Profile name/),
+        providerKind: providerSettings.getByLabel('Provider kind'),
+        defaultModel: providerSettings.getByLabel(/Default model/),
+        customModels: providerSettings.getByLabel('Custom models')
+      }
+      const entries = await Promise.all(Object.entries(controls).map(async ([name, control]) => {
+        const box = await control.boundingBox()
+        expect(box, `${name} should have a layout box`).not.toBeNull()
+        return [name, box!.y] as const
+      }))
+      return Object.fromEntries(entries) as Record<keyof typeof controls, number>
+    }
+    const expectSettingsRowsAligned = (tops: Awaited<ReturnType<typeof settingsControlTops>>) => {
+      expect(Math.abs(tops.profileName - tops.providerKind)).toBeLessThanOrEqual(1)
+      expect(Math.abs(tops.defaultModel - tops.customModels)).toBeLessThanOrEqual(1)
+    }
+    expectSettingsRowsAligned(await settingsControlTops())
+    await providerSettings.getByRole('button', { name: 'Save provider' }).click()
+    await expect(providerSettings.getByText('Enter a profile name.')).toBeVisible()
+    expectSettingsRowsAligned(await settingsControlTops())
     if (process.env.KODY_QA_SETTINGS_SCREENSHOT) {
       await page.screenshot({ path: process.env.KODY_QA_SETTINGS_SCREENSHOT, animations: 'disabled' })
     }
@@ -159,15 +221,15 @@ test('creates the first Thread through one idempotent draft request', async () =
         sendButtonWeight: sendButton ? getComputedStyle(sendButton).fontWeight : ''
       }
     })
-    expect(typography.bodyFontSize).toBe('13px')
+    expect(typography.bodyFontSize).toBe('14px')
     expect(typography.composerMinHeight).toBe('48px')
     expect(typography.composerHeight).toBeLessThanOrEqual(56)
     expect(typography.sendButtonWeight).toBe('500')
     await expect(page.getByRole('button', { name: 'Working directory', exact: true })).toBeVisible()
     const permissionMode = page.getByLabel('Permission mode')
-    await expect(permissionMode).toHaveValue('ask')
-    await permissionMode.selectOption('read_only')
-    await expect(permissionMode).toHaveValue('read_only')
+    await expect(permissionMode).toHaveAttribute('data-value', 'ask')
+    await selectKodyOption(page, 'Permission mode', 'Read only')
+    await expect(permissionMode).toHaveAttribute('data-value', 'read_only')
     await expect(page.getByRole('dialog')).toHaveCount(0)
     await expect(page.getByText('No Threads yet', { exact: true })).toBeVisible()
 
@@ -221,7 +283,9 @@ test('creates the first Thread through one idempotent draft request', async () =
 
     const prompt = 'Explain the provider neutral agent loop'
     await composer.fill(prompt)
-    await page.getByLabel('Provider').selectOption('echo')
+    await selectKodyOption(page, 'Provider', 'Echo')
+    await expect(page.getByRole('combobox', { name: 'Provider' })).toHaveAttribute('data-value', 'echo')
+    await expect(page.getByRole('combobox', { name: 'Model' })).toHaveAttribute('data-value', 'echo')
 
     // Two synchronous clicks exercise both renderer guarding and server request idempotency.
     await page.getByRole('button', { name: 'Send', exact: true }).evaluate((button) => {
@@ -295,22 +359,28 @@ test('creates the first Thread through one idempotent draft request', async () =
         emptyState: fontSize('.thread-context-card__empty'),
         processEmpty: fontSize('.thread-context-card__process-empty'),
         workspacePath: fontSize('.thread-context-card__footer > span'),
-        metricLabelsFit: [...card.querySelectorAll<HTMLElement>('.thread-context-card__metric dt')]
-          .every((element) => element.scrollWidth <= element.clientWidth)
+        metricLabelsFit: Object.fromEntries(
+          [...card.querySelectorAll<HTMLElement>('.thread-context-card__metric dt')]
+            .map((element) => [element.textContent?.trim() ?? '', element.scrollWidth <= element.clientWidth])
+        )
       }
     })
     expect(contextTypography).toEqual({
-      eyebrow: '13px',
-      heading: '13px',
-      metricLabel: '13px',
-      metricValue: '13px',
-      groupLabel: '13px',
-      itemName: '13px',
-      itemDetail: '13px',
-      emptyState: '13px',
-      processEmpty: '13px',
-      workspacePath: '13px',
-      metricLabelsFit: true
+      eyebrow: '14px',
+      heading: '14px',
+      metricLabel: '14px',
+      metricValue: '14px',
+      groupLabel: '14px',
+      itemName: '14px',
+      itemDetail: '14px',
+      emptyState: '14px',
+      processEmpty: '14px',
+      workspacePath: '14px',
+      metricLabelsFit: {
+        Threads: true,
+        Projects: true,
+        'Managed procs': true
+      }
     })
     if (process.env.KODY_QA_CONTEXT_SCREENSHOT) {
       await page.screenshot({ path: process.env.KODY_QA_CONTEXT_SCREENSHOT, animations: 'disabled' })
@@ -349,9 +419,9 @@ test('creates the first Thread through one idempotent draft request', async () =
       }
     })
     expect(applicationTypography).toEqual({
-      body: Array(6).fill('13px'),
-      caption: Array(4).fill('12px'),
-      brandHeading: '16px'
+      body: Array(6).fill('14px'),
+      caption: Array(4).fill('13px'),
+      brandHeading: '17px'
     })
     if (process.env.KODY_QA_SCREENSHOT) {
       await page.screenshot({ path: process.env.KODY_QA_SCREENSHOT, animations: 'disabled' })
