@@ -278,12 +278,43 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expect(contextCard.getByLabel('Referenced Projects')).toContainText(durable.projects[0]?.name ?? '')
     await expect(contextCard.getByLabel('Referenced Projects')).toContainText('Read & write')
     await expect(contextCard.getByText('No active managed processes', { exact: true })).toBeVisible()
-    const contextTypography = await contextCard.evaluate((card) => ({
-      metricLabel: getComputedStyle(card.querySelector('.thread-context-card__metric dt')!).fontSize,
-      groupLabel: getComputedStyle(card.querySelector('.thread-context-card__group-label')!).fontSize,
-      itemName: getComputedStyle(card.querySelector('.thread-context-card__group li strong')!).fontSize
-    }))
-    expect(contextTypography).toEqual({ metricLabel: '12px', groupLabel: '12px', itemName: '13px' })
+    const contextTypography = await contextCard.evaluate((card) => {
+      const fontSize = (selector: string) => {
+        const element = card.querySelector(selector)
+        if (!(element instanceof HTMLElement)) throw new Error(`Missing Context typography fixture: ${selector}`)
+        return getComputedStyle(element).fontSize
+      }
+      return {
+        eyebrow: fontSize('.eyebrow'),
+        heading: fontSize('.thread-context-card__header h2'),
+        metricLabel: fontSize('.thread-context-card__metric dt'),
+        metricValue: fontSize('.thread-context-card__metric dd'),
+        groupLabel: fontSize('.thread-context-card__group-label'),
+        itemName: fontSize('.thread-context-card__group li strong'),
+        itemDetail: fontSize('.thread-context-card__group li > span:last-child'),
+        emptyState: fontSize('.thread-context-card__empty'),
+        processEmpty: fontSize('.thread-context-card__process-empty'),
+        workspacePath: fontSize('.thread-context-card__footer > span'),
+        metricLabelsFit: [...card.querySelectorAll<HTMLElement>('.thread-context-card__metric dt')]
+          .every((element) => element.scrollWidth <= element.clientWidth)
+      }
+    })
+    expect(contextTypography).toEqual({
+      eyebrow: '13px',
+      heading: '13px',
+      metricLabel: '13px',
+      metricValue: '13px',
+      groupLabel: '13px',
+      itemName: '13px',
+      itemDetail: '13px',
+      emptyState: '13px',
+      processEmpty: '13px',
+      workspacePath: '13px',
+      metricLabelsFit: true
+    })
+    if (process.env.KODY_QA_CONTEXT_SCREENSHOT) {
+      await page.screenshot({ path: process.env.KODY_QA_CONTEXT_SCREENSHOT, animations: 'disabled' })
+    }
     const rightRail = page.locator('#right-rail')
     const expandContentActivity = contextCard.getByRole('button', { name: 'Expand Content & activity' })
     await expect(expandContentActivity).toBeVisible()
