@@ -24,6 +24,18 @@ async function selectKodyOption(page: Page, label: string | RegExp, option: stri
   await expect(trigger).toHaveAttribute('aria-expanded', 'false')
 }
 
+async function dragSidebarHandle(page: Page, label: string, deltaX: number): Promise<void> {
+  const handle = page.getByRole('separator', { name: label })
+  const box = await handle.boundingBox()
+  expect(box, `${label} should have a layout box`).not.toBeNull()
+  const startX = box!.x + box!.width / 2
+  const y = box!.y + Math.min(160, box!.height / 2)
+  await page.mouse.move(startX, y)
+  await page.mouse.down()
+  await page.mouse.move(startX + deltaX, y, { steps: 5 })
+  await page.mouse.up()
+}
+
 function isolatedEnvironment(): Record<string, string> {
   const environment = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
@@ -73,25 +85,68 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expect(page.locator('vite-error-overlay')).toHaveCount(0)
     await expect(page.getByLabel('Local server connected')).toBeVisible({ timeout: 30_000 })
     const assetRail = page.getByLabel('Kody assets')
+    const rightRail = page.locator('#right-rail')
     const applicationControls = assetRail.getByLabel('Application controls')
     const openModelSettings = applicationControls.getByRole('button', { name: 'Open model settings' })
     const updateCapsule = applicationControls.getByRole('button', { name: 'Kody updates unavailable' })
     await expect(openModelSettings).toBeVisible()
     await expect(updateCapsule).toBeVisible()
-    const [updateCapsuleBox, applicationControlsBox] = await Promise.all([
+    const [updateCapsuleBox, settingsButtonBox] = await Promise.all([
       updateCapsule.boundingBox(),
-      applicationControls.boundingBox()
+      openModelSettings.boundingBox()
     ])
     const updateCapsuleStyle = await updateCapsule.evaluate((element) => ({
       borderRadius: getComputedStyle(element).borderRadius,
       copyWhiteSpace: getComputedStyle(element.querySelector('.update-status__copy')!).whiteSpace
     }))
     expect(updateCapsuleBox).not.toBeNull()
-    expect(applicationControlsBox).not.toBeNull()
-    expect(updateCapsuleBox?.width ?? Infinity).toBeLessThan(applicationControlsBox?.width ?? 0)
+    expect(settingsButtonBox).not.toBeNull()
+    expect(Math.abs((updateCapsuleBox?.x ?? 0) - (settingsButtonBox?.x ?? 0))).toBeLessThanOrEqual(1)
+    expect(Math.abs((updateCapsuleBox?.width ?? 0) - (settingsButtonBox?.width ?? 0))).toBeLessThanOrEqual(1)
     expect(updateCapsuleBox?.height ?? Infinity).toBeLessThanOrEqual(36)
     expect(updateCapsuleStyle).toEqual({ borderRadius: '999px', copyWhiteSpace: 'nowrap' })
+    await expect(updateCapsule.locator('.update-status__chevron')).toHaveCount(0)
     await expect(page.locator('.titlebar').getByRole('button', { name: 'Open model settings' })).toHaveCount(0)
+
+    const assetResizeHandle = page.getByRole('separator', { name: 'Resize asset sidebar' })
+    const rightResizeHandle = page.getByRole('separator', { name: 'Resize right sidebar' })
+    await expect(assetResizeHandle).toBeVisible()
+    await expect(rightResizeHandle).toBeVisible()
+    await expect(assetResizeHandle).toHaveAttribute('aria-controls', 'asset-rail')
+    await expect(rightResizeHandle).toHaveAttribute('aria-controls', 'right-rail')
+    const initialAssetRailWidth = Math.round((await assetRail.boundingBox())?.width ?? 0)
+    const initialRightRailWidth = Math.round((await rightRail.boundingBox())?.width ?? 0)
+    expect(initialAssetRailWidth).toBe(272)
+    expect(initialRightRailWidth).toBe(320)
+
+    await dragSidebarHandle(page, 'Resize asset sidebar', 48)
+    await expect.poll(async () => Math.round((await assetRail.boundingBox())?.width ?? 0)).toBe(320)
+    await expect.poll(() => page.evaluate(() => window.localStorage.getItem('kody.assetRailWidth'))).toBe('320')
+    await assetResizeHandle.focus()
+    await page.keyboard.press('ArrowLeft')
+    await expect.poll(async () => Math.round((await assetRail.boundingBox())?.width ?? 0)).toBe(312)
+
+    await dragSidebarHandle(page, 'Resize right sidebar', -48)
+    await expect.poll(async () => Math.round((await rightRail.boundingBox())?.width ?? 0)).toBe(368)
+    await rightResizeHandle.focus()
+    await page.keyboard.press('ArrowRight')
+    await expect.poll(async () => Math.round((await rightRail.boundingBox())?.width ?? 0)).toBe(360)
+    await expect.poll(() => page.evaluate(() => ({
+      left: window.localStorage.getItem('kody.assetRailWidth'),
+      right: window.localStorage.getItem('kody.rightRailWidth')
+    }))).toEqual({ left: '312', right: '360' })
+    if (process.env.KODY_QA_RESIZE_SCREENSHOT) {
+      await page.screenshot({ path: process.env.KODY_QA_RESIZE_SCREENSHOT, animations: 'disabled' })
+    }
+
+    await page.reload()
+    await expect(page.getByLabel('Local server connected')).toBeVisible({ timeout: 30_000 })
+    await expect.poll(async () => Math.round((await assetRail.boundingBox())?.width ?? 0)).toBe(312)
+    await expect.poll(async () => Math.round((await rightRail.boundingBox())?.width ?? 0)).toBe(360)
+    if (process.env.KODY_QA_UPDATES_SCREENSHOT) {
+      await page.screenshot({ path: process.env.KODY_QA_UPDATES_SCREENSHOT, animations: 'disabled' })
+    }
+
     await openModelSettings.click()
     const providerSettings = page.getByRole('dialog', { name: 'Provider settings' })
     await expect(providerSettings).toBeVisible()
@@ -146,6 +201,24 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expect(selectContent).toHaveCount(0)
     await expect(providerSettings).toBeVisible()
     await expect(providerKind).toBeFocused()
+    const closedFieldSurfaces = await providerSettings.evaluate((dialog) => {
+      const input = dialog.querySelector<HTMLInputElement>('input[name="base-url"]')
+      const select = dialog.querySelector<HTMLElement>('.kody-select__trigger--field')
+      if (!input || !select) throw new Error('Missing provider field controls')
+      const surface = (element: HTMLElement) => {
+        const style = getComputedStyle(element)
+        return {
+          backgroundColor: style.backgroundColor,
+          borderColor: style.borderTopColor,
+          borderRadius: style.borderRadius,
+          borderWidth: style.borderTopWidth,
+          minHeight: style.minHeight,
+          fontSize: style.fontSize
+        }
+      }
+      return { input: surface(input), select: surface(select) }
+    })
+    expect(closedFieldSurfaces.select).toEqual(closedFieldSurfaces.input)
     const settingsControlTops = async () => {
       const controls = {
         profileName: providerSettings.getByLabel(/Profile name/),
@@ -170,6 +243,11 @@ test('creates the first Thread through one idempotent draft request', async () =
     expectSettingsRowsAligned(await settingsControlTops())
     if (process.env.KODY_QA_SETTINGS_SCREENSHOT) {
       await page.screenshot({ path: process.env.KODY_QA_SETTINGS_SCREENSHOT, animations: 'disabled' })
+    }
+    if (process.env.KODY_QA_DARK_SETTINGS_SCREENSHOT) {
+      await page.locator('html').evaluate((element) => { element.dataset.theme = 'dark' })
+      await page.screenshot({ path: process.env.KODY_QA_DARK_SETTINGS_SCREENSHOT, animations: 'disabled' })
+      await page.locator('html').evaluate((element) => { element.dataset.theme = 'light' })
     }
     await page.getByRole('button', { name: 'Close provider settings' }).click()
     await expect(page.getByRole('dialog', { name: 'Provider settings' })).toHaveCount(0)
@@ -286,6 +364,43 @@ test('creates the first Thread through one idempotent draft request', async () =
     await selectKodyOption(page, 'Provider', 'Echo')
     await expect(page.getByRole('combobox', { name: 'Provider' })).toHaveAttribute('data-value', 'echo')
     await expect(page.getByRole('combobox', { name: 'Model' })).toHaveAttribute('data-value', 'echo')
+    const providerTrigger = page.getByRole('combobox', { name: 'Provider' })
+    const addContext = page.getByRole('button', { name: 'Add context' })
+    const permissionControl = page.locator('.permission-mode-control')
+    await page.mouse.move(800, 300)
+    await expect(providerTrigger).toHaveCSS('background-color', 'rgb(252, 251, 248)')
+    const compactControlSurfaces = await page.evaluate(() => {
+      const provider = document.querySelector<HTMLElement>('#composer-provider')
+      const context = document.querySelector<HTMLElement>('.composer .context-button')
+      const permission = document.querySelector<HTMLElement>('.permission-mode-control')
+      if (!provider || !context || !permission) throw new Error('Missing composer controls')
+      const surface = (element: HTMLElement) => {
+        const style = getComputedStyle(element)
+        return {
+          backgroundColor: style.backgroundColor,
+          borderRadius: style.borderRadius,
+          borderWidth: style.borderTopWidth,
+          height: element.getBoundingClientRect().height
+        }
+      }
+      return { provider: surface(provider), context: surface(context), permission: surface(permission) }
+    })
+    expect(compactControlSurfaces.provider).toEqual(compactControlSurfaces.context)
+    expect(compactControlSurfaces.permission).toEqual(compactControlSurfaces.context)
+    const hoverSurface = async (control: typeof providerTrigger) => {
+      await control.hover()
+      await expect(control).toHaveCSS('background-color', 'rgb(232, 231, 225)')
+      await expect(control).toHaveCSS('border-top-color', 'rgb(199, 196, 186)')
+      return control.evaluate((element) => {
+        const style = getComputedStyle(element)
+        return { backgroundColor: style.backgroundColor, borderColor: style.borderTopColor }
+      })
+    }
+    const providerHover = await hoverSurface(providerTrigger)
+    const contextHover = await hoverSurface(addContext)
+    const permissionHover = await hoverSurface(permissionControl)
+    expect(providerHover).toEqual(contextHover)
+    expect(permissionHover).toEqual(contextHover)
 
     // Two synchronous clicks exercise both renderer guarding and server request idempotency.
     await page.getByRole('button', { name: 'Send', exact: true }).evaluate((button) => {
@@ -385,7 +500,6 @@ test('creates the first Thread through one idempotent draft request', async () =
     if (process.env.KODY_QA_CONTEXT_SCREENSHOT) {
       await page.screenshot({ path: process.env.KODY_QA_CONTEXT_SCREENSHOT, animations: 'disabled' })
     }
-    const rightRail = page.locator('#right-rail')
     const expandContentActivity = contextCard.getByRole('button', { name: 'Expand Content & activity' })
     await expect(expandContentActivity).toBeVisible()
     await expect(page.locator('.titlebar').getByRole('button', { name: 'Expand Content & activity' })).toHaveCount(0)
@@ -425,6 +539,13 @@ test('creates the first Thread through one idempotent draft request', async () =
     })
     if (process.env.KODY_QA_SCREENSHOT) {
       await page.screenshot({ path: process.env.KODY_QA_SCREENSHOT, animations: 'disabled' })
+    }
+    if (process.env.KODY_QA_DARK_SCREENSHOT) {
+      await page.getByRole('button', { name: 'Use dark theme' }).click()
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+      await page.screenshot({ path: process.env.KODY_QA_DARK_SCREENSHOT, animations: 'disabled' })
+      await page.getByRole('button', { name: 'Use light theme' }).click()
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
     }
     await inspector.getByRole('button', { name: 'Collapse Content & activity' }).click()
     await expect(inspector).toBeHidden()
@@ -586,10 +707,17 @@ test('creates the first Thread through one idempotent draft request', async () =
     await application.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.setSize(700, 700)
     })
+    await expect(page.getByRole('separator', { name: 'Resize asset sidebar' })).toHaveCount(0)
+    await expect(page.getByRole('separator', { name: 'Resize right sidebar' })).toHaveCount(0)
     const openAssetDrawer = page.getByRole('button', { name: 'Open asset drawer' })
     await expect(assetRail).toBeHidden()
     await openAssetDrawer.click()
     await expect(assetRail).toBeVisible()
+    const assetDrawerLayers = await page.evaluate(() => ({
+      drawer: getComputedStyle(document.querySelector('.asset-rail')!).zIndex,
+      scrim: getComputedStyle(document.querySelector('.drawer-scrim')!).zIndex
+    }))
+    expect(assetDrawerLayers).toEqual({ drawer: '41', scrim: '40' })
     await page.keyboard.press('Escape')
     await expect(assetRail).toBeHidden()
     await expect(openAssetDrawer).toBeFocused()
@@ -609,6 +737,15 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expect(page.getByRole('heading', { name: 'Workspace', exact: true })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Background processes', exact: true })).toBeVisible()
     await expect(inspector.getByText('No managed background processes.', { exact: true })).toBeVisible()
+    const inspectorDrawerLayers = await page.evaluate(() => ({
+      rail: getComputedStyle(document.querySelector('.right-rail')!).zIndex,
+      drawer: getComputedStyle(document.querySelector('.inspector')!).zIndex,
+      scrim: getComputedStyle(document.querySelector('.drawer-scrim')!).zIndex
+    }))
+    expect(inspectorDrawerLayers).toEqual({ rail: '31', drawer: '31', scrim: '30' })
+    if (process.env.KODY_QA_COMPACT_SCREENSHOT) {
+      await page.screenshot({ path: process.env.KODY_QA_COMPACT_SCREENSHOT, animations: 'disabled' })
+    }
     await page.keyboard.press('Escape')
     await expect(inspector).toBeHidden()
     const reopenInspector = page.getByRole('button', { name: 'Show right sidebar' })

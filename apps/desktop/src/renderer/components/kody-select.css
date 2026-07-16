@@ -13,6 +13,7 @@
   font-weight: var(--weight-regular);
   line-height: 1.25;
   text-align: start;
+  transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease;
 }
 
 .kody-select__trigger > span:first-child {
@@ -22,19 +23,23 @@
   white-space: nowrap;
 }
 
+.kody-select__trigger > span[data-placeholder] {
+  color: var(--faint);
+}
+
 .kody-select__trigger:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--text) 30%, var(--border-strong));
   background: var(--hover);
 }
 
 .kody-select__trigger:focus-visible {
-  outline: 2px solid var(--thread);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
 .kody-select__trigger[data-state="open"] {
-  border-color: color-mix(in srgb, var(--thread) 58%, var(--border-strong));
-  background: var(--selected);
+  border-color: color-mix(in srgb, var(--focus) 58%, var(--border-strong));
+  background: var(--surface);
 }
 
 .kody-select__trigger:disabled {
@@ -60,16 +65,24 @@
   font-size: var(--font-body);
 }
 
+.kody-select__trigger--field:hover:not(:disabled) {
+  background: var(--surface);
+}
+
 .kody-select__trigger--toolbar {
   max-width: 11rem;
-  min-height: 1.75rem;
-  padding: .26rem .42rem;
-  border-color: transparent;
-  border-radius: 6px;
-  background: var(--hover);
-  color: var(--muted);
+  min-height: 2rem;
+  padding: .3rem .5rem;
+  border-color: var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
   font-size: var(--font-caption);
   font-weight: var(--weight-medium);
+}
+
+.kody-select__trigger--toolbar:hover:not(:disabled) {
+  border-color: var(--border-strong);
 }
 
 .kody-select__trigger--compact {
@@ -93,6 +106,13 @@
   background: transparent;
   color: inherit;
   font-size: var(--font-caption);
+}
+
+.kody-select__trigger--compact:hover:not(:disabled),
+.kody-select__trigger--chip:hover:not(:disabled),
+.kody-select__trigger--compact[data-state="open"],
+.kody-select__trigger--chip[data-state="open"] {
+  background: transparent;
 }
 
 .kody-select__content {

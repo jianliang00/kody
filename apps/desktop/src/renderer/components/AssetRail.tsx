@@ -56,7 +56,7 @@ export function AssetRail({
   )
 
   return (
-    <aside className={`asset-rail${open ? ' asset-rail--open' : ''}`} aria-label="Kody assets">
+    <aside id="asset-rail" className={`asset-rail${open ? ' asset-rail--open' : ''}`} aria-label="Kody assets">
       <div className="asset-rail__window-drag" aria-hidden="true" />
       <header className="asset-rail__brand">
         <div className="brand-lockup">

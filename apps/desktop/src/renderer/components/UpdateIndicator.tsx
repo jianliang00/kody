@@ -1,7 +1,6 @@
 import {
   ArrowDownToLine,
   Check,
-  ChevronRight,
   LoaderCircle,
   RefreshCcw,
   RotateCcw
@@ -34,7 +33,6 @@ export function UpdateIndicator({ status, onAction }: UpdateIndicatorProps) {
         <strong>Updates</strong>
         <span>{presentation.text}</span>
       </span>
-      {!presentation.disabled ? <ChevronRight className="update-status__chevron" aria-hidden="true" size={13} /> : null}
     </button>
   )
 }

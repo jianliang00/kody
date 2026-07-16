@@ -4,7 +4,15 @@ import {
   RefreshCcw,
   WifiOff
 } from 'lucide-react'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties
+} from 'react'
 import type {
   CodexAccountStatus,
   DesktopUpdateStatus,
@@ -38,6 +46,7 @@ import {
   ProviderSettingsDialog,
   type ProviderProfileSubmission
 } from './components/ProviderSettings'
+import { SidebarResizeHandle } from './components/SidebarResizeHandle'
 import { ThreadContextCard } from './components/ThreadContextCard'
 import { TitleBar } from './components/TitleBar'
 import { getKodyBridge } from './lib/mockBridge'
@@ -45,10 +54,20 @@ import { referenceKey, upsertReference } from './lib/references'
 import { isProcessActive, shouldRefreshProcessSnapshot } from './lib/processes'
 import { deriveThreadContext } from './lib/threadContext'
 import { ThreadProjectionLedger } from './lib/threadProjection'
+import {
+  ASSET_RAIL_LIMITS,
+  clampSidebarWidth,
+  fitSidebarWidths,
+  MINIMUM_CONVERSATION_WIDTH,
+  readStoredSidebarWidth,
+  RIGHT_RAIL_LIMITS
+} from './lib/sidebarSizing'
 
 type ExtendedBridge = KodyDesktopBridge & { copyText?: (text: string) => Promise<void> }
 
 const TERMINAL_EVENTS = new Set(['turn_completed', 'turn_failed', 'turn_cancelled'])
+const ASSET_RAIL_WIDTH_KEY = 'kody.assetRailWidth'
+const RIGHT_RAIL_WIDTH_KEY = 'kody.rightRailWidth'
 
 function appendLiveEvent(history: EventEnvelope[], envelope: EventEnvelope): EventEnvelope[] {
   const last = history.at(-1)
@@ -100,6 +119,16 @@ function useMediaQuery(query: string): boolean {
     return () => media.removeEventListener('change', update)
   }, [query])
   return matches
+}
+
+function useViewportWidth(): number {
+  const [width, setWidth] = useState(() => window.innerWidth)
+  useEffect(() => {
+    const update = (): void => setWidth(window.innerWidth)
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [])
+  return width
 }
 
 function runningTurn(snapshot?: ThreadSnapshot): Turn | undefined {
@@ -195,11 +224,19 @@ export function App() {
   const [rightRailCollapsed, setRightRailCollapsed] = useState(
     () => window.localStorage.getItem('kody.rightRailCollapsed') === 'true'
   )
+  const [assetRailWidth, setAssetRailWidth] = useState(
+    () => readStoredSidebarWidth(window.localStorage, ASSET_RAIL_WIDTH_KEY, ASSET_RAIL_LIMITS)
+  )
+  const [rightRailWidth, setRightRailWidth] = useState(
+    () => readStoredSidebarWidth(window.localStorage, RIGHT_RAIL_WIDTH_KEY, RIGHT_RAIL_LIMITS)
+  )
   const [darkTheme, setDarkTheme] = useState(initialTheme)
   const [composerDockHeight, setComposerDockHeight] = useState(0)
   const inspectorIsNarrow = useMediaQuery('(max-width: 72rem)')
   const railIsNarrow = useMediaQuery('(max-width: 48rem)')
+  const viewportWidth = useViewportWidth()
 
+  const appShellRef = useRef<HTMLDivElement>(null)
   const activeThreadRef = useRef<string | undefined>(undefined)
   const draftIdRef = useRef(draftId)
   const loadRequestRef = useRef(0)
@@ -218,6 +255,43 @@ export function App() {
   const statusRef = useRef<ServerStatus['phase']>('starting')
   const hasHydratedRef = useRef(false)
   const preferDraftRef = useRef(false)
+  const desktopAssetRailVisible = !railIsNarrow && !railCollapsed
+  const desktopRightRailVisible = !inspectorIsNarrow && !rightRailCollapsed
+  const fittedSidebarWidths = useMemo(() => fitSidebarWidths(
+    viewportWidth,
+    assetRailWidth,
+    rightRailWidth,
+    desktopAssetRailVisible,
+    desktopRightRailVisible
+  ), [
+    assetRailWidth,
+    desktopAssetRailVisible,
+    desktopRightRailVisible,
+    rightRailWidth,
+    viewportWidth
+  ])
+  const assetRailResizeMax = Math.max(
+    ASSET_RAIL_LIMITS.minWidth,
+    Math.min(
+      ASSET_RAIL_LIMITS.maxWidth,
+      viewportWidth
+        - MINIMUM_CONVERSATION_WIDTH
+        - (desktopRightRailVisible ? fittedSidebarWidths.right : 0)
+    )
+  )
+  const rightRailResizeMax = Math.max(
+    RIGHT_RAIL_LIMITS.minWidth,
+    Math.min(
+      RIGHT_RAIL_LIMITS.maxWidth,
+      viewportWidth
+        - MINIMUM_CONVERSATION_WIDTH
+        - (desktopAssetRailVisible ? fittedSidebarWidths.left : 0)
+    )
+  )
+  const appShellStyle = {
+    '--asset-rail-width': `${fittedSidebarWidths.left}px`,
+    '--right-rail-width': `${fittedSidebarWidths.right}px`
+  } as CSSProperties
 
   const applySnapshot = useCallback((nextSnapshot: ThreadSnapshot): void => {
     if (activeThreadRef.current !== nextSnapshot.thread.id) return
@@ -520,6 +594,14 @@ export function App() {
   useEffect(() => {
     window.localStorage.setItem('kody.rightRailCollapsed', String(rightRailCollapsed))
   }, [rightRailCollapsed])
+
+  useEffect(() => {
+    window.localStorage.setItem(ASSET_RAIL_WIDTH_KEY, String(assetRailWidth))
+  }, [assetRailWidth])
+
+  useEffect(() => {
+    window.localStorage.setItem(RIGHT_RAIL_WIDTH_KEY, String(rightRailWidth))
+  }, [rightRailWidth])
 
   useEffect(() => {
     if (!railOpen && !inspectorOpen) return
@@ -1214,7 +1296,10 @@ export function App() {
     }
     if (command === 'focus-assets') {
       setRailCollapsed(false)
-      if (railIsNarrow) setRailOpen(true)
+      if (railIsNarrow) {
+        setInspectorOpen(false)
+        setRailOpen(true)
+      }
       requestAnimationFrame(() => document.querySelector<HTMLInputElement>('#asset-filter')?.focus())
       return
     }
@@ -1227,11 +1312,15 @@ export function App() {
       return
     }
     if (command === 'toggle-rail') {
-      if (railIsNarrow) setRailOpen((current) => !current)
+      if (railIsNarrow) {
+        setInspectorOpen(false)
+        setRailOpen((current) => !current)
+      }
       else setRailCollapsed((current) => !current)
       return
     }
     if (inspectorIsNarrow) {
+      setRailOpen(false)
       setRightRailCollapsed(false)
       setInspectorCollapsed(false)
       setInspectorOpen((current) => !current)
@@ -1270,11 +1359,32 @@ export function App() {
       || snapshot?.processes.some(isProcessActive))
   )
 
+  const resizeAssetRail = useCallback((width: number): void => {
+    const nextWidth = clampSidebarWidth(
+      width,
+      ASSET_RAIL_LIMITS.minWidth,
+      assetRailResizeMax
+    )
+    setAssetRailWidth(nextWidth)
+    setAnnouncement(`Asset sidebar width ${nextWidth} pixels`)
+  }, [assetRailResizeMax])
+
+  const resizeRightRail = useCallback((width: number): void => {
+    const nextWidth = clampSidebarWidth(
+      width,
+      RIGHT_RAIL_LIMITS.minWidth,
+      rightRailResizeMax
+    )
+    setRightRailWidth(nextWidth)
+    setAnnouncement(`Right sidebar width ${nextWidth} pixels`)
+  }, [rightRailResizeMax])
+
   const toggleInspectorDetails = (): void => {
     setInspectorCollapsed((current) => !current)
   }
   const toggleRightSidebar = (): void => {
     if (inspectorIsNarrow) {
+      setRailOpen(false)
       setRightRailCollapsed(false)
       setInspectorCollapsed(false)
       setInspectorOpen((current) => !current)
@@ -1284,7 +1394,11 @@ export function App() {
   }
 
   return (
-    <div className={`app-shell${railCollapsed ? ' app-shell--rail-collapsed' : ''}${inspectorCollapsed ? ' app-shell--inspector-collapsed' : ''}${rightRailCollapsed && !inspectorIsNarrow ? ' app-shell--right-rail-collapsed' : ''}${bridge.platform === 'darwin' ? ' app-shell--darwin' : ''}`}>
+    <div
+      ref={appShellRef}
+      className={`app-shell${railCollapsed ? ' app-shell--rail-collapsed' : ''}${inspectorCollapsed ? ' app-shell--inspector-collapsed' : ''}${rightRailCollapsed && !inspectorIsNarrow ? ' app-shell--right-rail-collapsed' : ''}${bridge.platform === 'darwin' ? ' app-shell--darwin' : ''}`}
+      style={appShellStyle}
+    >
       <a className="skip-link" href="#main-content">Skip to conversation</a>
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {announcement}
@@ -1306,7 +1420,7 @@ export function App() {
 
       {((railOpen && railIsNarrow) || (inspectorOpen && inspectorIsNarrow)) ? (
         <button
-          className="drawer-scrim"
+          className={`drawer-scrim drawer-scrim--${railOpen && railIsNarrow ? 'asset' : 'inspector'}`}
           type="button"
           onClick={() => {
             setRailOpen(false)
@@ -1328,6 +1442,7 @@ export function App() {
           contextCount={contextCount}
           contextActive={contextActive}
           onOpenRail={() => {
+            setInspectorOpen(false)
             setRailCollapsed(false)
             setRailOpen(true)
           }}
@@ -1457,7 +1572,10 @@ export function App() {
         </main>
       </section>
 
-      <div id="right-rail" className="right-rail">
+      <div
+        id="right-rail"
+        className={`right-rail${inspectorOpen && inspectorIsNarrow ? ' right-rail--inspector-open' : ''}`}
+      >
         {snapshot && threadContext ? (
           <ThreadContextCard
             snapshot={snapshot}
@@ -1501,6 +1619,34 @@ export function App() {
           onAddProject={addProjectContext}
         />
       </div>
+
+      {desktopAssetRailVisible ? (
+        <SidebarResizeHandle
+          side="left"
+          label="Resize asset sidebar"
+          controls="asset-rail"
+          value={fittedSidebarWidths.left}
+          min={ASSET_RAIL_LIMITS.minWidth}
+          max={assetRailResizeMax}
+          defaultValue={ASSET_RAIL_LIMITS.defaultWidth}
+          containerRef={appShellRef}
+          onChange={resizeAssetRail}
+        />
+      ) : null}
+
+      {desktopRightRailVisible ? (
+        <SidebarResizeHandle
+          side="right"
+          label="Resize right sidebar"
+          controls="right-rail"
+          value={fittedSidebarWidths.right}
+          min={RIGHT_RAIL_LIMITS.minWidth}
+          max={rightRailResizeMax}
+          defaultValue={RIGHT_RAIL_LIMITS.defaultWidth}
+          containerRef={appShellRef}
+          onChange={resizeRightRail}
+        />
+      ) : null}
 
       <ProviderSettingsDialog
         open={providerSettingsOpen}

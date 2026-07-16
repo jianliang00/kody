@@ -14,7 +14,9 @@ describe('UpdateIndicator', () => {
         onAction={onAction}
       />
     )
-    fireEvent.click(screen.getByRole('button', { name: 'Download Kody 0.2.0' }))
+    const downloadButton = screen.getByRole('button', { name: 'Download Kody 0.2.0' })
+    expect(downloadButton.querySelectorAll('svg')).toHaveLength(1)
+    fireEvent.click(downloadButton)
     expect(onAction).toHaveBeenCalledOnce()
 
     rerender(
