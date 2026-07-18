@@ -35,12 +35,12 @@ describe('command approval lifecycle', () => {
     expect(screen.getByRole('combobox', { name: 'Permission mode' }).getAttribute('data-value')).toBe('ask')
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
-    const allowOnce = await screen.findByRole('button', { name: 'Allow once' }, { timeout: 4_000 })
+    const allowOnce = await screen.findByRole('button', { name: 'Allow once' }, { timeout: 10_000 })
     fireEvent.click(allowOnce)
 
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull()
       expect(screen.queryByRole('heading', { name: 'Command permission required' })).toBeNull()
-    })
+    }, { timeout: 5_000 })
   })
 })

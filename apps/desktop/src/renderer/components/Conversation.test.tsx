@@ -254,3 +254,131 @@ describe('assistant Markdown line breaks', () => {
     expect(container.querySelector('.message--live .markdown p br')).toBeTruthy()
   })
 })
+
+describe('tool activity in messages', () => {
+  const baseProps = {
+    threads: [snapshot.thread],
+    projects: [],
+    pendingApprovals: [],
+    pendingUserInputs: [],
+    resolvingApprovals: new Set<string>(),
+    resolvingUserInputs: new Set<string>(),
+    bottomInset: 140,
+    onApproval: vi.fn(async () => undefined),
+    onUserInput: vi.fn(async () => undefined)
+  }
+
+  it('pairs a durable call with its result and keeps details collapsed by default', () => {
+    const toolSnapshot: ThreadSnapshot = {
+      ...snapshot,
+      messages: [
+        {
+          id: 'assistant-tool-call',
+          thread_id: snapshot.thread.id,
+          turn_id: 'turn-tool',
+          role: 'assistant',
+          parts: [{
+            type: 'tool_call',
+            id: 'call-shell',
+            name: 'shell',
+            arguments: { command: 'cargo test --workspace', cwd: '/tmp/workspace-1' }
+          }],
+          references: [],
+          created_at: '2026-07-13T00:00:01Z'
+        },
+        {
+          id: 'tool-result',
+          thread_id: snapshot.thread.id,
+          turn_id: 'turn-tool',
+          role: 'tool',
+          parts: [{
+            type: 'tool_result',
+            tool_call_id: 'call-shell',
+            name: 'shell',
+            content: 'test result: ok',
+            is_error: false,
+            metadata: { exit_code: 0 }
+          }],
+          references: [],
+          created_at: '2026-07-13T00:00:02Z'
+        }
+      ]
+    }
+
+    const { container } = render(
+      <Conversation {...baseProps} snapshot={toolSnapshot} events={[]} running={false} />
+    )
+
+    const details = container.querySelector<HTMLDetailsElement>('.tool-activity')
+    expect(details).toBeTruthy()
+    expect(details?.open).toBe(false)
+    expect(screen.getByText('Shell')).toBeTruthy()
+    expect(screen.getByTitle('cargo test --workspace')).toBeTruthy()
+    expect(screen.getAllByText('Done')).toHaveLength(1)
+    expect(container.querySelectorAll('.tool-activity')).toHaveLength(1)
+
+    fireEvent.click(details!.querySelector('summary')!)
+    expect(details?.open).toBe(true)
+    expect(screen.getByText('test result: ok')).toBeTruthy()
+    expect(screen.getByText(/"exit_code": 0/)).toBeTruthy()
+  })
+
+  it('shows live tool execution and updates the same disclosure on completion', () => {
+    const started = {
+      id: 'event-tool-started',
+      thread_id: snapshot.thread.id,
+      turn_id: 'turn-tool',
+      sequence: 1,
+      created_at: '2026-07-13T00:00:01Z',
+      event: {
+        type: 'tool_started' as const,
+        tool_call_id: 'call-read',
+        name: 'read_file',
+        arguments: { path: 'src/main.rs' }
+      }
+    }
+    const { container, rerender } = render(
+      <Conversation
+        {...baseProps}
+        snapshot={{ ...snapshot, messages: [] }}
+        events={[started]}
+        running
+      />
+    )
+
+    expect(screen.getByText('Read file')).toBeTruthy()
+    expect(screen.getByTitle('src/main.rs')).toBeTruthy()
+    expect(screen.getByText('Running')).toBeTruthy()
+    expect(container.querySelector<HTMLDetailsElement>('.tool-activity')?.open).toBe(false)
+    expect(container.querySelector('.thinking-dots')).toBeNull()
+
+    rerender(
+      <Conversation
+        {...baseProps}
+        snapshot={{ ...snapshot, messages: [] }}
+        events={[
+          started,
+          {
+            id: 'event-tool-completed',
+            thread_id: snapshot.thread.id,
+            turn_id: 'turn-tool',
+            sequence: 2,
+            created_at: '2026-07-13T00:00:02Z',
+            event: {
+              type: 'tool_completed',
+              tool_call_id: 'call-read',
+              name: 'read_file',
+              content: 'fn main() {}',
+              is_error: false,
+              metadata: { bytes: 12 }
+            }
+          }
+        ]}
+        running
+      />
+    )
+
+    expect(screen.getByText('Done')).toBeTruthy()
+    expect(container.querySelectorAll('.tool-activity')).toHaveLength(1)
+  })
+})

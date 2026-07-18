@@ -101,6 +101,19 @@ struct PersistedTurnOutcome {
     error: Option<KodyError>,
 }
 
+struct ExternalToolActivity {
+    id: String,
+    name: String,
+    arguments: Value,
+    result: Option<ExternalToolResult>,
+}
+
+struct ExternalToolResult {
+    content: String,
+    is_error: bool,
+    metadata: Value,
+}
+
 pub struct AgentRuntime {
     store: Arc<dyn StateStore>,
     providers: Arc<ProviderRegistry>,
@@ -408,16 +421,21 @@ impl AgentRuntime {
             // Cancellation remains authoritative at the Kody runtime boundary.
             // A backend receives the token so it can interrupt its remote work,
             // but correctness must not depend on every implementation polling it.
-            let final_text = tokio::select! {
+            let backend_result = tokio::select! {
                 biased;
-                _ = cancellation.cancelled() => return Err(KodyError::Cancelled),
+                _ = cancellation.cancelled() => Err(KodyError::Cancelled),
                 response = backend.execute(
                     &turn,
                     context,
                     cancellation.clone(),
-                    emitter.clone(),
-                ) => response?,
+                    emitter.clone()
+                ) => response,
             };
+            let activity_result = self
+                .persist_external_tool_activity(&turn, emitter.tool_events())
+                .await;
+            let final_text = backend_result?;
+            activity_result?;
             check_cancelled(&cancellation)?;
             self.persist_external_response(&turn, final_text.clone())
                 .await?;
@@ -759,6 +777,115 @@ impl AgentRuntime {
             created_at: Utc::now(),
         };
         self.store.append_message(message).await.map(|_| ())
+    }
+
+    async fn persist_external_tool_activity(
+        &self,
+        turn: &Turn,
+        events: Vec<AgentEvent>,
+    ) -> Result<()> {
+        let mut activities = Vec::<ExternalToolActivity>::new();
+        for event in events {
+            match event {
+                AgentEvent::ToolStarted {
+                    tool_call_id,
+                    name,
+                    arguments,
+                } => {
+                    if let Some(activity) = activities
+                        .iter_mut()
+                        .find(|activity| activity.id == tool_call_id)
+                    {
+                        activity.name = name;
+                        activity.arguments = arguments;
+                    } else {
+                        activities.push(ExternalToolActivity {
+                            id: tool_call_id,
+                            name,
+                            arguments,
+                            result: None,
+                        });
+                    }
+                }
+                AgentEvent::ToolCompleted {
+                    tool_call_id,
+                    name,
+                    content,
+                    is_error,
+                    metadata,
+                } => {
+                    let result = ExternalToolResult {
+                        content,
+                        is_error,
+                        metadata: metadata.clone(),
+                    };
+                    if let Some(activity) = activities
+                        .iter_mut()
+                        .find(|activity| activity.id == tool_call_id)
+                    {
+                        activity.name = name;
+                        activity.result = Some(result);
+                    } else {
+                        activities.push(ExternalToolActivity {
+                            id: tool_call_id,
+                            name,
+                            arguments: metadata,
+                            result: Some(result),
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        if activities.is_empty() {
+            return Ok(());
+        }
+
+        self.store
+            .append_message(Message {
+                id: MessageId::new(),
+                thread_id: turn.thread_id,
+                turn_id: Some(turn.id),
+                role: MessageRole::Assistant,
+                parts: activities
+                    .iter()
+                    .map(|activity| MessagePart::ToolCall {
+                        id: activity.id.clone(),
+                        name: activity.name.clone(),
+                        arguments: activity.arguments.clone(),
+                    })
+                    .collect(),
+                references: Vec::new(),
+                created_at: Utc::now(),
+            })
+            .await?;
+
+        for activity in activities {
+            let result = activity.result.unwrap_or_else(|| ExternalToolResult {
+                content: "The external tool did not report completion before the Turn ended."
+                    .into(),
+                is_error: true,
+                metadata: Value::Null,
+            });
+            self.store
+                .append_message(Message {
+                    id: MessageId::new(),
+                    thread_id: turn.thread_id,
+                    turn_id: Some(turn.id),
+                    role: MessageRole::Tool,
+                    parts: vec![MessagePart::ToolResult {
+                        tool_call_id: activity.id,
+                        name: activity.name,
+                        content: result.content,
+                        is_error: result.is_error,
+                        metadata: result.metadata,
+                    }],
+                    references: Vec::new(),
+                    created_at: Utc::now(),
+                })
+                .await?;
+        }
+        Ok(())
     }
 
     async fn persist_tool_result(&self, turn: &Turn, result: ToolResult) -> Result<()> {
@@ -1129,6 +1256,7 @@ pub struct TurnEventEmitter {
 struct TurnEventState {
     sequence: u64,
     terminal_emitted: bool,
+    tool_events: Vec<AgentEvent>,
 }
 
 impl TurnEventEmitter {
@@ -1153,6 +1281,10 @@ impl TurnEventEmitter {
             return;
         }
         self.publish(&mut state, event);
+    }
+
+    fn tool_events(&self) -> Vec<AgentEvent> {
+        self.lock_state().tool_events.clone()
     }
 
     fn emit_terminal(&self, event: AgentEvent) {
@@ -1180,6 +1312,12 @@ impl TurnEventEmitter {
     }
 
     fn publish(&self, state: &mut TurnEventState, event: AgentEvent) {
+        if matches!(
+            &event,
+            AgentEvent::ToolStarted { .. } | AgentEvent::ToolCompleted { .. }
+        ) {
+            state.tool_events.push(event.clone());
+        }
         state.sequence += 1;
         self.events.publish(EventEnvelope::new(
             self.thread_id,

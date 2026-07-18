@@ -1,7 +1,5 @@
 import {
   Check,
-  ChevronRight,
-  Command,
   LoaderCircle,
   MessageCircle,
   ShieldAlert,
@@ -24,6 +22,7 @@ import type {
   UserInputAnswers
 } from '@shared/protocol'
 import { ReferenceChips } from './ReferenceChips'
+import { ToolActivityList, type ToolActivityItem } from './ToolActivity'
 
 interface ConversationProps {
   snapshot: ThreadSnapshot
@@ -95,31 +94,85 @@ function Markdown({ children }: { children: string }) {
   )
 }
 
-function ToolParts({ message }: { message: ChatMessage }) {
-  const parts = message.parts.filter((part) => part.type !== 'text')
-  if (parts.length === 0) return null
-  return (
-    <div className="durable-tool-parts">
-      {parts.map((part, index) => {
-        if (part.type === 'tool_call') {
-          return (
-            <details key={`${part.id}-${index}`}>
-              <summary><Command aria-hidden="true" size={14} /> Called {part.name}</summary>
-              <pre>{JSON.stringify(part.arguments, null, 2)}</pre>
-            </details>
-          )
-        }
-        return (
-          <details key={`${part.tool_call_id}-${index}`}>
-            <summary className={part.is_error ? 'tool-error' : undefined}>
-              <ChevronRight aria-hidden="true" size={14} /> {part.name} {part.is_error ? 'failed' : 'finished'}
-            </summary>
-            <pre>{part.content}</pre>
-          </details>
-        )
-      })}
-    </div>
-  )
+interface ToolActivityIndex {
+  activities: Map<string, ToolActivityItem>
+  durableCallIds: Set<string>
+  liveOrder: string[]
+}
+
+function indexToolActivity(messages: ChatMessage[], events: EventEnvelope[]): ToolActivityIndex {
+  const activities = new Map<string, ToolActivityItem>()
+  const durableCallIds = new Set<string>()
+  const liveOrder: string[] = []
+
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type === 'tool_call') {
+        durableCallIds.add(part.id)
+        activities.set(part.id, {
+          id: part.id,
+          name: part.name,
+          arguments: part.arguments,
+          status: 'pending'
+        })
+      } else if (part.type === 'tool_result') {
+        const existing = activities.get(part.tool_call_id)
+        activities.set(part.tool_call_id, {
+          ...existing,
+          id: part.tool_call_id,
+          name: part.name,
+          content: part.content,
+          metadata: part.metadata,
+          status: part.is_error ? 'failed' : 'completed'
+        })
+      }
+    }
+  }
+
+  for (const envelope of events) {
+    const event = envelope.event
+    if (event.type !== 'tool_started' && event.type !== 'tool_completed') continue
+    if (!liveOrder.includes(event.tool_call_id)) liveOrder.push(event.tool_call_id)
+    const existing = activities.get(event.tool_call_id)
+    if (event.type === 'tool_started') {
+      if (existing?.status === 'completed' || existing?.status === 'failed') continue
+      activities.set(event.tool_call_id, {
+        ...existing,
+        id: event.tool_call_id,
+        name: event.name,
+        arguments: existing?.arguments ?? event.arguments,
+        status: 'running'
+      })
+    } else {
+      activities.set(event.tool_call_id, {
+        ...existing,
+        id: event.tool_call_id,
+        name: event.name,
+        content: event.content,
+        metadata: event.metadata,
+        status: event.is_error ? 'failed' : 'completed'
+      })
+    }
+  }
+
+  return { activities, durableCallIds, liveOrder }
+}
+
+function MessageToolActivity({
+  message,
+  index
+}: {
+  message: ChatMessage
+  index: ToolActivityIndex
+}) {
+  const items = message.parts.flatMap<ToolActivityItem>((part) => {
+    if (part.type === 'text') return []
+    if (part.type === 'tool_result' && index.durableCallIds.has(part.tool_call_id)) return []
+    const id = part.type === 'tool_call' ? part.id : part.tool_call_id
+    const activity = index.activities.get(id)
+    return activity ? [activity] : []
+  })
+  return <ToolActivityList items={items} />
 }
 
 function ApprovalCard({
@@ -363,6 +416,19 @@ export function Conversation({
       .join(''),
     [events]
   )
+  const toolActivityIndex = useMemo(
+    () => indexToolActivity(snapshot.messages, events),
+    [snapshot.messages, events]
+  )
+  const liveToolActivity = useMemo(
+    () => toolActivityIndex.liveOrder
+      .filter((id) => !toolActivityIndex.durableCallIds.has(id))
+      .flatMap((id) => {
+        const activity = toolActivityIndex.activities.get(id)
+        return activity ? [activity] : []
+      }),
+    [toolActivityIndex]
+  )
   const latestFailure = [...events].reverse().find(
     (envelope) => envelope.event.type === 'turn_failed' || envelope.event.type === 'turn_cancelled'
   )
@@ -420,12 +486,12 @@ export function Conversation({
                 </header>
                 {text ? <p dir="auto">{text}</p> : null}
                 <MessageReferences references={message.references} threads={threads} projects={projects} />
-                <ToolParts message={message} />
+                <MessageToolActivity message={message} index={toolActivityIndex} />
               </article>
             )
           }
           if (message.role === 'tool') {
-            return <ToolParts message={message} key={message.id} />
+            return <MessageToolActivity message={message} index={toolActivityIndex} key={message.id} />
           }
           return (
             <article className="message message--assistant" key={message.id}>
@@ -437,7 +503,7 @@ export function Conversation({
                 <time dateTime={message.created_at}>{formatTime(message.created_at)}</time>
               </header>
               {text ? <Markdown>{text}</Markdown> : null}
-              <ToolParts message={message} />
+              <MessageToolActivity message={message} index={toolActivityIndex} />
             </article>
           )
         })}
@@ -451,8 +517,13 @@ export function Conversation({
               </span>
               <span className="live-label">Live</span>
             </header>
+            <ToolActivityList items={liveToolActivity} />
             {reasoning ? <p className="reasoning-line">{reasoning}</p> : null}
-            {liveOutput ? <Markdown>{liveOutput}</Markdown> : <div className="thinking-dots" aria-label="Waiting for model output"><span /><span /><span /></div>}
+            {liveOutput
+              ? <Markdown>{liveOutput}</Markdown>
+              : liveToolActivity.length === 0
+                ? <div className="thinking-dots" aria-label="Waiting for model output"><span /><span /><span /></div>
+                : null}
           </article>
         ) : null}
 

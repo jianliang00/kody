@@ -310,6 +310,98 @@ impl ExternalTurnBackend for SuccessfulExternalBackend {
     }
 }
 
+#[derive(Debug)]
+struct ToolingExternalBackend;
+
+#[async_trait]
+impl ExternalTurnBackend for ToolingExternalBackend {
+    async fn execute(
+        &self,
+        _turn: &Turn,
+        _context: ResolvedContext,
+        _cancellation: CancellationToken,
+        events: TurnEventEmitter,
+    ) -> Result<String> {
+        events.emit(AgentEvent::ToolStarted {
+            tool_call_id: "external-call-1".into(),
+            name: "codex_command".into(),
+            arguments: json!({ "command": "cargo test --workspace" }),
+        });
+        events.emit(AgentEvent::ToolCompleted {
+            tool_call_id: "external-call-1".into(),
+            name: "codex_command".into(),
+            content: "test result: ok".into(),
+            is_error: false,
+            metadata: json!({ "exitCode": 0 }),
+        });
+        Ok("All tests passed.".into())
+    }
+}
+
+#[tokio::test]
+async fn external_backend_tool_activity_is_part_of_durable_message_history() {
+    let (engine, _state) = engine().await;
+    engine
+        .providers()
+        .register(Arc::new(kody_core::provider::EchoProvider::default()))
+        .unwrap();
+    let (thread, _, _) = engine
+        .create_thread("External tool history", None)
+        .await
+        .unwrap();
+    let turn = engine
+        .runtime()
+        .prepare_turn(StartTurn {
+            thread_id: thread.id,
+            message: "Run the tests".into(),
+            references: Vec::new(),
+            provider: "echo".into(),
+            model: None,
+            permission_mode: None,
+            temperature: None,
+            max_output_tokens: None,
+        })
+        .await
+        .unwrap();
+
+    engine
+        .runtime()
+        .execute_turn_with_backend(
+            turn.id,
+            CancellationToken::new(),
+            Arc::new(ToolingExternalBackend),
+        )
+        .await
+        .unwrap();
+
+    let messages = engine.store().list_messages(thread.id).await.unwrap();
+    assert_eq!(messages.len(), 4);
+    assert_eq!(messages[0].role, MessageRole::User);
+    assert_eq!(messages[1].role, MessageRole::Assistant);
+    assert!(matches!(
+        &messages[1].parts[..],
+        [MessagePart::ToolCall { id, name, arguments }]
+            if id == "external-call-1"
+                && name == "codex_command"
+                && arguments["command"] == "cargo test --workspace"
+    ));
+    assert_eq!(messages[2].role, MessageRole::Tool);
+    assert!(matches!(
+        &messages[2].parts[..],
+        [MessagePart::ToolResult {
+            tool_call_id,
+            content,
+            is_error: false,
+            metadata,
+            ..
+        }] if tool_call_id == "external-call-1"
+            && content == "test result: ok"
+            && metadata["exitCode"] == 0
+    ));
+    assert_eq!(messages[3].role, MessageRole::Assistant);
+    assert_eq!(messages[3].text(), "All tests passed.");
+}
+
 #[tokio::test]
 async fn external_backend_uses_durable_lifecycle_and_generates_title_after_terminal_event() {
     let (engine, _state) = engine().await;
