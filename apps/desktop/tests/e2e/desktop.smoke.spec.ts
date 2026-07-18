@@ -24,18 +24,6 @@ async function selectKodyOption(page: Page, label: string | RegExp, option: stri
   await expect(trigger).toHaveAttribute('aria-expanded', 'false')
 }
 
-async function dragSidebarHandle(page: Page, label: string, deltaX: number): Promise<void> {
-  const handle = page.getByRole('separator', { name: label })
-  const box = await handle.boundingBox()
-  expect(box, `${label} should have a layout box`).not.toBeNull()
-  const startX = box!.x + box!.width / 2
-  const y = box!.y + Math.min(160, box!.height / 2)
-  await page.mouse.move(startX, y)
-  await page.mouse.down()
-  await page.mouse.move(startX + deltaX, y, { steps: 5 })
-  await page.mouse.up()
-}
-
 function isolatedEnvironment(): Record<string, string> {
   const environment = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
@@ -123,16 +111,23 @@ test('creates the first Thread through one idempotent draft request', async () =
     expect(initialAssetRailWidth).toBe(272)
     expect(initialRightRailWidth).toBe(320)
 
-    await dragSidebarHandle(page, 'Resize asset sidebar', 48)
+    // Pointer drag behavior is covered by the focused component tests. Use the
+    // separator's accessible keyboard contract here so the Electron integration
+    // remains deterministic under GitHub Actions' virtual display server.
+    await assetResizeHandle.focus()
+    await page.keyboard.press('Shift+ArrowRight')
+    await page.keyboard.press('Shift+ArrowRight')
+    await page.keyboard.press('Shift+ArrowRight')
     await expect.poll(async () => Math.round((await assetRail.boundingBox())?.width ?? 0)).toBe(320)
     await expect.poll(() => page.evaluate(() => window.localStorage.getItem('kody.assetRailWidth'))).toBe('320')
-    await assetResizeHandle.focus()
     await page.keyboard.press('ArrowLeft')
     await expect.poll(async () => Math.round((await assetRail.boundingBox())?.width ?? 0)).toBe(312)
 
-    await dragSidebarHandle(page, 'Resize right sidebar', -48)
-    await expect.poll(async () => Math.round((await rightRail.boundingBox())?.width ?? 0)).toBe(368)
     await rightResizeHandle.focus()
+    await page.keyboard.press('Shift+ArrowLeft')
+    await page.keyboard.press('Shift+ArrowLeft')
+    await page.keyboard.press('Shift+ArrowLeft')
+    await expect.poll(async () => Math.round((await rightRail.boundingBox())?.width ?? 0)).toBe(368)
     await page.keyboard.press('ArrowRight')
     await expect.poll(async () => Math.round((await rightRail.boundingBox())?.width ?? 0)).toBe(360)
     await expect.poll(() => page.evaluate(() => ({
