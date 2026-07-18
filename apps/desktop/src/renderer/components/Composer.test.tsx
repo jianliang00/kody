@@ -48,7 +48,7 @@ describe('Composer provider and model selection', () => {
     expect(screen.getByRole('combobox', { name: 'Model' }).getAttribute('data-value')).toBe('codex-default')
     expect(screen.getByRole('combobox', { name: 'Permission mode' }).getAttribute('data-value')).toBe('ask')
     expect((screen.getByLabelText('Message') as HTMLTextAreaElement).rows).toBe(2)
-    expect(screen.getByText('Uses the Codex agent loop and tools for this Turn.')).toBeTruthy()
+    expect(screen.queryByText('Uses the Codex agent loop and tools for this Turn.')).toBeNull()
 
     fireEvent.click(screen.getByRole('combobox', { name: 'Permission mode' }))
     fireEvent.click(screen.getByRole('option', { name: 'Read only' }))

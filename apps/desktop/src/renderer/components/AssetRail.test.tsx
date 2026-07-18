@@ -32,8 +32,10 @@ describe('AssetRail', () => {
     expect(onOpenSettings).toHaveBeenCalledOnce()
     expect(onClose).toHaveBeenCalledOnce()
 
-    fireEvent.click(within(controls).getByRole('button', { name: 'Download Kody 0.1.7' }))
+    const statusRow = rail.querySelector('.asset-rail__status-row')
+    expect(statusRow).not.toBeNull()
+    fireEvent.click(within(statusRow as HTMLElement).getByRole('button', { name: 'Download Kody 0.1.7' }))
     expect(onUpdateAction).toHaveBeenCalledOnce()
-    expect(within(rail).getByRole('status').textContent).toContain('Local server connected')
+    expect(within(statusRow as HTMLElement).getByRole('status').textContent).toContain('Local server connected')
   })
 })

@@ -159,18 +159,20 @@ html[data-sidebar-resizing] * { cursor: col-resize !important; }
 .sidebar-utility__copy strong { font-size: var(--font-body); font-weight: var(--weight-medium); }
 .sidebar-utility__copy span { color: var(--muted); font-size: var(--font-caption); }
 .sidebar-utility__chevron { color: var(--faint); }
-.update-status { justify-self: stretch; width: 100%; min-height: 2.1rem; padding: .3rem .5rem; display: inline-flex; align-items: center; gap: .35rem; overflow: hidden; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface); color: var(--muted); text-align: start; }
+.update-status { flex: 0 0 auto; min-height: 1.8rem; padding: .2rem .45rem; display: inline-flex; align-items: center; gap: .3rem; overflow: hidden; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface); color: var(--muted); text-align: start; }
 .update-status:not(:disabled):hover { border-color: color-mix(in srgb,currentColor 35%,var(--border-strong)); background: var(--hover); }
 .update-status__icon { width: 1rem; height: 1rem; display: grid; place-items: center; flex: 0 0 auto; }
 .update-status__copy { min-width: 0; display: flex; align-items: baseline; gap: .3rem; white-space: nowrap; }
 .update-status__copy strong { color: var(--text); font-size: var(--font-body); font-weight: var(--weight-medium); }
-.update-status__copy span { overflow: hidden; color: currentColor; font-size: var(--font-caption); text-overflow: ellipsis; white-space: nowrap; }
+.update-status__copy span { display: none; }
 .update-status:disabled { cursor: default; opacity: .72; }
 .update-status--available, .update-status--downloaded { border-color: color-mix(in srgb,var(--thread) 38%,var(--border)); background: var(--thread-soft); color: var(--thread); }
 .update-status--error { border-color: color-mix(in srgb,var(--danger) 38%,var(--border)); background: var(--danger-soft); color: var(--danger); }
 .update-status--up-to-date { border-color: color-mix(in srgb,var(--success) 34%,var(--border)); background: var(--success-soft); color: var(--success); }
 .update-status--checking, .update-status--downloading { border-color: color-mix(in srgb,var(--workspace) 35%,var(--border)); background: var(--workspace-soft); color: var(--workspace); }
-.asset-rail__connection { min-height: 1.8rem; padding: .3rem .4rem 0; display: flex; align-items: center; gap: .45rem; border-top: 1px solid var(--border); color: var(--muted); font-size: var(--font-caption); }
+.asset-rail__status-row { min-width: 0; min-height: 2.3rem; padding: .4rem .4rem 0; display: flex; align-items: center; justify-content: space-between; gap: .45rem; border-top: 1px solid var(--border); }
+.asset-rail__connection { min-width: 0; display: flex; align-items: center; gap: .45rem; color: var(--muted); font-size: var(--font-caption); }
+.asset-rail__connection > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .connection-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
 .connection-dot--connected { background: var(--success); }
 .connection-dot--error { background: var(--danger); }
@@ -294,6 +296,7 @@ html[data-sidebar-resizing] * { cursor: col-resize !important; }
 .composer { position: relative; pointer-events: auto; padding: .625rem .7rem; border: 1px solid var(--border-strong); border-radius: 13px; background: var(--surface-strong); box-shadow: 0 10px 40px rgb(0 0 0 / 10%); }
 .composer__topline { display: flex; align-items: center; justify-content: space-between; gap: 1rem; color: var(--muted); font-size: var(--font-caption); font-weight: var(--weight-medium); }
 .composer__provider { display: flex; align-items: center; gap: .35rem; }
+.composer__provider .kody-select__trigger--toolbar { padding-inline: .625rem .5rem; }
 .composer textarea { width: 100%; min-height: 3rem; max-height: 10rem; resize: vertical; padding: .4rem .15rem; border: 0; outline: 0; background: transparent; line-height: 1.45; }
 .composer textarea::placeholder { color: var(--faint); }
 .composer__footer { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; }

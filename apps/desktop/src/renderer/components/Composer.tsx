@@ -121,10 +121,6 @@ export function Composer({
     if (model && !byId.has(model)) byId.set(model, { id: model, display_name: model })
     return [...byId.values()]
   }, [model, models, selectedProvider?.default_model])
-  const usesCodexAgentLoop = selectedProvider
-    ? selectedProvider.kind === 'codex' || selectedProvider.id === 'codex'
-    : false
-
   const closePalette = (restore: 'composer' | 'button' = 'composer'): void => {
     setPaletteOpen(false)
     setManualPalette(false)
@@ -286,10 +282,6 @@ export function Composer({
           />
         </div>
       </div>
-
-      {usesCodexAgentLoop ? (
-        <p className="composer__hint">Uses the Codex agent loop and tools for this Turn.</p>
-      ) : null}
 
       {references.length > 0 ? (
         <div className="composer__references">

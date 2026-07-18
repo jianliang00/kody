@@ -98,6 +98,12 @@ For protocol debugging, call `initialize` over HTTP first, then use a WebSocket 
 
 ## Packaging
 
+After changing `apps/desktop/build/icon.svg`, regenerate the macOS ICNS without flattening its transparent corners:
+
+```bash
+npm run icon:mac
+```
+
 Create an unpacked desktop application:
 
 ```bash

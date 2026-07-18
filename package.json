@@ -16,6 +16,7 @@
     "desktop:test": "npm --workspace @kody/desktop run test",
     "desktop:package": "npm --workspace @kody/desktop run package",
     "desktop:dist": "npm --workspace @kody/desktop run dist",
+    "icon:mac": "bash scripts/generate-macos-icon.sh",
     "release:mac": "scripts/release-macos.sh"
   }
 }

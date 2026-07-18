@@ -88,22 +88,26 @@ test('creates the first Thread through one idempotent draft request', async () =
     const rightRail = page.locator('#right-rail')
     const applicationControls = assetRail.getByLabel('Application controls')
     const openModelSettings = applicationControls.getByRole('button', { name: 'Open model settings' })
-    const updateCapsule = applicationControls.getByRole('button', { name: 'Kody updates unavailable' })
+    const connectionStatus = assetRail.getByRole('status')
+    const updateCapsule = assetRail.getByRole('button', { name: 'Kody updates unavailable' })
     await expect(openModelSettings).toBeVisible()
     await expect(updateCapsule).toBeVisible()
-    const [updateCapsuleBox, settingsButtonBox] = await Promise.all([
+    const [updateCapsuleBox, connectionStatusBox] = await Promise.all([
       updateCapsule.boundingBox(),
-      openModelSettings.boundingBox()
+      connectionStatus.boundingBox()
     ])
     const updateCapsuleStyle = await updateCapsule.evaluate((element) => ({
       borderRadius: getComputedStyle(element).borderRadius,
       copyWhiteSpace: getComputedStyle(element.querySelector('.update-status__copy')!).whiteSpace
     }))
     expect(updateCapsuleBox).not.toBeNull()
-    expect(settingsButtonBox).not.toBeNull()
-    expect(Math.abs((updateCapsuleBox?.x ?? 0) - (settingsButtonBox?.x ?? 0))).toBeLessThanOrEqual(1)
-    expect(Math.abs((updateCapsuleBox?.width ?? 0) - (settingsButtonBox?.width ?? 0))).toBeLessThanOrEqual(1)
-    expect(updateCapsuleBox?.height ?? Infinity).toBeLessThanOrEqual(36)
+    expect(connectionStatusBox).not.toBeNull()
+    expect(updateCapsuleBox?.x ?? 0).toBeGreaterThan((connectionStatusBox?.x ?? 0) + (connectionStatusBox?.width ?? 0))
+    expect(Math.abs(
+      ((updateCapsuleBox?.y ?? 0) + (updateCapsuleBox?.height ?? 0) / 2)
+      - ((connectionStatusBox?.y ?? 0) + (connectionStatusBox?.height ?? 0) / 2)
+    )).toBeLessThanOrEqual(1)
+    expect(updateCapsuleBox?.height ?? Infinity).toBeLessThanOrEqual(30)
     expect(updateCapsuleStyle).toEqual({ borderRadius: '999px', copyWhiteSpace: 'nowrap' })
     await expect(updateCapsule.locator('.update-status__chevron')).toHaveCount(0)
     await expect(page.locator('.titlebar').getByRole('button', { name: 'Open model settings' })).toHaveCount(0)
@@ -365,6 +369,24 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expect(page.getByRole('combobox', { name: 'Provider' })).toHaveAttribute('data-value', 'echo')
     await expect(page.getByRole('combobox', { name: 'Model' })).toHaveAttribute('data-value', 'echo')
     const providerTrigger = page.getByRole('combobox', { name: 'Provider' })
+    const modelTrigger = page.getByRole('combobox', { name: 'Model' })
+    await expect(page.getByText('Uses the Codex agent loop and tools for this Turn.')).toHaveCount(0)
+    const selectTextInsets = await page.evaluate(() => {
+      const provider = document.querySelector<HTMLElement>('#composer-provider')
+      const model = document.querySelector<HTMLElement>('#composer-model')
+      if (!provider || !model) throw new Error('Missing composer model controls')
+      const insets = (element: HTMLElement) => {
+        const style = getComputedStyle(element)
+        return {
+          start: Number.parseFloat(style.paddingInlineStart),
+          end: Number.parseFloat(style.paddingInlineEnd)
+        }
+      }
+      return { provider: insets(provider), model: insets(model) }
+    })
+    expect(selectTextInsets.provider).toEqual(selectTextInsets.model)
+    expect(selectTextInsets.provider.start).toBeGreaterThanOrEqual(10)
+    expect(selectTextInsets.provider.end).toBeGreaterThanOrEqual(8)
     const addContext = page.getByRole('button', { name: 'Add context' })
     const permissionControl = page.locator('.permission-mode-control')
     await page.mouse.move(800, 300)

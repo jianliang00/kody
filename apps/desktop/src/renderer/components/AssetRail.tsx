@@ -156,11 +156,13 @@ export function AssetRail({
             </span>
             <ChevronRight className="sidebar-utility__chevron" aria-hidden="true" size={14} />
           </button>
-          <UpdateIndicator status={updateStatus} onAction={onUpdateAction} />
         </div>
-        <div className="asset-rail__connection" role="status">
-          <span className={`connection-dot connection-dot--${status.phase}`} aria-hidden="true" />
-          <span>{status.phase === 'connected' ? 'Local server connected' : status.phase}</span>
+        <div className="asset-rail__status-row">
+          <div className="asset-rail__connection" role="status">
+            <span className={`connection-dot connection-dot--${status.phase}`} aria-hidden="true" />
+            <span>{status.phase === 'connected' ? 'Local server connected' : status.phase}</span>
+          </div>
+          <UpdateIndicator status={updateStatus} onAction={onUpdateAction} />
         </div>
       </footer>
     </aside>
