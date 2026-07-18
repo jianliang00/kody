@@ -71,12 +71,7 @@ export function TitleBar({
       </div>
 
       <div className="titlebar__actions no-drag">
-        {status.phase === 'connected' ? (
-          <div className="server-pill server-pill--connected" role="status" aria-label="Local server connected">
-            <span aria-hidden="true" />
-            <span>Connected</span>
-          </div>
-        ) : (
+        {status.phase !== 'connected' ? (
           <button
             className={`server-pill server-pill--${status.phase}`}
             type="button"
@@ -87,7 +82,7 @@ export function TitleBar({
             <span>{status.phase}</span>
             <RefreshCcw aria-hidden="true" size={12} />
           </button>
-        )}
+        ) : null}
         <button className="icon-button" type="button" onClick={onToggleTheme} aria-label={`Use ${darkTheme ? 'light' : 'dark'} theme`}>
           {darkTheme ? <Sun aria-hidden="true" size={17} /> : <Moon aria-hidden="true" size={17} />}
         </button>

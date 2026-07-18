@@ -71,7 +71,7 @@ test('creates the first Thread through one idempotent draft request', async () =
     expect(page.url()).toMatch(/^file:/)
     expect(await page.title()).toBe('Kody')
     await expect(page.locator('vite-error-overlay')).toHaveCount(0)
-    await expect(page.getByLabel('Local server connected')).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByLabel('Kody assets').getByText('Local server connected', { exact: true })).toBeVisible({ timeout: 30_000 })
     const assetRail = page.getByLabel('Kody assets')
     const rightRail = page.locator('#right-rail')
     const applicationControls = assetRail.getByLabel('Application controls')
@@ -151,7 +151,7 @@ test('creates the first Thread through one idempotent draft request', async () =
     }
 
     await page.reload()
-    await expect(page.getByLabel('Local server connected')).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByLabel('Kody assets').getByText('Local server connected', { exact: true })).toBeVisible({ timeout: 30_000 })
     await expect.poll(async () => Math.round((await assetRail.boundingBox())?.width ?? 0)).toBe(312)
     await expect.poll(async () => Math.round((await rightRail.boundingBox())?.width ?? 0)).toBe(360)
     if (process.env.KODY_QA_UPDATES_SCREENSHOT) {

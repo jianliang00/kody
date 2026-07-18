@@ -184,9 +184,9 @@ html[data-sidebar-resizing] * { cursor: col-resize !important; }
 .no-drag, button, input, textarea, select { -webkit-app-region: no-drag; }
 .thread-badge, .server-pill { min-height: 1.55rem; padding: .15rem .45rem; display: inline-flex; align-items: center; gap: .3rem; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--muted); font-size: var(--font-caption); text-transform: capitalize; }
 .thread-badge > span, .server-pill > span:first-child { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
-.thread-badge--running > span, .server-pill--connected > span:first-child { background: var(--success); }
+.thread-badge--running > span { background: var(--success); }
 .server-pill { min-width: 0; background: transparent; }
-.server-pill:not(.server-pill--connected):hover { background: var(--hover); }
+.server-pill:hover { background: var(--hover); }
 .server-pill--error > span:first-child { background: var(--danger); }
 .window-controls { align-self: stretch; display: flex; margin-inline-start: .35rem; }
 .window-controls button { min-width: 2.5rem; background: transparent; color: var(--muted); }
