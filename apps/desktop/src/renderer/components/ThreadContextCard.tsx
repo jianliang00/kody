@@ -3,6 +3,7 @@ import {
   Activity,
   Check,
   ChevronDown,
+  ChevronUp,
   Clipboard,
   FolderCog,
   FolderGit2,
@@ -55,19 +56,19 @@ export function ThreadContextCard({
           <p className="eyebrow">Current Thread</p>
           <h2 id="thread-context-card-title">Context</h2>
         </div>
-        {!detailsOpen ? (
-          <button
-            className="icon-button icon-button--small"
-            type="button"
-            onClick={onOpenDetails}
-            aria-label="Expand Content & activity"
-            aria-controls="thread-inspector"
-            aria-expanded="false"
-            title="Expand Content & activity"
-          >
-            <ChevronDown aria-hidden="true" size={15} />
-          </button>
-        ) : null}
+        <button
+          className="icon-button icon-button--small"
+          type="button"
+          onClick={onOpenDetails}
+          aria-label={detailsOpen ? 'Collapse Content & activity' : 'Expand Content & activity'}
+          aria-controls="thread-inspector"
+          aria-expanded={detailsOpen}
+          title={detailsOpen ? 'Collapse Content & activity' : 'Expand Content & activity'}
+        >
+          {detailsOpen
+            ? <ChevronUp aria-hidden="true" size={15} />
+            : <ChevronDown aria-hidden="true" size={15} />}
+        </button>
       </header>
 
       <dl className="thread-context-card__metrics">

@@ -76,7 +76,7 @@ test('creates the first Thread through one idempotent draft request', async () =
     const rightRail = page.locator('#right-rail')
     const applicationControls = assetRail.getByLabel('Application controls')
     const openModelSettings = applicationControls.getByRole('button', { name: 'Open model settings' })
-    const connectionStatus = assetRail.getByRole('status')
+    const connectionStatus = assetRail.locator('.asset-rail__connection')
     const updateCapsule = assetRail.getByRole('button', { name: 'Kody updates unavailable' })
     await expect(openModelSettings).toBeVisible()
     await expect(updateCapsule).toBeVisible()
@@ -86,7 +86,13 @@ test('creates the first Thread through one idempotent draft request', async () =
     ])
     const updateCapsuleStyle = await updateCapsule.evaluate((element) => ({
       borderRadius: getComputedStyle(element).borderRadius,
-      copyWhiteSpace: getComputedStyle(element.querySelector('.update-status__copy')!).whiteSpace
+      copyWhiteSpace: getComputedStyle(element.querySelector('.update-status__copy')!).whiteSpace,
+      fontSize: getComputedStyle(element).fontSize,
+      fontWeight: getComputedStyle(element).fontWeight
+    }))
+    const connectionStatusStyle = await connectionStatus.evaluate((element) => ({
+      fontSize: getComputedStyle(element).fontSize,
+      fontWeight: getComputedStyle(element).fontWeight
     }))
     expect(updateCapsuleBox).not.toBeNull()
     expect(connectionStatusBox).not.toBeNull()
@@ -96,7 +102,13 @@ test('creates the first Thread through one idempotent draft request', async () =
       - ((connectionStatusBox?.y ?? 0) + (connectionStatusBox?.height ?? 0) / 2)
     )).toBeLessThanOrEqual(1)
     expect(updateCapsuleBox?.height ?? Infinity).toBeLessThanOrEqual(30)
-    expect(updateCapsuleStyle).toEqual({ borderRadius: '999px', copyWhiteSpace: 'nowrap' })
+    expect(updateCapsuleStyle).toEqual({
+      borderRadius: '999px',
+      copyWhiteSpace: 'nowrap',
+      fontSize: connectionStatusStyle.fontSize,
+      fontWeight: connectionStatusStyle.fontWeight
+    })
+    await expect(updateCapsule).toHaveText('Unavailable')
     await expect(updateCapsule.locator('.update-status__chevron')).toHaveCount(0)
     await expect(page.locator('.titlebar').getByRole('button', { name: 'Open model settings' })).toHaveCount(0)
 
@@ -528,7 +540,7 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expandContentActivity.click()
     const inspector = page.getByLabel('Thread context and activity')
     await expect(inspector).toBeVisible()
-    await expect(inspector.getByRole('button', { name: 'Collapse Content & activity' })).toBeVisible()
+    await expect(inspector.getByRole('button', { name: 'Collapse Content & activity' })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Collapse Content & activity' })).toHaveCount(1)
     await expect(page.getByRole('heading', { name: 'Context & activity', exact: true })).toBeVisible()
     const rightRailHeadingOffsets = await page.locator('#right-rail').evaluate((rail) => {
@@ -547,6 +559,15 @@ test('creates the first Thread through one idempotent draft request', async () =
       })
     })
     expect(Math.max(...rightRailHeadingOffsets) - Math.min(...rightRailHeadingOffsets)).toBeLessThanOrEqual(1.1)
+    const changedFilesEmptyOffset = await inspector.locator('.disclosure').evaluate((disclosure) => {
+      const summary = disclosure.querySelector('summary > span:first-child')
+      const empty = disclosure.querySelector('.inspector-empty')
+      if (!(summary instanceof HTMLElement) || !(empty instanceof HTMLElement)) {
+        throw new Error('Missing Changed files alignment fixture')
+      }
+      return Math.abs(summary.getBoundingClientRect().left - empty.getBoundingClientRect().left)
+    })
+    expect(changedFilesEmptyOffset).toBeLessThanOrEqual(1.1)
     await expect(inspector.locator('.workspace-card .path-copy code')).toHaveText(durable.snapshot.workspace.root)
     if (process.env.KODY_QA_INSPECTOR_SCREENSHOT) {
       await page.screenshot({ path: process.env.KODY_QA_INSPECTOR_SCREENSHOT, animations: 'disabled' })
@@ -590,9 +611,9 @@ test('creates the first Thread through one idempotent draft request', async () =
       await page.getByRole('button', { name: 'Use light theme' }).click()
       await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
     }
-    await inspector.getByRole('button', { name: 'Collapse Content & activity' }).click()
+    await contextCard.getByRole('button', { name: 'Collapse Content & activity' }).click()
     await expect(inspector).toBeHidden()
-    await expect(expandContentActivity).toBeFocused()
+    await expect(contextCard.getByRole('button', { name: 'Expand Content & activity' })).toBeFocused()
 
     const hideRightSidebar = page.getByRole('button', { name: 'Hide right sidebar' })
     await expect(hideRightSidebar).toHaveAttribute('aria-controls', 'right-rail')

@@ -1,7 +1,6 @@
 import {
   Check,
   ChevronDown,
-  ChevronUp,
   CircleDot,
   Clipboard,
   Code2,
@@ -163,15 +162,17 @@ export function Inspector({
           <p className="eyebrow">Thread lens</p>
           <h2>Context &amp; activity</h2>
         </div>
-        <button
-          className="icon-button"
-          type="button"
-          onClick={onClose}
-          aria-label={modal ? 'Close right sidebar' : 'Collapse Content & activity'}
-          title={modal ? 'Close right sidebar' : 'Collapse Content & activity'}
-        >
-          {modal ? <X aria-hidden="true" size={17} /> : <ChevronUp aria-hidden="true" size={17} />}
-        </button>
+        {modal ? (
+          <button
+            className="icon-button"
+            type="button"
+            onClick={onClose}
+            aria-label="Close right sidebar"
+            title="Close right sidebar"
+          >
+            <X aria-hidden="true" size={17} />
+          </button>
+        ) : null}
       </header>
 
       <div className="inspector__scroll">

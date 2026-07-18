@@ -16,6 +16,7 @@ describe('UpdateIndicator', () => {
     )
     const downloadButton = screen.getByRole('button', { name: 'Download Kody 0.2.0' })
     expect(downloadButton.querySelectorAll('svg')).toHaveLength(1)
+    expect(downloadButton.textContent).toBe('Download')
     fireEvent.click(downloadButton)
     expect(onAction).toHaveBeenCalledOnce()
 
@@ -25,7 +26,7 @@ describe('UpdateIndicator', () => {
         onAction={onAction}
       />
     )
-    expect(screen.getByRole('button', { name: 'Restart and install Kody 0.2.0' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Restart and install Kody 0.2.0' }).textContent).toBe('Restart')
   })
 
   it('reports download progress without allowing duplicate actions', () => {
@@ -37,7 +38,7 @@ describe('UpdateIndicator', () => {
     )
     const progress = screen.getByRole('button', { name: 'Downloading Kody update, 42%' }) as HTMLButtonElement
     expect(progress.disabled).toBe(true)
-    expect(progress.textContent).toContain('42%')
+    expect(progress.textContent).toBe('Downloading 42%')
   })
 
   it('keeps the current update state visible while idle', () => {
@@ -47,7 +48,18 @@ describe('UpdateIndicator', () => {
         onAction={vi.fn()}
       />
     )
-    expect(screen.getByRole('button', { name: 'v0.1.1 is up to date. Check again' }).textContent).toContain('v0.1.1 · Current')
+    expect(screen.getByRole('button', { name: 'v0.1.1 is up to date. Check again' }).textContent).toBe('Check again')
+    expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe('v0.1.1 is up to date.')
+  })
+
+  it.each([
+    [{ phase: 'idle', currentVersion: '0.1.1' } as const, 'Check for Kody updates', 'Check updates'],
+    [{ phase: 'checking', currentVersion: '0.1.1' } as const, 'Checking for Kody updates', 'Checking…'],
+    [{ phase: 'up-to-date', currentVersion: '0.1.1' } as const, 'Kody is up to date. Check again', 'Check again'],
+    [{ phase: 'error', currentVersion: '0.1.1' } as const, 'Update check failed. Try again', 'Try again']
+  ])('shows the next update action for %s', (status, accessibleName, actionText) => {
+    render(<UpdateIndicator status={status} onAction={vi.fn()} />)
+    expect(screen.getByRole('button', { name: accessibleName }).textContent).toBe(actionText)
   })
 
   it('explains when updates are unavailable without exposing an action', () => {
@@ -59,7 +71,7 @@ describe('UpdateIndicator', () => {
     )
     const indicator = screen.getByRole('button', { name: 'Kody updates unavailable' }) as HTMLButtonElement
     expect(indicator.disabled).toBe(true)
-    expect(indicator.textContent).toContain('v0.1.1 · Unavailable')
+    expect(indicator.textContent).toBe('Unavailable')
     expect(indicator.classList).toContain('update-status')
   })
 })

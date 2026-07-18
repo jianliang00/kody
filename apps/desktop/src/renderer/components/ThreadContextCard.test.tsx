@@ -155,7 +155,7 @@ describe('ThreadContextCard', () => {
     expect(screen.getByRole('button', { name: 'Workspace path copied' })).toBeTruthy()
   })
 
-  it('leaves collapse control ownership to the expanded Inspector', () => {
+  it('keeps collapse control ownership in the Context card', () => {
     const snapshot: ThreadSnapshot = {
       thread: thread('thread-current', 'Inspect context'),
       workspace: {
@@ -190,7 +190,7 @@ describe('ThreadContextCard', () => {
       />
     )
 
-    expect(screen.queryByRole('button', { name: 'Collapse Content & activity' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Collapse Content & activity' }).getAttribute('aria-expanded')).toBe('true')
     expect(screen.queryByRole('button', { name: 'Expand Content & activity' })).toBeNull()
   })
 })
