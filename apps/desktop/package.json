@@ -1,6 +1,6 @@
 {
   "name": "@kody/desktop",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "A local-first coding agent workspace powered by Rust and Electron.",
   "author": "Jianliang Wang",
   "license": "MIT OR Apache-2.0",

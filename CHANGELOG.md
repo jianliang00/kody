@@ -4,6 +4,18 @@ All notable changes to Kody are documented in this file. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.1.16] - 2026-07-18
+
+### Added
+
+- Added provider-neutral image generation with configurable provider and model catalogs, including OpenAI-compatible `/images/generations` support.
+- Added a desktop image composer with model, size, quality, format, and image-count controls, plus durable in-conversation previews and downloads.
+- Added the approval-aware `generate_image` Agent tool and authenticated, bounded artifact delivery from Thread Workspaces.
+
+### Changed
+
+- Extended versioned Thread state and snapshots with atomic image Artifact metadata while keeping binary image data outside JSON persistence and JSON-RPC.
+
 ## [0.1.7] - 2026-07-15
 
 ### Changed
@@ -52,7 +64,8 @@ All notable changes to Kody are documented in this file. The format follows [Kee
 
 - Signed in-app updates backed by public GitHub Release artifacts.
 
-[Unreleased]: https://github.com/jianliang00/kody/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/jianliang00/kody/compare/v0.1.16...HEAD
+[0.1.16]: https://github.com/jianliang00/kody/compare/v0.1.15...v0.1.16
 [0.1.7]: https://github.com/jianliang00/kody/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/jianliang00/kody/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/jianliang00/kody/releases/tag/v0.1.5

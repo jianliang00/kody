@@ -18,6 +18,7 @@ import type {
 const PACKAGED_HEALTH_TIMEOUT_MS = 15_000
 const DEVELOPMENT_HEALTH_TIMEOUT_MS = 120_000
 const RPC_TIMEOUT_MS = 60_000
+const IMAGE_RPC_TIMEOUT_MS = 360_000
 const RECONNECT_MAX_DELAY_MS = 5_000
 const CODEX_AUTH_HOSTS = ['openai.com', 'chatgpt.com'] as const
 const SECRET_NAME_PATTERN = /(?:^|_)(?:API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|AUTH|BEARER|COOKIE|SESSION|PAT|JWT|DSN)(?:_|$)/
@@ -138,11 +139,20 @@ export class KodyServerManager {
       || method === 'process/get'
       || method === 'process/read-output'
       || method === 'process/stop'
+      || method === 'image/generate'
     ) {
       const threadId = (params as { thread_id?: unknown }).thread_id
       if (typeof threadId === 'string') this.subscriptions.add(threadId)
     }
     return result
+  }
+
+  async readArtifactData(artifactId: string): Promise<{ mimeType: string; base64: string }> {
+    await this.start()
+    const port = this.port
+    const token = this.token
+    if (!port || !token || !this.hasLiveChild()) throw new Error('Kody app server is not running')
+    return artifactRequest(port, token, artifactId)
   }
 
   /** Main-process-only RPC path for privileged configuration and auth calls. */
@@ -351,7 +361,7 @@ export class KodyServerManager {
       const timeout = setTimeout(() => {
         this.pending.delete(id)
         rejectRequest(new Error(`Kody RPC '${method}' timed out`))
-      }, RPC_TIMEOUT_MS)
+      }, method === 'image/generate' ? IMAGE_RPC_TIMEOUT_MS : RPC_TIMEOUT_MS)
       this.pending.set(id, {
         resolve: (value) => resolveRequest(value as T),
         reject: rejectRequest,
@@ -609,6 +619,68 @@ function healthRequest(port: number): Promise<void> {
     })
     req.once('timeout', () => req.destroy(new Error('Health request timed out')))
     req.once('error', rejectHealth)
+    req.end()
+  })
+}
+
+function artifactRequest(
+  port: number,
+  token: string,
+  artifactId: string
+): Promise<{ mimeType: string; base64: string }> {
+  if (!/^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$/.test(artifactId)) {
+    return Promise.reject(new Error('Artifact id is invalid'))
+  }
+  return new Promise((resolveArtifact, rejectArtifact) => {
+    const req = request({
+      host: '127.0.0.1',
+      port,
+      path: `/v1/artifacts/${encodeURIComponent(artifactId)}`,
+      method: 'GET',
+      timeout: 30_000,
+      headers: { Authorization: `Bearer ${token}` }
+    }, (res) => {
+      res.once('error', rejectArtifact)
+      const mimeType = String(res.headers['content-type'] ?? '').split(';')[0]?.trim() ?? ''
+      if (res.statusCode !== 200 || !['image/png', 'image/jpeg', 'image/webp'].includes(mimeType)) {
+        res.resume()
+        rejectArtifact(new Error(`Artifact endpoint returned HTTP ${res.statusCode ?? 'unknown'}`))
+        return
+      }
+      const lengthHeader = res.headers['content-length']
+      const declaredLength = lengthHeader === undefined ? undefined : Number(lengthHeader)
+      if (
+        declaredLength !== undefined
+        && (!Number.isFinite(declaredLength) || declaredLength < 0 || declaredLength > 32 * 1024 * 1024)
+      ) {
+        res.destroy(new Error('Artifact exceeds the 32 MiB limit'))
+        return
+      }
+      const chunks: Buffer[] = []
+      let received = 0
+      res.on('data', (chunk: Buffer) => {
+        received += chunk.length
+        if (received > 32 * 1024 * 1024) {
+          res.destroy(new Error('Artifact exceeds the 32 MiB limit'))
+          return
+        }
+        chunks.push(chunk)
+      })
+      res.on('end', () => {
+        const bytes = Buffer.concat(chunks)
+        if (bytes.length === 0) {
+          rejectArtifact(new Error('Artifact endpoint returned an empty body'))
+          return
+        }
+        if (declaredLength !== undefined && bytes.length !== declaredLength) {
+          rejectArtifact(new Error('Artifact endpoint returned an incomplete body'))
+          return
+        }
+        resolveArtifact({ mimeType, base64: bytes.toString('base64') })
+      })
+    })
+    req.once('timeout', () => req.destroy(new Error('Artifact request timed out')))
+    req.once('error', rejectArtifact)
     req.end()
   })
 }

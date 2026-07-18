@@ -14,6 +14,7 @@ use crate::{
     },
     error::{KodyError, Result},
     event::EventHub,
+    image::{GenerateImageTool, ImageProviderRegistry, ImageService},
     process::{ProcessManager, ProcessManagerConfig},
     provider::ProviderRegistry,
     runtime::{AgentRuntime, AgentRuntimeConfig},
@@ -104,6 +105,8 @@ pub struct KodyEngine {
     store: Arc<dyn StateStore>,
     providers: Arc<ProviderRegistry>,
     tools: Arc<ToolRegistry>,
+    image_providers: Arc<ImageProviderRegistry>,
+    images: Arc<ImageService>,
     processes: Arc<ProcessManager>,
     events: EventHub,
     runtime: Arc<AgentRuntime>,
@@ -149,9 +152,11 @@ impl KodyEngine {
             .unwrap_or_else(|| ProcessManagerConfig::new(config.state_root.join("processes")));
         let processes = Arc::new(ProcessManager::new(store.clone(), process_config)?);
         processes.recover_interrupted().await?;
-        let tools = Arc::new(ToolRegistry::with_builtins_and_processes(
-            processes.clone(),
-        )?);
+        let image_providers = Arc::new(ImageProviderRegistry::default());
+        let images = Arc::new(ImageService::new(store.clone(), image_providers.clone()));
+        let mut tool_registry = ToolRegistry::with_builtins_and_processes(processes.clone())?;
+        tool_registry.register(GenerateImageTool::new(images.clone()))?;
+        let tools = Arc::new(tool_registry);
         let events = EventHub::new(config.event_buffer);
         let context_builder = Arc::new(DefaultContextBuilder::default());
         let runtime = Arc::new(match title_generator {
@@ -179,6 +184,8 @@ impl KodyEngine {
             store,
             providers,
             tools,
+            image_providers,
+            images,
             processes,
             events,
             runtime,
@@ -195,6 +202,14 @@ impl KodyEngine {
 
     pub fn tools(&self) -> &Arc<ToolRegistry> {
         &self.tools
+    }
+
+    pub fn image_providers(&self) -> &Arc<ImageProviderRegistry> {
+        &self.image_providers
+    }
+
+    pub fn images(&self) -> &Arc<ImageService> {
+        &self.images
     }
 
     pub fn processes(&self) -> &Arc<ProcessManager> {

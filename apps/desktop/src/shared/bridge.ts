@@ -20,6 +20,8 @@ export interface ProviderProfileRecord {
   baseUrl?: string
   defaultModel: string
   customModels: string[]
+  defaultImageModel?: string
+  imageModels: string[]
   hasSecret: boolean
   createdAt: string
   updatedAt: string
@@ -32,6 +34,8 @@ export interface ProviderProfileUpdate {
   baseUrl?: string
   defaultModel: string
   customModels?: string[]
+  defaultImageModel?: string
+  imageModels?: string[]
   /** Write-only. Main must never return or broadcast this value. */
   secret?: string
   clearSecret?: boolean
@@ -82,6 +86,7 @@ export interface KodyDesktopBridge {
   rpc<M extends RpcMethod>(method: M, params: RpcMethodMap[M]['params']): Promise<RpcMethodMap[M]['result']>
   pickDirectory(purpose?: DirectoryPickerPurpose): Promise<string | null>
   copyText(text: string): Promise<void>
+  loadArtifact(artifactId: string): Promise<string>
   getServerStatus(): Promise<ServerStatus>
   getProviderSettings(): Promise<ProviderSettingsResult>
   upsertProviderProfile(profile: ProviderProfileUpdate): Promise<ProviderProfileRecord>

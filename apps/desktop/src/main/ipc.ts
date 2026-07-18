@@ -151,6 +151,18 @@ export function registerIpcHandlers(options: IpcOptions): void {
     clipboard.writeText(text)
   })
 
+  ipcMain.handle('kody:artifact:load', async (event, artifactId: unknown) => {
+    assertTrustedSender(event, options)
+    if (
+      typeof artifactId !== 'string'
+      || !/^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$/.test(artifactId)
+    ) {
+      throw new Error('Artifact id is invalid')
+    }
+    const artifact = await options.server.readArtifactData(artifactId)
+    return `data:${artifact.mimeType};base64,${artifact.base64}`
+  })
+
   ipcMain.handle('kody:window-action', (event, action: unknown) => {
     assertTrustedSender(event, options)
     if (action !== 'minimize' && action !== 'maximize' && action !== 'close') {
@@ -173,6 +185,8 @@ export function validateProviderProfileUpdate(input: unknown): ProviderProfileUp
     'baseUrl',
     'defaultModel',
     'customModels',
+    'defaultImageModel',
+    'imageModels',
     'secret',
     'clearSecret'
   ])
@@ -191,6 +205,12 @@ export function validateProviderProfileUpdate(input: unknown): ProviderProfileUp
     || input.defaultModel.length > 200
   ) {
     throw new Error('Provider default model is invalid')
+  }
+  if (input.defaultImageModel !== undefined && (
+    typeof input.defaultImageModel !== 'string'
+    || input.defaultImageModel.length > 200
+  )) {
+    throw new Error('Provider default image model is invalid')
   }
   if (input.id !== undefined && (
     typeof input.id !== 'string'
@@ -226,6 +246,16 @@ export function validateProviderProfileUpdate(input: unknown): ProviderProfileUp
   ) {
     throw new Error('Provider custom models are invalid')
   }
+  if (!Array.isArray(input.imageModels) && input.imageModels !== undefined) {
+    throw new Error('Provider image models are invalid')
+  }
+  const imageModels = input.imageModels ?? []
+  if (
+    imageModels.length > 200
+    || imageModels.some((model) => typeof model !== 'string' || model.length > 200)
+  ) {
+    throw new Error('Provider image models are invalid')
+  }
   if (input.secret?.trim() && input.clearSecret) {
     throw new Error('A credential cannot be replaced and removed in the same update')
   }
@@ -236,6 +266,8 @@ export function validateProviderProfileUpdate(input: unknown): ProviderProfileUp
     ...(input.baseUrl === undefined ? {} : { baseUrl: input.baseUrl }),
     defaultModel: input.defaultModel,
     customModels: [...customModels],
+    ...(input.defaultImageModel === undefined ? {} : { defaultImageModel: input.defaultImageModel }),
+    imageModels: [...imageModels],
     ...(input.secret === undefined ? {} : { secret: input.secret }),
     ...(input.clearSecret === undefined ? {} : { clearSecret: input.clearSecret })
   }

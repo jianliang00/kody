@@ -838,7 +838,11 @@ async fn agent_loop_executes_tools_persists_history_and_emits_ordered_events() {
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].temperature, Some(0.2));
     assert_eq!(requests[0].max_output_tokens, Some(1_024));
-    assert_eq!(requests[0].tools.len(), 8);
+    assert_eq!(requests[0].tools.len(), 9);
+    assert!(requests[0]
+        .tools
+        .iter()
+        .any(|definition| definition.name == "generate_image"));
     assert!(requests[0].messages[0]
         .text_content()
         .contains(&project.id.to_string()));

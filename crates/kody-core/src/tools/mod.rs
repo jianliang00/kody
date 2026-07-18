@@ -39,6 +39,7 @@ pub enum ToolRisk {
     FilesystemWrite,
     CommandExecution,
     ProcessControl,
+    ExternalAction,
 }
 
 impl ToolDefinition {
@@ -175,6 +176,9 @@ pub trait Tool: Send + Sync {
             ToolRisk::CommandExecution => {
                 Some("This tool starts an arbitrary command outside an OS filesystem sandbox.")
             }
+            ToolRisk::ExternalAction => Some(
+                "This tool performs a potentially billable action through an external service.",
+            ),
             _ => None,
         }
     }

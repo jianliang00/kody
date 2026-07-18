@@ -56,6 +56,7 @@ function snapshot(overrides: Partial<ThreadSnapshot> = {}): ThreadSnapshot {
     pending_approvals: [],
     pending_user_inputs: [],
     processes: [],
+    artifacts: [],
     ...overrides
   }
 }

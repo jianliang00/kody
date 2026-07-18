@@ -66,7 +66,8 @@ const snapshot: ThreadSnapshot = {
   turns: [],
   pending_approvals: [],
   pending_user_inputs: [pending],
-  processes: []
+  processes: [],
+  artifacts: []
 }
 
 function renderConversation(onUserInput = vi.fn(async () => undefined)) {

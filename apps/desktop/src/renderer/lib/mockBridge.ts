@@ -4,6 +4,7 @@ import type {
   ProviderProfileRecord
 } from '@shared/bridge'
 import type {
+  Artifact,
   ChatMessage,
   ContextReference,
   EventEnvelope,
@@ -175,7 +176,8 @@ function createMockStore() {
       turns: thread.id === 'thread-electron' ? clone(seedTurns) : [],
       pending_approvals: [],
       pending_user_inputs: [],
-      processes: []
+      processes: [],
+      artifacts: []
     })
   }
 
@@ -343,7 +345,10 @@ function createMockStore() {
             approvals: true,
             context_references: true,
             managed_processes: true,
-            process_output: true
+            process_output: true,
+            image_generation: true,
+            image_model_catalog: true,
+            durable_artifacts: true
           }
         } as RpcMethodMap[M]['result']
       case 'provider/list':
@@ -388,6 +393,86 @@ function createMockStore() {
                 { id: 'codex-fast', display_name: 'Codex fast' }
               ]
             : [{ id: 'kody-demo', display_name: 'Kody demo', is_default: true }]
+        } as RpcMethodMap[M]['result']
+      }
+      case 'image/provider/list':
+        return {
+          providers: [{
+            id: 'preview-images',
+            display_name: 'Preview images',
+            kind: 'mock',
+            auth: 'not_required',
+            default_model: 'preview-image-1'
+          }]
+        } as RpcMethodMap[M]['result']
+      case 'image/models':
+        return {
+          models: [{
+            id: 'preview-image-1',
+            display_name: 'Preview image 1',
+            is_default: true,
+            capabilities: {
+              generation: true,
+              editing: false,
+              masking: false,
+              max_images: 4,
+              sizes: ['auto', '1024x1024', '1536x1024', '1024x1536'],
+              qualities: ['auto', 'low', 'medium', 'high'],
+              output_formats: ['png', 'jpeg', 'webp']
+            }
+          }]
+        } as RpcMethodMap[M]['result']
+      case 'image/generate': {
+        const input = params as RpcMethodMap['image/generate']['params']
+        const snapshot = snapshots.get(input.thread_id)
+        if (!snapshot) throw new Error(`Unknown thread ${input.thread_id}`)
+        const createdAt = new Date().toISOString()
+        const userMessage: ChatMessage = {
+          id: id('message'),
+          thread_id: input.thread_id,
+          role: 'user',
+          parts: [{ type: 'text', text: input.prompt }],
+          references: [],
+          created_at: createdAt
+        }
+        const assistantMessageId = id('message')
+        const artifacts: Artifact[] = Array.from({ length: input.count }, (_, index) => {
+          const artifactId = id('artifact')
+          return {
+            id: artifactId,
+            thread_id: input.thread_id,
+            message_id: assistantMessageId,
+            kind: 'image',
+            mime_type: 'image/png',
+            file_name: `preview-${index + 1}.png`,
+            relative_path: `artifacts/preview-${index + 1}.png`,
+            byte_size: 68,
+            provider: input.provider,
+            model: input.model ?? 'preview-image-1',
+            prompt: input.prompt,
+            created_at: createdAt
+          }
+        })
+        const assistantMessage: ChatMessage = {
+          id: assistantMessageId,
+          thread_id: input.thread_id,
+          role: 'assistant',
+          parts: artifacts.map((artifact) => ({
+            type: 'artifact',
+            artifact_id: artifact.id,
+            kind: 'image',
+            mime_type: artifact.mime_type,
+            file_name: artifact.file_name
+          })),
+          references: [],
+          created_at: createdAt
+        }
+        snapshot.messages.push(userMessage, assistantMessage)
+        snapshot.artifacts.push(...artifacts)
+        return {
+          provider: input.provider,
+          model: input.model ?? 'preview-image-1',
+          artifacts: clone(artifacts)
         } as RpcMethodMap[M]['result']
       }
       case 'project/list':
@@ -455,7 +540,8 @@ function createMockStore() {
           turns: [],
           pending_approvals: [],
           pending_user_inputs: [],
-          processes: []
+          processes: [],
+          artifacts: []
         }
         snapshots.set(thread.id, snapshot)
         return {
@@ -699,6 +785,7 @@ export function createMockBridge(): KodyDesktopBridge {
 
   return {
     rpc: store.rpc,
+    loadArtifact: async () => 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+3MxZ5wAAAABJRU5ErkJggg==',
     copyText: async (text) => navigator.clipboard?.writeText(text),
     pickDirectory: async () => '/Users/demo/Code/new-project',
     getServerStatus: async () => connectedStatus,
@@ -718,6 +805,8 @@ export function createMockBridge(): KodyDesktopBridge {
         ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
         defaultModel: input.defaultModel,
         customModels: input.customModels ?? [],
+        ...(input.defaultImageModel ? { defaultImageModel: input.defaultImageModel } : {}),
+        imageModels: input.imageModels ?? [],
         hasSecret: input.clearSecret ? false : Boolean(input.secret || existing?.hasSecret),
         createdAt: existing?.createdAt ?? now,
         updatedAt: now
@@ -788,6 +877,9 @@ function createDisconnectedBridge(): KodyDesktopBridge {
   }
   return {
     rpc: async () => {
+      throw new Error(status.detail)
+    },
+    loadArtifact: async () => {
       throw new Error(status.detail)
     },
     copyText: async () => {

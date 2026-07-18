@@ -37,7 +37,8 @@ describe('ThreadContextCard', () => {
         },
         managedProcess('process-web', 'npm run web'),
         managedProcess('process-worker', 'npm run worker')
-      ]
+      ],
+      artifacts: []
     }
     const context: ThreadContextView = {
       threadReferences: [{ kind: 'thread', thread_id: 'thread-design', mode: 'summary' }],
@@ -121,7 +122,8 @@ describe('ThreadContextCard', () => {
       turns: [],
       pending_approvals: [],
       pending_user_inputs: [],
-      processes: []
+      processes: [],
+      artifacts: []
     }
     const onCopyText = vi.fn(async () => undefined)
 
@@ -168,7 +170,8 @@ describe('ThreadContextCard', () => {
       turns: [],
       pending_approvals: [],
       pending_user_inputs: [],
-      processes: []
+      processes: [],
+      artifacts: []
     }
 
     render(

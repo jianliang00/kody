@@ -24,6 +24,8 @@ import type {
   ChatMessage,
   ContextReference,
   EventEnvelope,
+  ImageModelDescriptor,
+  ImageProviderDescriptor,
   ModelDescriptor,
   PermissionMode,
   ProcessEventEnvelope,
@@ -41,6 +43,7 @@ import { Composer } from './components/Composer'
 import { Conversation } from './components/Conversation'
 import { DraftConversation } from './components/DraftConversation'
 import { Inspector } from './components/Inspector'
+import { ImageComposer, type ImageGenerationOptions } from './components/ImageComposer'
 import { ProjectShelf } from './components/ProjectShelf'
 import {
   ProviderSettingsDialog,
@@ -191,8 +194,12 @@ export function App() {
   const [projects, setProjects] = useState<Project[]>([])
   const [providers, setProviders] = useState<ProviderDescriptor[]>([])
   const [modelsByProvider, setModelsByProvider] = useState<Record<string, ModelDescriptor[]>>({})
+  const [imageProviders, setImageProviders] = useState<ImageProviderDescriptor[]>([])
+  const [imageModelsByProvider, setImageModelsByProvider] = useState<Record<string, ImageModelDescriptor[]>>({})
   const [loadingModelProviders, setLoadingModelProviders] = useState<Set<string>>(new Set())
   const [providerSettingsOpen, setProviderSettingsOpen] = useState(false)
+  const [imageComposerOpen, setImageComposerOpen] = useState(false)
+  const [generatingImage, setGeneratingImage] = useState(false)
   const [providerSettings, setProviderSettings] = useState<ProviderSettingsResult>({
     profiles: [],
     credentialStorage: { available: false, reason: 'Loading credential storage status…' }
@@ -366,6 +373,7 @@ export function App() {
     preferDraftRef.current = false
     activeThreadRef.current = threadId
     setActiveThreadId(threadId)
+    setImageComposerOpen(false)
     setDraftWorkingDirectory(undefined)
     setSnapshot(undefined)
     setStoppingProcessIds(new Set())
@@ -392,6 +400,21 @@ export function App() {
     }
   }, [applySnapshot, bridge])
 
+  const refreshImageCatalog = useCallback(async (): Promise<void> => {
+    const result = await bridge.rpc('image/provider/list', {})
+    setImageProviders(result.providers)
+    const entries = await Promise.all(result.providers.map(async (provider) => {
+      if (provider.auth === 'missing') return [provider.id, []] as const
+      try {
+        const models = await bridge.rpc('image/models', { provider_id: provider.id })
+        return [provider.id, models.models] as const
+      } catch {
+        return [provider.id, []] as const
+      }
+    }))
+    setImageModelsByProvider(Object.fromEntries(entries))
+  }, [bridge])
+
   const bootstrap = useCallback(async (preserveNavigation = false): Promise<void> => {
     if (!preserveNavigation) setBootstrapping(true)
     setAppError('')
@@ -412,6 +435,7 @@ export function App() {
       setThreads(threadProjectionRef.current.reconcileAll(threadResult.threads))
       setProjects(projectResult.projects)
       setProviders(providerResult.providers)
+      await refreshImageCatalog()
 
       const activeId = activeThreadRef.current
       if (preserveNavigation) {
@@ -451,12 +475,15 @@ export function App() {
     } finally {
       if (!preserveNavigation) setBootstrapping(false)
     }
-  }, [applySnapshot, bridge, selectThread])
+  }, [applySnapshot, bridge, refreshImageCatalog, selectThread])
 
   const refreshProviderCatalog = useCallback(async (): Promise<void> => {
-    const result = await bridge.rpc('provider/list', {})
+    const [result] = await Promise.all([
+      bridge.rpc('provider/list', {}),
+      refreshImageCatalog()
+    ])
     setProviders(result.providers)
-  }, [bridge])
+  }, [bridge, refreshImageCatalog])
 
   const refreshProviderSettings = useCallback(async (): Promise<void> => {
     const [settings, account] = await Promise.all([
@@ -826,6 +853,13 @@ export function App() {
     ? activeEvents.filter((event) => event.turn_id === conversationTurnId)
     : []
   const isRunning = Boolean(activeRunningTurnId)
+  const canGenerateImages = imageProviders.some((provider) => (
+    provider.auth !== 'missing' && (imageModelsByProvider[provider.id]?.length ?? 0) > 0
+  ))
+  const loadArtifact = useCallback(
+    (artifactId: string) => bridge.loadArtifact(artifactId),
+    [bridge]
+  )
 
   const composerDraftKey = activeThreadId ? `thread:${activeThreadId}` : `draft:${draftId}`
   const latestThreadTurn = snapshot && snapshot.thread.id === activeThreadId
@@ -960,6 +994,7 @@ export function App() {
     processRefreshTimersRef.current.clear()
     processRefreshRequestRef.current.clear()
     setDraftWorkingDirectory(workingDirectory)
+    setImageComposerOpen(false)
     const nextDraftId = crypto.randomUUID()
     draftIdRef.current = nextDraftId
     setDraftId(nextDraftId)
@@ -1051,7 +1086,8 @@ export function App() {
             turns: [started.turn],
             pending_approvals: [],
             pending_user_inputs: [],
-            processes: []
+            processes: [],
+            artifacts: []
           })
           setDraftWorkingDirectory(undefined)
           window.localStorage.setItem('kody.activeThreadId', started.thread.id)
@@ -1089,6 +1125,75 @@ export function App() {
       return false
     } finally {
       startTurnRef.current = false
+    }
+  }
+
+  const handleGenerateImage = async (options: ImageGenerationOptions): Promise<void> => {
+    if (generatingImage || isRunning) return
+    setGeneratingImage(true)
+    setAppError('')
+    try {
+      let threadId = snapshot?.thread.id
+      if (!threadId) {
+        const title = options.prompt.trim().replace(/\s+/g, ' ').slice(0, 72) || 'Generated image'
+        const created = await bridge.rpc('thread/create', {
+          title,
+          working_directory: draftWorkingDirectory
+        })
+        if (created.imported_project) {
+          setProjects((current) => [
+            created.imported_project as Project,
+            ...current.filter((project) => project.id !== created.imported_project?.id)
+          ])
+        }
+        const reconciledThread = threadProjectionRef.current.reconcile(created.thread)
+        threadId = created.thread.id
+        preferDraftRef.current = false
+        activeThreadRef.current = threadId
+        setActiveThreadId(threadId)
+        setThreads((current) => [
+          reconciledThread,
+          ...current.filter((thread) => thread.id !== threadId)
+        ])
+        setSnapshot({
+          thread: reconciledThread,
+          workspace: created.workspace,
+          messages: [],
+          turns: [],
+          pending_approvals: [],
+          pending_user_inputs: [],
+          processes: [],
+          artifacts: []
+        })
+        setComposerDrafts((current) => ({
+          ...current,
+          [`thread:${threadId}`]: {
+            ...EMPTY_COMPOSER_DRAFT,
+            providerId: composerProviderId,
+            model: composerModel
+          }
+        }))
+        setDraftWorkingDirectory(undefined)
+        window.localStorage.setItem('kody.activeThreadId', threadId)
+      }
+      await bridge.rpc('image/generate', {
+        thread_id: threadId,
+        provider: options.provider,
+        model: options.model,
+        prompt: options.prompt,
+        count: options.count,
+        size: options.size,
+        quality: options.quality,
+        output_format: options.output_format
+      })
+      setComposerMessage('')
+      setImageComposerOpen(false)
+      await refreshThread(threadId)
+      setAnnouncement('Image generation completed')
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : 'Could not generate the image.')
+    } finally {
+      setGeneratingImage(false)
     }
   }
 
@@ -1505,66 +1610,99 @@ export function App() {
                 bottomInset={composerDockHeight}
                 onApproval={handleApproval}
                 onUserInput={handleUserInput}
+                onLoadArtifact={loadArtifact}
               />
               <div className="composer-dock">
-                <Composer
-                  key={snapshot.thread.id}
-                  currentThreadId={snapshot.thread.id}
-                  threads={threads}
-                  projects={projects}
-                  references={draftReferences}
-                  providers={providers}
-                  providerId={composerProviderId}
-                  models={composerModels}
-                  model={composerModel}
-                  permissionMode={composerDraft.permissionMode}
-                  modelsLoading={loadingModelProviders.has(composerProviderId)}
-                  running={isRunning}
-                  message={composerDraft.message}
-                  unavailable={status.phase !== 'connected' || loadingThread || snapshot.thread.id !== activeThreadId}
-                  onReferencesChange={setDraftReferences}
-                  onProviderChange={setComposerProvider}
-                  onModelChange={setComposerModel}
-                  onPermissionModeChange={setComposerPermissionMode}
-                  onMessageChange={setComposerMessage}
-                  onSend={handleStartTurn}
-                  onCancel={handleCancelTurn}
-                />
+                {imageComposerOpen ? (
+                  <ImageComposer
+                    key={`image:${snapshot.thread.id}`}
+                    providers={imageProviders}
+                    modelsByProvider={imageModelsByProvider}
+                    message={composerDraft.message}
+                    generating={generatingImage}
+                    unavailable={status.phase !== 'connected' || loadingThread || snapshot.thread.id !== activeThreadId || isRunning}
+                    onMessageChange={setComposerMessage}
+                    onGenerate={handleGenerateImage}
+                    onCancel={() => setImageComposerOpen(false)}
+                  />
+                ) : (
+                  <Composer
+                    key={snapshot.thread.id}
+                    currentThreadId={snapshot.thread.id}
+                    threads={threads}
+                    projects={projects}
+                    references={draftReferences}
+                    providers={providers}
+                    providerId={composerProviderId}
+                    models={composerModels}
+                    model={composerModel}
+                    permissionMode={composerDraft.permissionMode}
+                    modelsLoading={loadingModelProviders.has(composerProviderId)}
+                    running={isRunning}
+                    message={composerDraft.message}
+                    unavailable={status.phase !== 'connected' || loadingThread || snapshot.thread.id !== activeThreadId}
+                    onReferencesChange={setDraftReferences}
+                    onProviderChange={setComposerProvider}
+                    onModelChange={setComposerModel}
+                    onPermissionModeChange={setComposerPermissionMode}
+                    onMessageChange={setComposerMessage}
+                    onSend={handleStartTurn}
+                    onCancel={handleCancelTurn}
+                    imageGenerationAvailable={canGenerateImages}
+                    onOpenImageGenerator={() => setImageComposerOpen(true)}
+                  />
+                )}
               </div>
             </>
           ) : (
             <>
               <DraftConversation />
               <div className="composer-dock">
-                <Composer
-                  key={draftId}
-                  threads={threads}
-                  projects={projects}
-                  references={draftReferences}
-                  providers={providers}
-                  providerId={composerProviderId}
-                  models={composerModels}
-                  model={composerModel}
-                  permissionMode={composerDraft.permissionMode}
-                  modelsLoading={loadingModelProviders.has(composerProviderId)}
-                  running={false}
-                  message={composerDraft.message}
-                  draft
-                  workingDirectory={draftWorkingDirectory}
-                  unavailable={status.phase !== 'connected'}
-                  onReferencesChange={setDraftReferences}
-                  onProviderChange={setComposerProvider}
-                  onModelChange={setComposerModel}
-                  onPermissionModeChange={setComposerPermissionMode}
-                  onMessageChange={setComposerMessage}
-                  onPickWorkingDirectory={async () => {
-                    const path = await bridge.pickDirectory('working-directory')
-                    if (path) setDraftWorkingDirectory(path)
-                  }}
-                  onClearWorkingDirectory={() => setDraftWorkingDirectory(undefined)}
-                  onSend={handleStartTurn}
-                  onCancel={async () => undefined}
-                />
+                {imageComposerOpen ? (
+                  <ImageComposer
+                    key={`image:${draftId}`}
+                    providers={imageProviders}
+                    modelsByProvider={imageModelsByProvider}
+                    message={composerDraft.message}
+                    generating={generatingImage}
+                    unavailable={status.phase !== 'connected'}
+                    onMessageChange={setComposerMessage}
+                    onGenerate={handleGenerateImage}
+                    onCancel={() => setImageComposerOpen(false)}
+                  />
+                ) : (
+                  <Composer
+                    key={draftId}
+                    threads={threads}
+                    projects={projects}
+                    references={draftReferences}
+                    providers={providers}
+                    providerId={composerProviderId}
+                    models={composerModels}
+                    model={composerModel}
+                    permissionMode={composerDraft.permissionMode}
+                    modelsLoading={loadingModelProviders.has(composerProviderId)}
+                    running={false}
+                    message={composerDraft.message}
+                    draft
+                    workingDirectory={draftWorkingDirectory}
+                    unavailable={status.phase !== 'connected'}
+                    onReferencesChange={setDraftReferences}
+                    onProviderChange={setComposerProvider}
+                    onModelChange={setComposerModel}
+                    onPermissionModeChange={setComposerPermissionMode}
+                    onMessageChange={setComposerMessage}
+                    onPickWorkingDirectory={async () => {
+                      const path = await bridge.pickDirectory('working-directory')
+                      if (path) setDraftWorkingDirectory(path)
+                    }}
+                    onClearWorkingDirectory={() => setDraftWorkingDirectory(undefined)}
+                    onSend={handleStartTurn}
+                    onCancel={async () => undefined}
+                    imageGenerationAvailable={canGenerateImages}
+                    onOpenImageGenerator={() => setImageComposerOpen(true)}
+                  />
+                )}
               </div>
             </>
           )}

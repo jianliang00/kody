@@ -28,6 +28,7 @@ This model keeps conversation history independent from code location and makes m
 - Multi-step Rust agent loop with streaming model output, tool calls, cancellation, terminal state guarantees, and bounded context.
 - Extensible, object-safe `ModelProvider` API with runtime provider registration and per-Turn model selection.
 - Built-in OpenAI Responses and OpenAI-compatible Chat Completions adapters.
+- Provider-neutral image generation with configurable image-model catalogs, an OpenAI-compatible Images adapter, durable Workspace artifacts, and in-conversation preview/download.
 - Optional Codex backend that uses the official `codex app-server` protocol and the user's ChatGPT/Codex plan quota without reading or repurposing Codex credentials.
 - Per-Turn permission modes: **Read only**, **Ask for commands**, and **Full access**.
 - Sandboxed file-tool path resolution, explicit project access, command approvals, structured user input, and credential redaction.
@@ -102,6 +103,8 @@ More setup and debugging information is available in the [development guide](doc
 
 Desktop Settings can manage multiple named provider profiles. Every Turn selects a provider, model, and permission mode independently.
 
+The same profile can optionally expose one or more image models. The desktop image composer selects the image provider, model, size, quality, format, and count independently from the chat model. Generated files are stored under the owning Thread Workspace's `artifacts/` directory and recorded in durable conversation state. OpenAI profiles default new configurations to `gpt-image-2`; OpenAI-compatible profiles can name any image model served by their `/images/generations` endpoint. Clearing the default image model disables image generation for that profile.
+
 The built-in native adapters are:
 
 - **OpenAI Responses** for streaming output, reasoning, and tool calls.
@@ -116,6 +119,7 @@ To implement another native provider, implement the object-safe async `ModelProv
 The server exposes JSON-RPC 2.0 at:
 
 - `POST /v1/rpc`
+- `GET /v1/artifacts/{artifact_id}`
 - `GET /v1/ws` or `GET /v1/app-server`
 - `GET /health`
 

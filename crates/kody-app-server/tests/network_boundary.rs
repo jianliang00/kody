@@ -1,11 +1,13 @@
 use std::{collections::BTreeMap, collections::HashSet, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context, Result};
+use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
 use kody_app_server::{app, AppState};
 use kody_core::{
-    process::StartProcessRequest, provider::EchoProvider, EngineConfig, InteractionId, KodyEngine,
-    PendingUserInput, ProcessOrigin, StartTurn, TurnId, UserInputQuestion,
+    process::StartProcessRequest, provider::EchoProvider, Artifact, ArtifactId, ArtifactKind,
+    EngineConfig, InteractionId, KodyEngine, PendingUserInput, ProcessOrigin, StartTurn, TurnId,
+    UserInputQuestion,
 };
 use reqwest::{header, StatusCode};
 use serde_json::{json, Value};
@@ -141,6 +143,76 @@ async fn http_rpc_requires_authentication_and_json_content_type() -> Result<()> 
         "kody-app-server"
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn artifact_endpoint_requires_authentication_and_serves_validated_private_bytes() -> Result<()>
+{
+    let server = TestServer::start().await?;
+    let (thread, workspace, _) = server.engine.create_thread("Image artifact", None).await?;
+    let bytes = b"\x89PNG\r\n\x1a\nprivate-artifact".to_vec();
+    let artifact = Artifact {
+        id: ArtifactId::new(),
+        thread_id: thread.id,
+        message_id: None,
+        kind: ArtifactKind::Image,
+        mime_type: "image/png".into(),
+        file_name: "generated-test.png".into(),
+        relative_path: "artifacts/generated-test.png".into(),
+        byte_size: bytes.len() as u64,
+        provider: "test-images".into(),
+        model: "image-test".into(),
+        prompt: "A private test image".into(),
+        created_at: Utc::now(),
+    };
+    tokio::fs::write(workspace.root.join(&artifact.relative_path), &bytes).await?;
+    server
+        .engine
+        .store()
+        .insert_artifact(artifact.clone())
+        .await?;
+    let client = reqwest::Client::builder().no_proxy().build()?;
+    let url = format!("{}/v1/artifacts/{}", server.http_base, artifact.id);
+
+    let unauthorized = client.get(&url).send().await?;
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let response = client.get(&url).bearer_auth(TOKEN).send().await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("image/png")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("private, no-store")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-content-type-options")
+            .and_then(|value| value.to_str().ok()),
+        Some("nosniff")
+    );
+    assert_eq!(response.bytes().await?.as_ref(), bytes.as_slice());
+
+    let missing = client
+        .get(format!(
+            "{}/v1/artifacts/{}",
+            server.http_base,
+            ArtifactId::new()
+        ))
+        .bearer_auth(TOKEN)
+        .send()
+        .await?;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     Ok(())
 }
 

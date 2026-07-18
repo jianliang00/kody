@@ -56,7 +56,9 @@ async fn provider_profiles_are_structured_and_model_selection_is_explicit() {
             "base_url": "http://127.0.0.1:9/v1",
             "api_key": "must-not-appear",
             "default_model": "default-model",
-            "custom_models": ["other-model", "default-model"]
+            "custom_models": ["other-model", "default-model"],
+            "default_image_model": "image-model-2",
+            "image_models": ["image-model-1", "image-model-2"]
         }),
     )
     .await;
@@ -87,6 +89,23 @@ async fn provider_profiles_are_structured_and_model_selection_is_explicit() {
         .any(|provider| provider["id"] == "local-test"));
     assert!(!catalog.to_string().contains("must-not-appear"));
 
+    let image_catalog = rpc(&dispatcher, "image/provider/list", json!({})).await;
+    assert_eq!(image_catalog["providers"][0]["id"], "local-test");
+    assert_eq!(image_catalog["providers"][0]["auth"], "not_required");
+    assert!(!image_catalog.to_string().contains("must-not-appear"));
+    let image_models = rpc(
+        &dispatcher,
+        "image/models",
+        json!({ "provider_id": "local-test" }),
+    )
+    .await;
+    assert_eq!(image_models["models"].as_array().unwrap().len(), 2);
+    assert!(image_models["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|model| model["id"] == "image-model-2" && model["is_default"] == true));
+
     let removed = rpc(
         &dispatcher,
         "provider/remove",
@@ -94,6 +113,8 @@ async fn provider_profiles_are_structured_and_model_selection_is_explicit() {
     )
     .await;
     assert_eq!(removed["removed"], true);
+    let image_catalog = rpc(&dispatcher, "image/provider/list", json!({})).await;
+    assert_eq!(image_catalog["providers"], json!([]));
 }
 
 #[tokio::test]

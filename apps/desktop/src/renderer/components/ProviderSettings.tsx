@@ -23,6 +23,8 @@ export interface ProviderProfileView {
   baseUrl?: string
   defaultModel: string
   customModels: string[]
+  defaultImageModel?: string
+  imageModels: string[]
   hasSecret: boolean
   updatedAt?: string
 }
@@ -34,6 +36,8 @@ export interface ProviderProfileSubmission {
   baseUrl?: string
   defaultModel: string
   customModels: string[]
+  defaultImageModel?: string
+  imageModels: string[]
   /** Write-only; callers must not reflect this value back into renderer state. */
   secret?: string
   clearSecret?: boolean
@@ -69,6 +73,8 @@ interface ProfileDraft {
   baseUrl: string
   defaultModel: string
   customModels: string
+  defaultImageModel: string
+  imageModels: string
 }
 
 type DraftErrors = Partial<Record<keyof ProfileDraft | 'form', string>>
@@ -93,7 +99,9 @@ const EMPTY_DRAFT: ProfileDraft = {
   kind: 'openai',
   baseUrl: '',
   defaultModel: '',
-  customModels: ''
+  customModels: '',
+  defaultImageModel: 'gpt-image-2',
+  imageModels: 'gpt-image-2\ngpt-image-1.5\ngpt-image-1\ngpt-image-1-mini'
 }
 
 export function ProviderSettingsDialog({
@@ -181,6 +189,8 @@ export function ProviderSettingsDialog({
         ...(draft.baseUrl.trim() ? { baseUrl: draft.baseUrl.trim() } : {}),
         defaultModel: draft.defaultModel.trim(),
         customModels: parseCustomModels(draft.customModels),
+        ...(draft.defaultImageModel.trim() ? { defaultImageModel: draft.defaultImageModel.trim() } : {}),
+        imageModels: parseCustomModels(draft.imageModels),
         ...(submittedSecret ? { secret: submittedSecret } : {}),
         ...(clearSecret ? { clearSecret: true } : {})
       })
@@ -363,7 +373,61 @@ export function ProviderSettingsDialog({
                     ariaInvalid={Boolean(errors.kind)}
                     ariaDescribedBy={errors.kind ? `${id}-kind-error` : undefined}
                     options={PROVIDER_KIND_OPTIONS}
-                    onValueChange={(kind) => setDraft((current) => ({ ...current, kind: kind as ProviderKind }))}
+                    onValueChange={(kind) => setDraft((current) => ({
+                      ...current,
+                      kind: kind as ProviderKind,
+                      ...(kind === 'openai-compatible'
+                        ? { defaultImageModel: '', imageModels: '' }
+                        : {}),
+                      ...(kind === 'openai' && !current.defaultImageModel.trim()
+                        ? {
+                            defaultImageModel: 'gpt-image-2',
+                            imageModels: 'gpt-image-2\ngpt-image-1.5\ngpt-image-1\ngpt-image-1-mini'
+                          }
+                        : {})
+                    }))}
+                  />
+                </Field>
+              </div>
+
+              <div className="provider-form-grid">
+                <Field
+                  label="Default image model"
+                  error={errors.defaultImageModel}
+                  hint="Optional. Leave empty to disable direct image generation for this profile."
+                  id={`${id}-default-image-model`}
+                >
+                  <input
+                    id={`${id}-default-image-model`}
+                    name="default-image-model"
+                    value={draft.defaultImageModel}
+                    maxLength={200}
+                    autoComplete="off"
+                    placeholder="gpt-image-2"
+                    aria-invalid={Boolean(errors.defaultImageModel)}
+                    aria-describedby={`${id}-default-image-model-hint${errors.defaultImageModel ? ` ${id}-default-image-model-error` : ''}`}
+                    onChange={(event) => setDraft((current) => ({ ...current, defaultImageModel: event.target.value }))}
+                    onBlur={() => validateField('defaultImageModel')}
+                  />
+                </Field>
+
+                <Field
+                  label="Image models"
+                  error={errors.imageModels}
+                  hint="Optional. Separate image model names with commas or new lines."
+                  id={`${id}-image-models`}
+                >
+                  <textarea
+                    id={`${id}-image-models`}
+                    name="image-models"
+                    rows={2}
+                    value={draft.imageModels}
+                    maxLength={10_000}
+                    spellCheck={false}
+                    aria-invalid={Boolean(errors.imageModels)}
+                    aria-describedby={`${id}-image-models-hint${errors.imageModels ? ` ${id}-image-models-error` : ''}`}
+                    onChange={(event) => setDraft((current) => ({ ...current, imageModels: event.target.value }))}
+                    onBlur={() => validateField('imageModels')}
                   />
                 </Field>
               </div>
@@ -585,7 +649,9 @@ function draftFromProfile(profile: ProviderProfileView): ProfileDraft {
     kind: profile.kind,
     baseUrl: profile.baseUrl ?? '',
     defaultModel: profile.defaultModel,
-    customModels: profile.customModels.join('\n')
+    customModels: profile.customModels.join('\n'),
+    defaultImageModel: profile.defaultImageModel ?? '',
+    imageModels: profile.imageModels.join('\n')
   }
 }
 
@@ -593,6 +659,9 @@ function validateDraft(draft: ProfileDraft): DraftErrors {
   const errors: DraftErrors = {}
   if (!draft.name.trim()) errors.name = 'Enter a profile name.'
   if (!draft.defaultModel.trim()) errors.defaultModel = 'Enter a default model.'
+  if (draft.defaultImageModel.trim().length > 200) {
+    errors.defaultImageModel = 'Use no more than 200 characters.'
+  }
   const baseUrl = draft.baseUrl.trim()
   if (draft.kind === 'openai-compatible' && !baseUrl) {
     errors.baseUrl = 'Enter the gateway base URL.'
@@ -617,6 +686,12 @@ function validateDraft(draft: ProfileDraft): DraftErrors {
     errors.customModels = 'Save no more than 200 custom model names.'
   } else if (customModels.some((model) => model.length > 200)) {
     errors.customModels = 'Each custom model name must be 200 characters or fewer.'
+  }
+  const imageModels = parseCustomModels(draft.imageModels)
+  if (imageModels.length > 200) {
+    errors.imageModels = 'Save no more than 200 image model names.'
+  } else if (imageModels.some((model) => model.length > 200)) {
+    errors.imageModels = 'Each image model name must be 200 characters or fewer.'
   }
   return errors
 }

@@ -1,4 +1,6 @@
 import { Check, ChevronRight, Command, LoaderCircle, X } from 'lucide-react'
+import type { Artifact } from '@shared/protocol'
+import { ArtifactGallery } from './ArtifactCard'
 
 export type ToolActivityStatus = 'pending' | 'running' | 'completed' | 'failed'
 
@@ -13,6 +15,7 @@ export interface ToolActivityItem {
 
 interface ToolActivityListProps {
   items: ToolActivityItem[]
+  onLoadArtifact?: (artifactId: string) => Promise<string>
 }
 
 const SUMMARY_KEYS = [
@@ -94,7 +97,7 @@ function StatusIcon({ status }: { status: ToolActivityStatus }) {
   return <span className="tool-activity__pending-dot" aria-hidden="true" />
 }
 
-export function ToolActivityList({ items }: ToolActivityListProps) {
+export function ToolActivityList({ items, onLoadArtifact }: ToolActivityListProps) {
   if (items.length === 0) return null
 
   return (
@@ -102,6 +105,7 @@ export function ToolActivityList({ items }: ToolActivityListProps) {
       {items.map((item) => {
         const summary = summarizeArguments(item.arguments)
         const hasResult = item.status === 'completed' || item.status === 'failed'
+        const artifacts = metadataArtifacts(item.metadata)
         return (
           <details className={`tool-activity tool-activity--${item.status}`} key={item.id}>
             <summary>
@@ -140,10 +144,30 @@ export function ToolActivityList({ items }: ToolActivityListProps) {
                   <pre><code>{formatDetail(item.metadata)}</code></pre>
                 </section>
               ) : null}
+              {onLoadArtifact && artifacts.length > 0 ? (
+                <ArtifactGallery artifacts={artifacts} onLoad={onLoadArtifact} />
+              ) : null}
             </div>
           </details>
         )
       })}
     </div>
   )
+}
+
+function metadataArtifacts(metadata: unknown): Artifact[] {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return []
+  const artifacts = (metadata as Record<string, unknown>).artifacts
+  if (!Array.isArray(artifacts)) return []
+  return artifacts.filter((value): value is Artifact => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+    const artifact = value as Record<string, unknown>
+    return typeof artifact.id === 'string'
+      && artifact.kind === 'image'
+      && typeof artifact.mime_type === 'string'
+      && typeof artifact.file_name === 'string'
+      && typeof artifact.provider === 'string'
+      && typeof artifact.model === 'string'
+      && typeof artifact.prompt === 'string'
+  })
 }

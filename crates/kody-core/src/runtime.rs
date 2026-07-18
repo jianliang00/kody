@@ -650,7 +650,11 @@ impl AgentRuntime {
                     continue;
                 }
                 let requires_approval = turn.permission_mode == PermissionMode::Ask
-                    && risk == crate::tools::ToolRisk::CommandExecution;
+                    && matches!(
+                        risk,
+                        crate::tools::ToolRisk::CommandExecution
+                            | crate::tools::ToolRisk::ExternalAction
+                    );
                 if requires_approval {
                     let approved = self
                         .request_tool_approval(turn, &call, &cancellation, &emitter)
@@ -658,7 +662,7 @@ impl AgentRuntime {
                     if !approved {
                         let result = ToolResult::error(
                             &call,
-                            "command execution was denied by the user",
+                            format!("tool '{}' was denied by the user", call.name),
                             json!({ "error_kind": "approval_denied" }),
                         );
                         emitter.emit(AgentEvent::ToolCompleted {

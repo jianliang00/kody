@@ -12,6 +12,28 @@ import {
 } from './provider-settings'
 
 describe('ProviderSettingsStore', () => {
+  it('persists an explicitly disabled image provider across reloads', async () => {
+    const fileSystem = new MemoryFileSystem()
+    const safeStorage = new FakeSafeStorage('kwallet6')
+    const store = createStore(fileSystem, safeStorage)
+    const profile = await store.upsert({
+      name: 'Text only OpenAI',
+      kind: 'openai',
+      defaultModel: 'gpt-text',
+      imageModels: []
+    })
+    expect(profile.defaultImageModel).toBeUndefined()
+    expect(fileSystem.contents('/state/provider-settings.json')).toContain('"defaultImageModel": ""')
+
+    const reloaded = new ProviderSettingsStore({
+      filePath: '/state/provider-settings.json',
+      fileSystem,
+      safeStorage,
+      platform: 'linux'
+    })
+    expect((await reloaded.snapshot()).profiles[0]?.defaultImageModel).toBeUndefined()
+  })
+
   it('encrypts a write-only canary and atomically persists private files', async () => {
     const fileSystem = new MemoryFileSystem()
     const safeStorage = new FakeSafeStorage('kwallet6')

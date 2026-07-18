@@ -268,6 +268,19 @@ html[data-sidebar-resizing] * { cursor: col-resize !important; }
 .tool-activity__details pre { margin-block-start: .4rem; overflow-wrap: normal; word-break: normal; }
 .tool-activity__details pre code { font-size: var(--font-caption); }
 .tool-activity__empty { margin: 0; color: var(--muted); font-size: var(--font-caption); }
+.artifact-gallery { margin-block: .75rem; display: grid; grid-template-columns: repeat(auto-fit,minmax(min(15rem,100%),1fr)); gap: .75rem; }
+.artifact-card { min-width: 0; margin: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-strong); }
+.artifact-card__preview { min-height: 12rem; display: grid; place-items: center; overflow: hidden; background: color-mix(in srgb,var(--rail) 75%,var(--surface)); }
+.artifact-card__preview img { width: 100%; max-height: 32rem; display: block; object-fit: contain; }
+.artifact-card__loading, .artifact-card__error { min-height: 12rem; padding: 1rem; display: flex; align-items: center; justify-content: center; gap: .45rem; color: var(--muted); font-size: var(--font-body); text-align: center; }
+.artifact-card__error { color: var(--danger); }
+.artifact-card figcaption { min-width: 0; padding: .65rem .7rem; display: flex; align-items: center; justify-content: space-between; gap: .75rem; border-block-start: 1px solid var(--border); }
+.artifact-card figcaption > span { min-width: 0; display: grid; gap: .15rem; }
+.artifact-card figcaption strong, .artifact-card figcaption small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifact-card figcaption strong { font-size: var(--font-body); font-weight: var(--weight-medium); }
+.artifact-card figcaption small { color: var(--muted); font-size: var(--font-caption); }
+.artifact-card__download { flex: 0 0 auto; min-height: 2rem; padding: .35rem .5rem; display: inline-flex; align-items: center; gap: .3rem; border: 1px solid var(--border); border-radius: 7px; color: var(--text); background: var(--surface); font-size: var(--font-caption); text-decoration: none; }
+.artifact-card__download:hover { border-color: var(--border-strong); background: var(--hover); }
 .turn-terminal { padding: .65rem .8rem; border-radius: 8px; color: var(--danger); background: var(--danger-soft); font-size: var(--font-body); }
 
 .approval-card { padding: .9rem; border: 1px solid color-mix(in srgb,var(--workspace) 45%,var(--border)); border-radius: 12px; background: var(--workspace-soft); }
@@ -336,6 +349,13 @@ html[data-sidebar-resizing] * { cursor: col-resize !important; }
 .composer__error, .composer__unavailable { margin: .05rem 0; color: var(--danger); font-size: var(--font-caption); }
 .composer__references { margin-block: .5rem .2rem; display: grid; gap: .3rem; }
 .composer__references-label { color: var(--faint); font-size: var(--font-caption); text-transform: uppercase; letter-spacing: .06em; }
+.image-composer { display: grid; gap: .35rem; }
+.image-composer__title { display: inline-flex; align-items: center; gap: .35rem; color: var(--text); }
+.image-composer__options { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: .4rem; }
+.composer__actions { flex: 0 0 auto; display: flex; align-items: center; gap: .45rem; }
+.send-button { min-height: 2.55rem; padding: .55rem .85rem; display: inline-flex; align-items: center; justify-content: center; gap: .38rem; border-radius: 8px; color: var(--bg); background: var(--text); font-weight: var(--weight-medium); }
+.send-button:not(:disabled):hover { opacity: .88; }
+.send-button:disabled { cursor: not-allowed; opacity: .46; }
 
 .reference-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: .3rem; }
 .reference-chip { min-width: 0; min-height: 1.85rem; padding: .2rem .28rem .2rem .4rem; display: inline-flex; align-items: center; gap: .3rem; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); font-size: var(--font-caption); }
@@ -561,6 +581,9 @@ html[data-sidebar-resizing] * { cursor: col-resize !important; }
   .composer-dock { padding-inline: .55rem; }
   .composer__hint { display: none; }
   .working-directory-chip { max-width: calc(100vw - 12rem); }
+  .image-composer .composer__topline, .image-composer .composer__footer { align-items: flex-start; flex-direction: column; }
+  .image-composer .composer__provider { width: 100%; flex-wrap: wrap; }
+  .image-composer .composer__actions { width: 100%; justify-content: flex-end; }
   .message--user { max-width: 92%; }
   .drawer-scrim--asset { z-index: 40; }
 }

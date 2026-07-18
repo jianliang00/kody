@@ -4,10 +4,10 @@ use std::{
 };
 
 use axum::{
-    body::Bytes,
+    body::{Body, Bytes},
     extract::{
         ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
-        Query, State,
+        Path as AxumPath, Query, State,
     },
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -16,8 +16,8 @@ use axum::{
 };
 use futures_util::{FutureExt, SinkExt, StreamExt};
 use kody_core::{
-    AgentRuntime, EventId, ExternalTurnBackend, KodyEngine, ProjectId, Result as KodyResult,
-    StartTurn, ThreadId, Turn, TurnId, WorkspaceId,
+    AgentRuntime, ArtifactId, EventId, ExternalTurnBackend, KodyEngine, KodyError, ProjectId,
+    Result as KodyResult, StartTurn, ThreadId, Turn, TurnId, WorkspaceId,
 };
 use serde_json::{json, Value};
 use tokio::sync::{Mutex, Notify};
@@ -288,6 +288,7 @@ pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/v1/rpc", post(http_rpc))
+        .route("/v1/artifacts/{artifact_id}", get(get_artifact))
         .route("/v1/ws", get(websocket_upgrade))
         .route("/v1/app-server", get(websocket_upgrade))
         .with_state(state)
@@ -299,6 +300,62 @@ async fn health() -> Json<Value> {
         "service": "kody-app-server",
         "version": env!("CARGO_PKG_VERSION"),
     }))
+}
+
+async fn get_artifact(
+    State(state): State<AppState>,
+    AxumPath(artifact_id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !authorized(&headers, None, &state) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "missing or invalid bearer token" })),
+        )
+            .into_response();
+    }
+    let artifact_id = match artifact_id.parse::<ArtifactId>() {
+        Ok(id) => id,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "invalid artifact id" })),
+            )
+                .into_response()
+        }
+    };
+    let (artifact, bytes) = match state.engine.images().read_artifact(artifact_id).await {
+        Ok(result) => result,
+        Err(KodyError::ArtifactNotFound(_)) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "artifact not found" })),
+            )
+                .into_response()
+        }
+        Err(error) => {
+            warn!(%error, %artifact_id, "could not read artifact");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "artifact could not be read" })),
+            )
+                .into_response();
+        }
+    };
+    let content_type = artifact
+        .mime_type
+        .parse()
+        .unwrap_or_else(|_| header::HeaderValue::from_static("application/octet-stream"));
+    let disposition = format!("inline; filename=\"{}\"", artifact.file_name);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CONTENT_LENGTH, bytes.len())
+        .header(header::CACHE_CONTROL, "private, no-store")
+        .header("x-content-type-options", "nosniff")
+        .header(header::CONTENT_DISPOSITION, disposition)
+        .body(Body::from(bytes))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 async fn http_rpc(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {

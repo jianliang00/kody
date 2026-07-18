@@ -161,6 +161,14 @@ impl From<&MessagePart> for ModelContent {
                 is_error: *is_error,
                 metadata: metadata.clone(),
             },
+            MessagePart::Artifact {
+                artifact_id,
+                kind,
+                file_name,
+                ..
+            } => Self::Text {
+                text: format!("[Generated {kind:?} artifact {artifact_id}: {file_name}]"),
+            },
         }
     }
 }

@@ -38,6 +38,31 @@ export interface ModelDescriptor {
   reasoning_efforts?: string[]
 }
 
+export interface ImageProviderDescriptor {
+  id: string
+  display_name: string
+  kind: string
+  auth: ProviderAuthState
+  default_model?: string
+}
+
+export interface ImageModelCapabilities {
+  generation: boolean
+  editing: boolean
+  masking: boolean
+  max_images: number
+  sizes: string[]
+  qualities: string[]
+  output_formats: string[]
+}
+
+export interface ImageModelDescriptor {
+  id: string
+  display_name: string
+  is_default: boolean
+  capabilities: ImageModelCapabilities
+}
+
 export interface GitMetadata {
   remote?: string
   branch?: string
@@ -95,6 +120,28 @@ export type MessagePart =
       is_error: boolean
       metadata?: unknown
     }
+  | {
+      type: 'artifact'
+      artifact_id: EntityId
+      kind: 'image'
+      mime_type: string
+      file_name: string
+    }
+
+export interface Artifact {
+  id: EntityId
+  thread_id: EntityId
+  message_id?: EntityId
+  kind: 'image'
+  mime_type: string
+  file_name: string
+  relative_path: string
+  byte_size: number
+  provider: string
+  model: string
+  prompt: string
+  created_at: string
+}
 
 export interface ChatMessage {
   id: EntityId
@@ -201,6 +248,7 @@ export interface ThreadSnapshot {
   pending_approvals: PendingApproval[]
   pending_user_inputs: PendingUserInput[]
   processes: ManagedProcess[]
+  artifacts: Artifact[]
 }
 
 export interface PendingApproval {
@@ -319,6 +367,28 @@ export interface RpcMethodMap {
   'provider/models': {
     params: { provider_id: string }
     result: { models: ModelDescriptor[] }
+  }
+  'image/provider/list': {
+    params: Record<string, never>
+    result: { providers: ImageProviderDescriptor[] }
+  }
+  'image/models': {
+    params: { provider_id: string }
+    result: { models: ImageModelDescriptor[] }
+  }
+  'image/generate': {
+    params: {
+      thread_id: EntityId
+      provider: string
+      model?: string
+      prompt: string
+      count: number
+      size?: string
+      quality?: string
+      output_format?: string
+      background?: string
+    }
+    result: { provider: string; model: string; artifacts: Artifact[] }
   }
   'project/list': { params: Record<string, never>; result: { projects: Project[] } }
   'project/import': { params: { path: string; name?: string }; result: Project }

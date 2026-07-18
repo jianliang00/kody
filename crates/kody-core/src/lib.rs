@@ -5,6 +5,7 @@ pub mod domain;
 pub mod engine;
 pub mod error;
 pub mod event;
+pub mod image;
 pub mod process;
 pub mod provider;
 pub mod runtime;
@@ -19,6 +20,11 @@ pub use engine::{EngineConfig, KodyEngine};
 pub use error::{KodyError, Result};
 pub use event::{
     AgentEvent, EventEnvelope, EventHub, ProcessEvent, ProcessEventEnvelope, ProcessEventHub,
+};
+pub use image::{
+    GenerateImageRequest, GenerateImageTool, ImageGenerationResult, ImageModelCapabilities,
+    ImageModelDescriptor, ImageProvider, ImageProviderDescriptor, ImageProviderRegistry,
+    ImageRequest, ImageService, OpenAiImageConfig, OpenAiImageProvider,
 };
 pub use process::{
     ProcessManager, ProcessManagerConfig, ProcessOutputChunk, ProcessOutputPage,

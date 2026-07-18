@@ -29,6 +29,9 @@ const bridge: KodyDesktopBridge = Object.freeze({
   copyText(text: string) {
     return ipcRenderer.invoke('kody:copy-text', text) as Promise<void>
   },
+  loadArtifact(artifactId: string) {
+    return ipcRenderer.invoke('kody:artifact:load', artifactId) as Promise<string>
+  },
   getServerStatus() {
     return ipcRenderer.invoke('kody:server-status') as Promise<ServerStatus>
   },

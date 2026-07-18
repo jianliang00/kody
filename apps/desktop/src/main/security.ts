@@ -7,6 +7,9 @@ const RPC_METHODS = new Set<RpcMethod>([
   'initialize',
   'provider/list',
   'provider/models',
+  'image/provider/list',
+  'image/models',
+  'image/generate',
   'project/list',
   'project/import',
   'thread/list',
@@ -24,7 +27,13 @@ const RPC_METHODS = new Set<RpcMethod>([
   'process/stop'
 ])
 
-const EMPTY_METHODS = new Set<RpcMethod>(['initialize', 'provider/list', 'project/list', 'thread/list'])
+const EMPTY_METHODS = new Set<RpcMethod>([
+  'initialize',
+  'provider/list',
+  'image/provider/list',
+  'project/list',
+  'thread/list'
+])
 const EXTERNAL_PROTOCOLS = new Set(['http:', 'https:'])
 
 export function validateRpcInvocation(method: unknown, params: unknown): asserts method is RpcMethod {
@@ -43,6 +52,26 @@ export function validateRpcInvocation(method: unknown, params: unknown): asserts
     case 'provider/models':
       requireKeys(params, ['provider_id'])
       requireString(params.provider_id, 'provider_id', 256)
+      break
+    case 'image/models':
+      requireKeys(params, ['provider_id'])
+      requireString(params.provider_id, 'provider_id', 256)
+      break
+    case 'image/generate':
+      requireKeys(
+        params,
+        ['thread_id', 'provider', 'prompt', 'count'],
+        ['model', 'size', 'quality', 'output_format', 'background']
+      )
+      requireId(params.thread_id, 'thread_id')
+      requireString(params.provider, 'provider', 256)
+      requireString(params.prompt, 'prompt', 64_000)
+      requireOptionalString(params.model, 'model', 256)
+      requireOptionalString(params.size, 'size', 64)
+      requireOptionalString(params.quality, 'quality', 64)
+      requireOptionalString(params.output_format, 'output_format', 16)
+      requireOptionalString(params.background, 'background', 64)
+      requireOptionalUnsignedInteger(params.count, 'count', 4, 1)
       break
     case 'project/import':
       requireKeys(params, ['path'], ['name'])

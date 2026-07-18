@@ -13,9 +13,9 @@ use tokio::{
 
 use crate::{
     domain::{
-        ContextReference, ManagedProcess, Message, MessageId, ProcessId, ProcessOrigin,
-        ProcessStatus, Project, ProjectId, Thread, ThreadId, ThreadStatus, Turn, TurnId,
-        TurnStatus, Workspace, WorkspaceId,
+        Artifact, ArtifactId, ArtifactKind, ContextReference, ManagedProcess, Message, MessageId,
+        MessagePart, ProcessId, ProcessOrigin, ProcessStatus, Project, ProjectId, Thread, ThreadId,
+        ThreadStatus, Turn, TurnId, TurnStatus, Workspace, WorkspaceId,
     },
     error::{KodyError, Result},
 };
@@ -70,6 +70,21 @@ pub trait StateStore: Send + Sync {
     async fn update_message(&self, message: Message) -> Result<Message>;
     async fn delete_message(&self, id: MessageId) -> Result<()>;
 
+    async fn insert_artifact(&self, artifact: Artifact) -> Result<Artifact>;
+    /// Atomically inserts artifact metadata produced by one tool call.
+    async fn insert_artifacts(&self, artifacts: Vec<Artifact>) -> Result<Vec<Artifact>>;
+    async fn get_artifact(&self, id: ArtifactId) -> Result<Artifact>;
+    async fn list_artifacts(&self, thread_id: ThreadId) -> Result<Vec<Artifact>>;
+    async fn delete_artifact(&self, id: ArtifactId) -> Result<()>;
+    /// Atomically appends the user/assistant messages and artifact metadata for
+    /// one successful direct image-generation request.
+    async fn append_image_generation(
+        &self,
+        user: Message,
+        assistant: Message,
+        artifacts: Vec<Artifact>,
+    ) -> Result<(Message, Message, Vec<Artifact>)>;
+
     async fn insert_turn(&self, turn: Turn) -> Result<Turn>;
     async fn get_turn(&self, id: TurnId) -> Result<Turn>;
     async fn list_turns(&self, thread_id: ThreadId) -> Result<Vec<Turn>>;
@@ -122,7 +137,7 @@ pub struct JsonFileStore {
     persistence: Arc<Mutex<()>>,
 }
 
-const JSON_SNAPSHOT_VERSION: u32 = 2;
+const JSON_SNAPSHOT_VERSION: u32 = 3;
 const OLDEST_SUPPORTED_JSON_SNAPSHOT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,6 +147,8 @@ struct JsonSnapshot {
     threads: Vec<Thread>,
     workspaces: Vec<Workspace>,
     messages: Vec<Message>,
+    #[serde(default)]
+    artifacts: Vec<Artifact>,
     turns: Vec<Turn>,
     #[serde(default)]
     processes: Vec<ManagedProcess>,
@@ -145,6 +162,7 @@ struct StoreState {
     workspace_by_thread: HashMap<ThreadId, WorkspaceId>,
     messages: HashMap<MessageId, Message>,
     message_order_by_thread: HashMap<ThreadId, Vec<MessageId>>,
+    artifacts: HashMap<ArtifactId, Artifact>,
     turns: HashMap<TurnId, Turn>,
     turn_order_by_thread: HashMap<ThreadId, Vec<TurnId>>,
     processes: HashMap<ProcessId, ManagedProcess>,
@@ -288,6 +306,13 @@ impl JsonSnapshot {
             })
             .collect();
 
+        let mut artifacts: Vec<_> = state.artifacts.values().cloned().collect();
+        artifacts.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+
         let mut processes: Vec<_> = state.processes.values().cloned().collect();
         processes.sort_by(|left, right| {
             left.created_at
@@ -301,6 +326,7 @@ impl JsonSnapshot {
             threads,
             workspaces,
             messages,
+            artifacts,
             turns,
             processes,
         })
@@ -373,6 +399,18 @@ impl InMemoryStore {
                 .entry(message.thread_id)
                 .or_default()
                 .push(message.id);
+        }
+        for artifact in snapshot.artifacts {
+            if state
+                .artifacts
+                .insert(artifact.id, artifact.clone())
+                .is_some()
+            {
+                return Err(invalid_snapshot(format!(
+                    "duplicate artifact id {}",
+                    artifact.id
+                )));
+            }
         }
         for turn in snapshot.turns {
             if state.turns.insert(turn.id, turn.clone()).is_some() {
@@ -492,6 +530,9 @@ fn validate_store_state(state: &StoreState) -> Result<()> {
     }
     for message in state.messages.values() {
         validate_message(state, message).map_err(snapshot_invariant)?;
+    }
+    for artifact in state.artifacts.values() {
+        validate_artifact(state, artifact).map_err(snapshot_invariant)?;
     }
 
     let mut seen_turns = HashSet::with_capacity(state.turns.len());
@@ -891,6 +932,9 @@ impl StateStore for InMemoryStore {
                 state.turns.remove(&turn_id);
             }
         }
+        state
+            .artifacts
+            .retain(|_, artifact| artifact.thread_id != id);
         let process_ids: Vec<_> = state
             .processes
             .values()
@@ -1098,10 +1142,142 @@ impl StateStore for InMemoryStore {
         }
 
         state.messages.remove(&id);
+        for artifact in state.artifacts.values_mut() {
+            if artifact.message_id == Some(id) {
+                artifact.message_id = None;
+            }
+        }
         if let Some(order) = state.message_order_by_thread.get_mut(&message.thread_id) {
             order.retain(|candidate| *candidate != id);
         }
         Ok(())
+    }
+
+    async fn insert_artifact(&self, artifact: Artifact) -> Result<Artifact> {
+        let mut inserted = self.insert_artifacts(vec![artifact]).await?;
+        Ok(inserted.remove(0))
+    }
+
+    async fn insert_artifacts(&self, artifacts: Vec<Artifact>) -> Result<Vec<Artifact>> {
+        let mut state = self.inner.write().await;
+        let mut candidate = state.clone();
+        for artifact in &artifacts {
+            if candidate
+                .artifacts
+                .insert(artifact.id, artifact.clone())
+                .is_some()
+            {
+                return Err(conflict(format!("artifact {} already exists", artifact.id)));
+            }
+        }
+        validate_store_state(&candidate).map_err(|error| {
+            KodyError::InvalidInput(format!("invalid generated artifact state: {error}"))
+        })?;
+        *state = candidate;
+        Ok(artifacts)
+    }
+
+    async fn get_artifact(&self, id: ArtifactId) -> Result<Artifact> {
+        self.inner
+            .read()
+            .await
+            .artifacts
+            .get(&id)
+            .cloned()
+            .ok_or(KodyError::ArtifactNotFound(id))
+    }
+
+    async fn list_artifacts(&self, thread_id: ThreadId) -> Result<Vec<Artifact>> {
+        let state = self.inner.read().await;
+        if !state.threads.contains_key(&thread_id) {
+            return Err(KodyError::ThreadNotFound(thread_id));
+        }
+        let mut artifacts = state
+            .artifacts
+            .values()
+            .filter(|artifact| artifact.thread_id == thread_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        artifacts.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(artifacts)
+    }
+
+    async fn delete_artifact(&self, id: ArtifactId) -> Result<()> {
+        let mut state = self.inner.write().await;
+        if !state.artifacts.contains_key(&id) {
+            return Err(KodyError::ArtifactNotFound(id));
+        }
+        if state.messages.values().any(|message| {
+            message.parts.iter().any(|part| {
+                matches!(part, MessagePart::Artifact { artifact_id, .. } if *artifact_id == id)
+            })
+        }) {
+            return Err(conflict(format!(
+                "artifact {id} is still referenced by a message"
+            )));
+        }
+        state.artifacts.remove(&id);
+        Ok(())
+    }
+
+    async fn append_image_generation(
+        &self,
+        user: Message,
+        assistant: Message,
+        artifacts: Vec<Artifact>,
+    ) -> Result<(Message, Message, Vec<Artifact>)> {
+        if user.role != crate::domain::MessageRole::User
+            || assistant.role != crate::domain::MessageRole::Assistant
+            || user.turn_id.is_some()
+            || assistant.turn_id.is_some()
+            || user.thread_id != assistant.thread_id
+        {
+            return Err(KodyError::InvalidInput(
+                "direct image generation requires one user and one assistant message in the same Thread"
+                    .into(),
+            ));
+        }
+        let mut state = self.inner.write().await;
+        let mut candidate = state.clone();
+        for message in [&user, &assistant] {
+            if candidate.messages.contains_key(&message.id) {
+                return Err(conflict(format!("message {} already exists", message.id)));
+            }
+            candidate
+                .message_order_by_thread
+                .entry(message.thread_id)
+                .or_default()
+                .push(message.id);
+            candidate.messages.insert(message.id, message.clone());
+        }
+        if let Some(thread) = candidate.threads.get_mut(&assistant.thread_id) {
+            thread.updated_at = thread.updated_at.max(assistant.created_at);
+        }
+        for artifact in &artifacts {
+            if artifact.thread_id != assistant.thread_id
+                || artifact.message_id != Some(assistant.id)
+            {
+                return Err(KodyError::InvalidInput(
+                    "generated artifacts must belong to the assistant image message".into(),
+                ));
+            }
+            if candidate
+                .artifacts
+                .insert(artifact.id, artifact.clone())
+                .is_some()
+            {
+                return Err(conflict(format!("artifact {} already exists", artifact.id)));
+            }
+        }
+        validate_store_state(&candidate).map_err(|error| {
+            KodyError::InvalidInput(format!("invalid image generation state: {error}"))
+        })?;
+        *state = candidate;
+        Ok((user, assistant, artifacts))
     }
 
     async fn insert_turn(&self, turn: Turn) -> Result<Turn> {
@@ -1483,6 +1659,41 @@ impl StateStore for JsonFileStore {
         persistent_mutation!(self, candidate, candidate.delete_message(id).await)
     }
 
+    async fn insert_artifact(&self, artifact: Artifact) -> Result<Artifact> {
+        persistent_mutation!(self, candidate, candidate.insert_artifact(artifact).await)
+    }
+
+    async fn insert_artifacts(&self, artifacts: Vec<Artifact>) -> Result<Vec<Artifact>> {
+        persistent_mutation!(self, candidate, candidate.insert_artifacts(artifacts).await)
+    }
+
+    async fn get_artifact(&self, id: ArtifactId) -> Result<Artifact> {
+        self.memory.get_artifact(id).await
+    }
+
+    async fn list_artifacts(&self, thread_id: ThreadId) -> Result<Vec<Artifact>> {
+        self.memory.list_artifacts(thread_id).await
+    }
+
+    async fn delete_artifact(&self, id: ArtifactId) -> Result<()> {
+        persistent_mutation!(self, candidate, candidate.delete_artifact(id).await)
+    }
+
+    async fn append_image_generation(
+        &self,
+        user: Message,
+        assistant: Message,
+        artifacts: Vec<Artifact>,
+    ) -> Result<(Message, Message, Vec<Artifact>)> {
+        persistent_mutation!(
+            self,
+            candidate,
+            candidate
+                .append_image_generation(user, assistant, artifacts)
+                .await
+        )
+    }
+
     async fn insert_turn(&self, turn: Turn) -> Result<Turn> {
         persistent_mutation!(self, candidate, candidate.insert_turn(turn).await)
     }
@@ -1722,7 +1933,100 @@ fn validate_message(state: &StoreState, message: &Message) -> Result<()> {
             )));
         }
     }
-    validate_references(state, message.thread_id, &message.references)
+    validate_references(state, message.thread_id, &message.references)?;
+    for part in &message.parts {
+        if let MessagePart::Artifact {
+            artifact_id,
+            kind,
+            mime_type,
+            file_name,
+        } = part
+        {
+            let artifact = state
+                .artifacts
+                .get(artifact_id)
+                .ok_or(KodyError::ArtifactNotFound(*artifact_id))?;
+            if artifact.thread_id != message.thread_id
+                || artifact.message_id != Some(message.id)
+                || artifact.kind != *kind
+                || artifact.mime_type != *mime_type
+                || artifact.file_name != *file_name
+            {
+                return Err(conflict(format!(
+                    "artifact {artifact_id} does not match message {}",
+                    message.id
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_artifact(state: &StoreState, artifact: &Artifact) -> Result<()> {
+    if !state.threads.contains_key(&artifact.thread_id) {
+        return Err(KodyError::ThreadNotFound(artifact.thread_id));
+    }
+    if let Some(message_id) = artifact.message_id {
+        let message = state
+            .messages
+            .get(&message_id)
+            .ok_or(KodyError::MessageNotFound(message_id))?;
+        if message.thread_id != artifact.thread_id {
+            return Err(conflict(format!(
+                "artifact {} and message {message_id} belong to different Threads",
+                artifact.id
+            )));
+        }
+    }
+    if artifact.kind != ArtifactKind::Image {
+        return Err(KodyError::InvalidInput(format!(
+            "artifact {} has an unsupported kind",
+            artifact.id
+        )));
+    }
+    if !matches!(
+        artifact.mime_type.as_str(),
+        "image/png" | "image/jpeg" | "image/webp"
+    ) {
+        return Err(KodyError::InvalidInput(format!(
+            "artifact {} has an unsupported MIME type",
+            artifact.id
+        )));
+    }
+    if artifact.file_name.is_empty()
+        || artifact.file_name.contains('/')
+        || artifact.file_name.contains('\\')
+        || artifact.file_name == "."
+        || artifact.file_name == ".."
+    {
+        return Err(KodyError::InvalidInput(format!(
+            "artifact {} has an invalid file name",
+            artifact.id
+        )));
+    }
+    let components = artifact.relative_path.components().collect::<Vec<_>>();
+    if components.len() != 2
+        || components.first() != Some(&std::path::Component::Normal("artifacts".as_ref()))
+        || components.get(1) != Some(&std::path::Component::Normal(artifact.file_name.as_ref()))
+    {
+        return Err(KodyError::InvalidInput(format!(
+            "artifact {} has an invalid relative path",
+            artifact.id
+        )));
+    }
+    if artifact.byte_size == 0 || artifact.byte_size > 32 * 1024 * 1024 {
+        return Err(KodyError::InvalidInput(format!(
+            "artifact {} has an invalid byte size",
+            artifact.id
+        )));
+    }
+    if artifact.provider.trim().is_empty() || artifact.model.trim().is_empty() {
+        return Err(KodyError::InvalidInput(format!(
+            "artifact {} requires provider and model metadata",
+            artifact.id
+        )));
+    }
+    Ok(())
 }
 
 fn validate_turn(state: &StoreState, turn: &Turn) -> Result<()> {
@@ -2646,12 +2950,12 @@ mod tests {
 
         let raw: serde_json::Value =
             serde_json::from_slice(&tokio::fs::read(path).await.unwrap()).unwrap();
-        assert_eq!(raw["version"], 2);
+        assert_eq!(raw["version"], 3);
         assert_eq!(raw["processes"].as_array().unwrap().len(), 1);
     }
 
     #[tokio::test]
-    async fn json_store_migrates_v1_snapshot_to_v2_on_open() {
+    async fn json_store_migrates_v1_snapshot_to_latest_on_open() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("state.json");
         drop(JsonFileStore::open(&path).await.unwrap());
@@ -2667,8 +2971,9 @@ mod tests {
         drop(JsonFileStore::open(&path).await.unwrap());
         let migrated: serde_json::Value =
             serde_json::from_slice(&tokio::fs::read(path).await.unwrap()).unwrap();
-        assert_eq!(migrated["version"], 2);
+        assert_eq!(migrated["version"], 3);
         assert_eq!(migrated["processes"], serde_json::json!([]));
+        assert_eq!(migrated["artifacts"], serde_json::json!([]));
     }
 
     #[tokio::test]

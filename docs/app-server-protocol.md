@@ -4,6 +4,7 @@ The server exposes JSON-RPC 2.0 at:
 
 - HTTP: `POST /v1/rpc`
 - WebSocket: `GET /v1/ws` or `GET /v1/app-server`
+- Artifact bytes: `GET /v1/artifacts/{artifact_id}`
 - Health: `GET /health`
 
 HTTP requires `Authorization: Bearer <token>` and `Content-Type: application/json`. Native WebSocket clients may use the same Authorization header or `?token=<token>`. If a WebSocket request contains `Origin`, that exact value must appear in `KODY_ALLOWED_ORIGINS`.
@@ -17,6 +18,8 @@ HTTP requires `Authorization: Bearer <token>` and `Content-Type: application/jso
 | `provider/models` | Structured model catalog for one Provider |
 | `provider/health` | Sanitized health/auth reachability for one Provider |
 | `provider/configure`, `provider/remove` | Privileged runtime configuration for native Providers |
+| `image/provider/list`, `image/models` | Credential-free image Provider and capability-aware model catalogs |
+| `image/generate` | Generate images directly into a Thread's durable conversation and Workspace |
 | `codex/account/read`, `codex/account/rate-limits` | Codex sidecar account status and plan limits |
 | `codex/account/login/start`, `codex/account/login/cancel`, `codex/account/logout` | Privileged ChatGPT account lifecycle owned by the Codex sidecar |
 | `tool/list` | Model-visible tool definitions |
@@ -25,7 +28,7 @@ HTTP requires `Authorization: Bearer <token>` and `Content-Type: application/jso
 | `project/get`, `project/list` | Read Project state |
 | `thread/create` | Create a Thread and its Workspace; optional `working_directory` auto-imports a Project |
 | `thread/create-and-start` | Idempotently create a Thread/Workspace and prepare its first Turn from one draft request |
-| `thread/get`, `thread/list`, `thread/messages` | Read Thread state/history; `thread/get` also returns pending approvals, pending structured user input, and authoritative managed-process snapshots |
+| `thread/get`, `thread/list`, `thread/messages` | Read Thread state/history; `thread/get` also returns pending approvals, pending structured user input, managed processes, and artifact metadata |
 | `thread/reference/add` | Add a persistent default Thread or Project reference |
 | `turn/start`, `turn/get`, `turn/cancel` | Run and control an Agent Turn, including its permission mode |
 | `approval/respond` | Resolve a pending command-execution approval |
@@ -122,7 +125,9 @@ The privileged native Provider configuration request is:
     "base_url": "https://api.openai.com/v1",
     "api_key": "WRITE_ONLY_SECRET",
     "default_model": "gpt-example",
-    "custom_models": ["gpt-example"]
+    "custom_models": ["gpt-example"],
+    "default_image_model": "gpt-image-2",
+    "image_models": ["gpt-image-2", "gpt-image-1.5"]
   }
 }
 ```
@@ -130,6 +135,34 @@ The privileged native Provider configuration request is:
 `kind: "openai"` selects the streaming OpenAI Responses adapter. `kind: "openai-compatible"` selects bounded, non-streaming `/chat/completions` and requires `base_url`. The response is the public Provider descriptor and never echoes `api_key`. Reconfiguring an ID atomically replaces it for future Turns; a queued/running Turn retains its original adapter lease. `echo` and `codex` are built-ins and cannot be configured, replaced, or removed through these methods. `provider/remove` takes `{"provider_id":"team-openai"}` and returns `{"removed":true}`.
 
 `provider/health` takes the same `provider_id` shape and returns a sanitized object such as `{"status":"healthy"}` or `{"status":"unavailable","message":"..."}`. Status values are `healthy`, `degraded`, and `unavailable`.
+
+## Image generation and artifacts
+
+Image generation has its own provider-neutral registry because chat and image model capabilities are different. `image/provider/list` takes `{}`. `image/models` takes `{"provider_id":"team-openai"}` and returns model descriptors with `generation`, `editing`, `masking`, `max_images`, `sizes`, `qualities`, and `output_formats` capabilities.
+
+Direct generation records one user prompt message, one assistant artifact message, and all artifact metadata atomically after the provider files have been written:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "generate-image",
+  "method": "image/generate",
+  "params": {
+    "thread_id": "THREAD_UUID",
+    "provider": "team-openai",
+    "model": "gpt-image-2",
+    "prompt": "A compact isometric diagram of the Kody runtime",
+    "count": 1,
+    "size": "1536x1024",
+    "quality": "high",
+    "output_format": "png"
+  }
+}
+```
+
+The response contains `provider`, `model`, and an `artifacts` array. Artifact metadata includes its UUID, owning Thread/message, MIME type, file name, Workspace-relative path, byte size, provider, model, prompt, and creation time; it never embeds image bytes. Authenticated clients fetch bytes from `GET /v1/artifacts/{artifact_id}` with the same Bearer Token. The endpoint only serves validated PNG, JPEG, or WebP files from the owning Workspace and returns `Cache-Control: private, no-store` plus `X-Content-Type-Options: nosniff`.
+
+The native Agent also sees a `generate_image` tool. In `ask` mode it requires approval because it may create billable external usage; `read_only` does not expose it, while `full_access` permits it without an interactive gate. Tool-created artifacts are returned in structured ToolResult metadata and remain durable after the Turn.
 
 ## Codex account and execution backend
 

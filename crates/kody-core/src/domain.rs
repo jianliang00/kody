@@ -50,6 +50,7 @@ id_type!(EventId);
 id_type!(ApprovalId);
 id_type!(InteractionId);
 id_type!(ProcessId);
+id_type!(ArtifactId);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -181,6 +182,38 @@ pub enum MessagePart {
         #[serde(default, skip_serializing_if = "Value::is_null")]
         metadata: Value,
     },
+    Artifact {
+        artifact_id: ArtifactId,
+        kind: ArtifactKind,
+        mime_type: String,
+        file_name: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactKind {
+    Image,
+}
+
+/// Durable metadata for a binary artifact stored below its Thread Workspace.
+/// The relative path is never accepted from a client and is resolved only
+/// after the owning Thread and Workspace have been verified.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Artifact {
+    pub id: ArtifactId,
+    pub thread_id: ThreadId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<MessageId>,
+    pub kind: ArtifactKind,
+    pub mime_type: String,
+    pub file_name: String,
+    pub relative_path: PathBuf,
+    pub byte_size: u64,
+    pub provider: String,
+    pub model: String,
+    pub prompt: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

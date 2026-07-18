@@ -1,12 +1,13 @@
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use kody_core::{
+    image::{OpenAiImageConfig, OpenAiImageProvider},
     provider::{
         OpenAiCompatibleConfig, OpenAiCompatibleProvider, OpenAiResponsesConfig,
         OpenAiResponsesProvider,
     },
-    ApprovalId, ContextReference, InteractionId, KodyEngine, KodyError, ProcessId, ProjectId,
-    StartTurn, ThreadId, TurnId, UserInputAnswers, DEFAULT_THREAD_TITLE,
+    ApprovalId, ContextReference, GenerateImageRequest, InteractionId, KodyEngine, KodyError,
+    ProcessId, ProjectId, StartTurn, ThreadId, TurnId, UserInputAnswers, DEFAULT_THREAD_TITLE,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -109,6 +110,7 @@ impl From<KodyError> for RpcError {
             | KodyError::WorkspaceNotFound(_)
             | KodyError::TurnNotFound(_)
             | KodyError::MessageNotFound(_)
+            | KodyError::ArtifactNotFound(_)
             | KodyError::ProcessNotFound(_)
             | KodyError::ProviderNotFound(_)
             | KodyError::ToolNotFound(_) => -32004,
@@ -176,6 +178,37 @@ impl RpcDispatcher {
                 let models = provider.list_models().await.map_err(RpcError::from)?;
                 Ok(json!({ "models": models }))
             }
+            "image/provider/list" | "image.provider.list" => {
+                let providers = self
+                    .state
+                    .engine
+                    .image_providers()
+                    .descriptors()
+                    .map_err(RpcError::from)?;
+                Ok(json!({ "providers": providers }))
+            }
+            "image/models" | "image.models" => {
+                let params: ProviderIdParams = parse_params(params)?;
+                let provider = self
+                    .state
+                    .engine
+                    .image_providers()
+                    .get(&params.provider_id)
+                    .map_err(RpcError::from)?;
+                let models = provider.list_models().await.map_err(RpcError::from)?;
+                Ok(json!({ "models": models }))
+            }
+            "image/generate" | "image.generate" => {
+                let params: GenerateImageRequest = parse_params(params)?;
+                let result = self
+                    .state
+                    .engine
+                    .images()
+                    .generate_and_record(params, CancellationToken::new())
+                    .await
+                    .map_err(RpcError::from)?;
+                serde_json::to_value(result).map_err(RpcError::invalid_params)
+            }
             "provider/health" | "provider.health" => {
                 let params: ProviderIdParams = parse_params(params)?;
                 let provider = self
@@ -198,6 +231,23 @@ impl RpcDispatcher {
                         params.id
                     ))));
                 }
+                let image_base_url = params
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| "https://api.openai.com/v1".into());
+                let image_api_key = params.api_key.clone();
+                let image_display_name = params.display_name.clone();
+                let image_default_model = params.default_image_model.clone();
+                let image_models = if params.image_models.is_empty() && params.kind == "openai" {
+                    vec![
+                        "gpt-image-2".into(),
+                        "gpt-image-1.5".into(),
+                        "gpt-image-1".into(),
+                        "gpt-image-1-mini".into(),
+                    ]
+                } else {
+                    params.image_models.clone()
+                };
                 let provider: Arc<dyn kody_core::ModelProvider> = match params.kind.as_str() {
                     "openai" => {
                         let mut config = OpenAiResponsesConfig::new(
@@ -239,6 +289,28 @@ impl RpcDispatcher {
                     .providers()
                     .replace(provider.clone())
                     .map_err(RpcError::from)?;
+                if let Some(default_image_model) = image_default_model {
+                    let mut image_config =
+                        OpenAiImageConfig::new(params.id.clone(), image_base_url);
+                    image_config.display_name = image_display_name;
+                    image_config.api_key = image_api_key;
+                    image_config.require_api_key = params.kind == "openai";
+                    image_config.default_model = Some(default_image_model);
+                    image_config.configured_models = image_models;
+                    self.state
+                        .engine
+                        .image_providers()
+                        .replace(Arc::new(
+                            OpenAiImageProvider::new(image_config).map_err(RpcError::from)?,
+                        ))
+                        .map_err(RpcError::from)?;
+                } else {
+                    self.state
+                        .engine
+                        .image_providers()
+                        .remove(&params.id)
+                        .map_err(RpcError::from)?;
+                }
                 serde_json::to_value(provider.descriptor()).map_err(RpcError::invalid_params)
             }
             "provider/remove" | "provider.remove" => {
@@ -256,6 +328,11 @@ impl RpcDispatcher {
                     .remove(&params.provider_id)
                     .map_err(RpcError::from)?
                     .is_some();
+                self.state
+                    .engine
+                    .image_providers()
+                    .remove(&params.provider_id)
+                    .map_err(RpcError::from)?;
                 Ok(json!({ "removed": removed }))
             }
             "codex/account/read" | "codex.account.read" => match self.state.codex.client().await {
@@ -476,6 +553,10 @@ impl RpcDispatcher {
                     .list(thread.id)
                     .await
                     .map_err(RpcError::from)?;
+                let artifacts = store
+                    .list_artifacts(thread.id)
+                    .await
+                    .map_err(RpcError::from)?;
                 Ok(json!({
                     "thread": thread,
                     "workspace": workspace,
@@ -484,6 +565,7 @@ impl RpcDispatcher {
                     "pending_approvals": pending_approvals,
                     "pending_user_inputs": pending_user_inputs,
                     "processes": processes,
+                    "artifacts": artifacts,
                 }))
             }
             "thread/reference/add" | "thread.reference.add" => {
@@ -779,6 +861,9 @@ fn initialize_result() -> Value {
             "provider_model_catalog": true,
             "provider_configuration": true,
             "provider_health": true,
+            "image_generation": true,
+            "image_provider_catalog": true,
+            "durable_artifacts": true,
             "codex_chatgpt_auth": true,
             "codex_external_turn_backend": true,
         }
@@ -809,6 +894,10 @@ struct ConfigureProviderParams {
     default_model: String,
     #[serde(default)]
     custom_models: Vec<String>,
+    #[serde(default)]
+    default_image_model: Option<String>,
+    #[serde(default)]
+    image_models: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

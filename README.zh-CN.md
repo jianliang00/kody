@@ -18,6 +18,7 @@ Kody 是一个从零实现的 Rust Coding Agent 核心框架。它把 Agent Loop
 - 多步 Agent Loop：模型输出、工具调用、结果回填、继续推理、完成/失败/取消。
 - 对象安全的 `ModelProvider` 与结构化模型目录；内置 Echo、测试用 Scripted、支持流式工具调用的 OpenAI Responses，以及 OpenAI-compatible Chat Completions 适配器。
 - Provider Registry：同一进程可注册多个 Provider 实例，`provider/list` 返回无凭据的能力描述，`provider/models` 返回模型、默认项和可用推理强度；每次 Turn 独立选择 Provider 和模型。
+- Provider 中立的图片生成：每个 Profile 可独立配置多个图片模型，支持 OpenAI-compatible `/images/generations`、尺寸/质量/格式/数量选择、Agent `generate_image` 工具，以及图片产物的持久化、会话预览和下载。
 - Provider 可在运行时配置、替换、健康检查和移除；已排队 Turn 持有自己的 Provider 租约，因此配置更新只影响后续 Turn。
 - 独立的 Codex 外部 Turn 后端：通过官方 `codex app-server` JSONL stdio 协议使用 ChatGPT 登录和套餐额度，并把流式消息、推理、工具、文件变更、审批及结构化提问映射回 Kody 事件。
 - `read_file`、`write_file`、`list_directory`、`shell` 工具及路径越界、符号链接逃逸、只读 Project 检查。
@@ -82,6 +83,8 @@ npm run desktop:dev
 ```
 
 Electron 主进程会在随机 loopback 端口启动并认证 Rust App Server，Token 只保留在主进程；Renderer 只能通过白名单 IPC 调用 JSON-RPC。Provider Profile 在 Settings 中管理，对话输入框可为新的或已有的 Thread 选择 Provider 和模型。执行 `npm run desktop:package` 会先构建 release 版 Rust Server，再生成桌面安装产物。
+
+Provider Profile 还可以配置默认图片模型和图片模型列表。OpenAI 新 Profile 默认使用 `gpt-image-2`；OpenAI-compatible Profile 可填写其 `/images/generations` 接口实际支持的任意模型。清空默认图片模型即可禁用该 Profile 的图片生成。生成文件保存在所属 Thread Workspace 的 `artifacts/` 目录，并作为持久消息产物在会话中预览和下载。
 
 服务默认监听 `127.0.0.1:8765`。未配置时会在进程内生成随机认证 Token，不会把它写入日志；独立客户端集成应通过 `KODY_SERVER_TOKEN` 注入固定的高熵 Token。Electron 桌面端会为每次子进程启动自动生成并私有持有 Token。
 

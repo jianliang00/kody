@@ -21,6 +21,7 @@ import type {
   PendingUserInput,
   UserInputAnswers
 } from '@shared/protocol'
+import { ArtifactGallery } from './ArtifactCard'
 import { ReferenceChips } from './ReferenceChips'
 import { ToolActivityList, type ToolActivityItem } from './ToolActivity'
 
@@ -41,6 +42,11 @@ interface ConversationProps {
     answers: UserInputAnswers,
     cancelled: boolean
   ) => Promise<void>
+  onLoadArtifact?: (artifactId: string) => Promise<string>
+}
+
+const unavailableArtifactLoader = async (): Promise<string> => {
+  throw new Error('Artifact loading is unavailable.')
 }
 
 const markdownRemarkPlugins = [remarkGfm, remarkBreaks]
@@ -60,6 +66,13 @@ function textParts(message: ChatMessage): string {
     .filter((part): part is Extract<ChatMessage['parts'][number], { type: 'text' }> => part.type === 'text')
     .map((part) => part.text)
     .join('\n\n')
+}
+
+function messageArtifacts(message: ChatMessage, snapshot: ThreadSnapshot) {
+  const ids = new Set(message.parts.flatMap((part) => (
+    part.type === 'artifact' ? [part.artifact_id] : []
+  )))
+  return snapshot.artifacts.filter((artifact) => ids.has(artifact.id))
 }
 
 function MessageReferences({
@@ -160,19 +173,21 @@ function indexToolActivity(messages: ChatMessage[], events: EventEnvelope[]): To
 
 function MessageToolActivity({
   message,
-  index
+  index,
+  onLoadArtifact
 }: {
   message: ChatMessage
   index: ToolActivityIndex
+  onLoadArtifact: (artifactId: string) => Promise<string>
 }) {
   const items = message.parts.flatMap<ToolActivityItem>((part) => {
-    if (part.type === 'text') return []
+    if (part.type === 'text' || part.type === 'artifact') return []
     if (part.type === 'tool_result' && index.durableCallIds.has(part.tool_call_id)) return []
     const id = part.type === 'tool_call' ? part.id : part.tool_call_id
     const activity = index.activities.get(id)
     return activity ? [activity] : []
   })
-  return <ToolActivityList items={items} />
+  return <ToolActivityList items={items} onLoadArtifact={onLoadArtifact} />
 }
 
 function ApprovalCard({
@@ -397,7 +412,8 @@ export function Conversation({
   resolvingUserInputs,
   bottomInset,
   onApproval,
-  onUserInput
+  onUserInput,
+  onLoadArtifact = unavailableArtifactLoader
 }: ConversationProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const nearBottomRef = useRef(true)
@@ -476,6 +492,7 @@ export function Conversation({
 
         {snapshot.messages.map((message) => {
           const text = textParts(message)
+          const artifacts = messageArtifacts(message, snapshot)
           if (message.role === 'system') return null
           if (message.role === 'user') {
             return (
@@ -486,12 +503,13 @@ export function Conversation({
                 </header>
                 {text ? <p dir="auto">{text}</p> : null}
                 <MessageReferences references={message.references} threads={threads} projects={projects} />
-                <MessageToolActivity message={message} index={toolActivityIndex} />
+                <ArtifactGallery artifacts={artifacts} onLoad={onLoadArtifact} />
+                <MessageToolActivity message={message} index={toolActivityIndex} onLoadArtifact={onLoadArtifact} />
               </article>
             )
           }
           if (message.role === 'tool') {
-            return <MessageToolActivity message={message} index={toolActivityIndex} key={message.id} />
+            return <MessageToolActivity message={message} index={toolActivityIndex} onLoadArtifact={onLoadArtifact} key={message.id} />
           }
           return (
             <article className="message message--assistant" key={message.id}>
@@ -503,7 +521,8 @@ export function Conversation({
                 <time dateTime={message.created_at}>{formatTime(message.created_at)}</time>
               </header>
               {text ? <Markdown>{text}</Markdown> : null}
-              <MessageToolActivity message={message} index={toolActivityIndex} />
+              <ArtifactGallery artifacts={artifacts} onLoad={onLoadArtifact} />
+              <MessageToolActivity message={message} index={toolActivityIndex} onLoadArtifact={onLoadArtifact} />
             </article>
           )
         })}
@@ -517,7 +536,7 @@ export function Conversation({
               </span>
               <span className="live-label">Live</span>
             </header>
-            <ToolActivityList items={liveToolActivity} />
+            <ToolActivityList items={liveToolActivity} onLoadArtifact={onLoadArtifact} />
             {reasoning ? <p className="reasoning-line">{reasoning}</p> : null}
             {liveOutput
               ? <Markdown>{liveOutput}</Markdown>

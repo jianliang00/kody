@@ -259,6 +259,14 @@ fn message_to_model(message: &Message) -> ModelMessage {
                     is_error: *is_error,
                     metadata: metadata.clone(),
                 },
+                MessagePart::Artifact {
+                    artifact_id,
+                    kind,
+                    file_name,
+                    ..
+                } => ModelContent::Text {
+                    text: format!("[Generated {kind:?} artifact {artifact_id}: {file_name}]"),
+                },
             })
             .collect(),
     }
@@ -337,6 +345,18 @@ fn format_transcript(messages: &[Message]) -> String {
                     write!(
                         output,
                         "<tool_result name={name:?} error={is_error}>{content}</tool_result>"
+                    )
+                    .ok();
+                }
+                MessagePart::Artifact {
+                    artifact_id,
+                    kind,
+                    file_name,
+                    ..
+                } => {
+                    write!(
+                        output,
+                        "<artifact id={artifact_id} kind={kind:?} file={file_name:?} />"
                     )
                     .ok();
                 }

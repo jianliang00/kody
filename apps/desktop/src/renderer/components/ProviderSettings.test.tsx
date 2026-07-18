@@ -70,6 +70,7 @@ describe('ProviderSettingsDialog', () => {
       baseUrl: 'https://models.example.test/v1',
       defaultModel: 'team-coder',
       customModels: ['fast', 'precise'],
+      imageModels: [],
       secret: 'CANARY-renderer-secret'
     })
     expect(secret.value).toBe('')
@@ -168,6 +169,7 @@ function savedProfile(): ProviderProfileView {
     kind: 'openai',
     defaultModel: 'gpt-team',
     customModels: ['gpt-team-fast'],
+    imageModels: ['gpt-image-2'],
     hasSecret: true,
     updatedAt: '2026-07-13T00:00:00.000Z'
   }

@@ -22,6 +22,8 @@ export interface ProviderProfile {
   baseUrl?: string
   defaultModel: string
   customModels: string[]
+  defaultImageModel?: string
+  imageModels: string[]
   hasSecret: boolean
   createdAt: string
   updatedAt: string
@@ -34,6 +36,8 @@ export interface ProviderProfileInput {
   baseUrl?: string
   defaultModel: string
   customModels?: string[]
+  defaultImageModel?: string
+  imageModels?: string[]
   /** Write-only. It is never included in a returned profile or persisted as plaintext. */
   secret?: string
   clearSecret?: boolean
@@ -84,6 +88,9 @@ interface StoredProviderProfile {
   baseUrl?: string
   defaultModel: string
   customModels: string[]
+  /** Empty string explicitly disables image generation for this profile. */
+  defaultImageModel: string
+  imageModels: string[]
   encryptedSecret?: string
   createdAt: string
   updatedAt: string
@@ -236,6 +243,8 @@ export class ProviderSettingsStore {
         ...(normalized.baseUrl ? { baseUrl: normalized.baseUrl } : {}),
         defaultModel: normalized.defaultModel,
         customModels: normalized.customModels,
+        defaultImageModel: normalized.defaultImageModel ?? '',
+        imageModels: normalized.imageModels,
         ...(encryptedSecret ? { encryptedSecret } : {}),
         createdAt: existing?.createdAt ?? now,
         updatedAt: now
@@ -393,7 +402,9 @@ async function sendProviderConfiguration(
     base_url: profile.baseUrl,
     api_key: apiKey,
     default_model: profile.defaultModel,
-    custom_models: profile.customModels
+    custom_models: profile.customModels,
+    default_image_model: profile.defaultImageModel,
+    image_models: profile.imageModels
   })
 }
 
@@ -471,8 +482,8 @@ async function syncDirectoryBestEffort(
 }
 
 function normalizeInput(input: ProviderProfileInput): Required<
-  Pick<ProviderProfileInput, 'name' | 'kind' | 'defaultModel' | 'customModels'>
-> & Pick<ProviderProfileInput, 'id' | 'baseUrl' | 'secret' | 'clearSecret'> {
+  Pick<ProviderProfileInput, 'name' | 'kind' | 'defaultModel' | 'customModels' | 'imageModels'>
+> & Pick<ProviderProfileInput, 'id' | 'baseUrl' | 'secret' | 'clearSecret' | 'defaultImageModel'> {
   const id = input.id?.trim()
   if (id && id.length > 200) throw new Error('Provider id must be 200 characters or fewer')
   if (id) validateProviderId(id)
@@ -492,6 +503,16 @@ function normalizeInput(input: ProviderProfileInput): Required<
   if (customModels.some((model) => model.length > 200)) {
     throw new Error('Custom model names must be 200 characters or fewer')
   }
+  const defaultImageModel = input.defaultImageModel?.trim() || undefined
+  if (defaultImageModel && defaultImageModel.length > 200) {
+    throw new Error('Default image model must be 200 characters or fewer')
+  }
+  if ((input.imageModels?.length ?? 0) > 200) throw new Error('At most 200 image models may be saved')
+  const imageModels = [...new Set((input.imageModels ?? []).map((model) => model.trim()))]
+    .filter(Boolean)
+  if (imageModels.some((model) => model.length > 200)) {
+    throw new Error('Image model names must be 200 characters or fewer')
+  }
   const secret = input.secret?.trim() || undefined
   if (secret && secret.length > 32_768) throw new Error('Credential is too large')
   if (secret && /[\u0000-\u001f\u007f]/.test(secret)) {
@@ -504,6 +525,8 @@ function normalizeInput(input: ProviderProfileInput): Required<
     ...(baseUrl ? { baseUrl } : {}),
     defaultModel,
     customModels,
+    ...(defaultImageModel ? { defaultImageModel } : {}),
+    imageModels,
     ...(secret ? { secret } : {}),
     ...(input.clearSecret ? { clearSecret: true } : {})
   }
@@ -555,6 +578,8 @@ function toPublicProfile(profile: StoredProviderProfile): ProviderProfile {
     ...(profile.baseUrl ? { baseUrl: profile.baseUrl } : {}),
     defaultModel: profile.defaultModel,
     customModels: [...profile.customModels],
+    ...(profile.defaultImageModel ? { defaultImageModel: profile.defaultImageModel } : {}),
+    imageModels: [...profile.imageModels],
     hasSecret: Boolean(profile.encryptedSecret),
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt
@@ -566,7 +591,8 @@ function cloneDocument(document: ProviderSettingsDocument): ProviderSettingsDocu
     version: document.version,
     profiles: document.profiles.map((profile) => ({
       ...profile,
-      customModels: [...profile.customModels]
+      customModels: [...profile.customModels],
+      imageModels: [...profile.imageModels]
     }))
   }
 }
@@ -605,6 +631,18 @@ function parseStoredProfile(value: unknown): StoredProviderProfile {
   if (value.customModels.length > 200 || value.customModels.some((model) => model.length > 200)) {
     throw new Error(`Provider profile '${id}' has too many or oversized custom models`)
   }
+  const defaultImageModel = value.defaultImageModel === undefined
+    ? (value.kind === 'openai' ? 'gpt-image-2' : undefined)
+    : optionalStoredStringAllowEmpty(value.defaultImageModel, 'defaultImageModel', 200)
+  const rawImageModels = value.imageModels === undefined
+    ? (value.kind === 'openai' ? ['gpt-image-2', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini'] : [])
+    : value.imageModels
+  if (!Array.isArray(rawImageModels) || rawImageModels.some((model) => typeof model !== 'string')) {
+    throw new Error(`Provider profile '${id}' has invalid image models`)
+  }
+  if (rawImageModels.length > 200 || rawImageModels.some((model) => model.length > 200)) {
+    throw new Error(`Provider profile '${id}' has too many or oversized image models`)
+  }
   const baseUrl = optionalStoredString(value.baseUrl, 'baseUrl', 2_048)
   if (baseUrl) validateBaseUrl(baseUrl)
   if (value.kind === 'openai-compatible' && !baseUrl) {
@@ -621,6 +659,8 @@ function parseStoredProfile(value: unknown): StoredProviderProfile {
     ...(baseUrl ? { baseUrl } : {}),
     defaultModel,
     customModels: [...new Set(value.customModels.map((model) => model.trim()).filter(Boolean))],
+    defaultImageModel: defaultImageModel ?? '',
+    imageModels: [...new Set(rawImageModels.map((model) => model.trim()).filter(Boolean))],
     ...(encryptedSecret ? { encryptedSecret } : {}),
     createdAt: requiredStoredDate(value.createdAt, 'createdAt'),
     updatedAt: requiredStoredDate(value.updatedAt, 'updatedAt')
@@ -632,6 +672,17 @@ function requiredStoredString(value: unknown, field: string, maximum: number): s
     throw new Error(`Provider settings profile field '${field}' is invalid`)
   }
   return value
+}
+
+function optionalStoredStringAllowEmpty(
+  value: unknown,
+  field: string,
+  maximum: number
+): string | undefined {
+  if (typeof value !== 'string' || value.length > maximum) {
+    throw new Error(`Provider settings profile field '${field}' is invalid`)
+  }
+  return value.trim() || undefined
 }
 
 function optionalStoredString(value: unknown, field: string, maximum: number): string | undefined {

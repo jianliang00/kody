@@ -1,4 +1,4 @@
-import { AtSign, FolderOpen, Send, ShieldCheck, Square, X } from 'lucide-react'
+import { AtSign, FolderOpen, Image as ImageIcon, Send, ShieldCheck, Square, X } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import type {
   ContextReference,
@@ -59,6 +59,8 @@ interface ComposerProps {
     permissionMode: PermissionMode
   ) => Promise<boolean>
   onCancel: () => Promise<void>
+  imageGenerationAvailable?: boolean
+  onOpenImageGenerator?: () => void
 }
 
 export function Composer({
@@ -85,7 +87,9 @@ export function Composer({
   onPickWorkingDirectory,
   onClearWorkingDirectory,
   onSend,
-  onCancel
+  onCancel,
+  imageGenerationAvailable = false,
+  onOpenImageGenerator
 }: ComposerProps) {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [manualPalette, setManualPalette] = useState(false)
@@ -333,6 +337,16 @@ export function Composer({
           >
             <AtSign aria-hidden="true" size={16} />
             <span>Add context</span>
+          </button>
+          <button
+            className="context-button"
+            type="button"
+            disabled={unavailable || running || !imageGenerationAvailable}
+            onClick={onOpenImageGenerator}
+            title={imageGenerationAvailable ? 'Generate an image' : 'Configure an image provider first'}
+          >
+            <ImageIcon aria-hidden="true" size={16} />
+            <span>Image</span>
           </button>
           <div
             className={`permission-mode-control permission-mode-control--${permissionMode}`}

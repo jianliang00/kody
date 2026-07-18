@@ -12,6 +12,9 @@ flowchart LR
     Runtime --> Providers["ProviderRegistry"]
     Providers --> Responses["OpenAI Responses"]
     Providers --> Compatible["OpenAI-compatible Chat Completions"]
+    Engine --> Images["ImageService / ImageProviderRegistry"]
+    Images --> ImageApi["OpenAI-compatible Images API"]
+    Images --> Artifacts["Workspace image artifacts"]
     TurnManager -->|"provider = codex"| CodexBackend["Codex ExternalTurnBackend"]
     CodexBackend -->|"JSONL over stdio"| CodexSidecar["official codex app-server"]
     CodexSidecar --> ChatGPT["ChatGPT account / Codex quota"]
@@ -22,6 +25,7 @@ flowchart LR
     Processes --> ProcessLogs["bounded durable logs"]
     Context --> Store["StateStore"]
     Runtime --> Store
+    Images --> Store
     Processes --> Store
     Store --> Json["atomic state.json"]
     Events -->|"turn/event"| Client
@@ -40,12 +44,14 @@ erDiagram
     THREAD ||--o{ TURN : contains
     THREAD ||--o{ MESSAGE : records
     THREAD ||--o{ MANAGED_PROCESS : owns
+    THREAD ||--o{ ARTIFACT : owns
     THREAD ||--o{ EXTERNAL_THREAD_BINDING : binds
     TURN ||--o{ MANAGED_PROCESS : originates
     PROJECT o|--o{ MANAGED_PROCESS : runs_in
     TURN ||--|| MESSAGE : input
     MESSAGE }o--o{ THREAD : references
     MESSAGE }o--o{ PROJECT : references
+    MESSAGE o|--o{ ARTIFACT : presents
 ```
 
 The important ownership rules are:
@@ -58,6 +64,7 @@ The important ownership rules are:
 6. A desktop draft is not a domain entity. `thread/create-and-start` materializes Thread, Workspace, optional Project, user Message, and first Turn only on Send; its client request ID is process-locally idempotent.
 7. A Managed Process belongs to one Thread and records the Turn/tool-call origin that created it. Its lifecycle is independent from that Turn, so cancellation never implicitly kills a successfully started process.
 8. External Thread IDs are opaque values namespaced by backend ID. A Kody Thread may resume the same Codex Thread without making Codex authentication or wire state part of Kody's domain model.
+9. An Artifact belongs to exactly one Thread and stores only validated Workspace-relative metadata in state. Direct image generation associates artifacts with its assistant Message; tool-generated artifacts remain discoverable through ToolResult metadata.
 
 ## Agent loop
 
@@ -114,6 +121,14 @@ Provider selection and model selection are separate:
 - If omitted, `ModelProvider::default_model` is used.
 
 The registry replaces a provider atomically. `prepare_turn` resolves the adapter and retains an `Arc` lease keyed by Turn ID, so replacing or removing a Profile cannot change an already queued Turn; future Turns observe the new registry state.
+
+## Image providers and durable artifacts
+
+`ImageProvider` is separate from `ModelProvider` and exposes generation-specific requests, outputs, model catalogs, and capabilities. `ImageService` resolves a configured provider/model, validates bounded provider-neutral input and output, enforces one direct generation per Thread, and writes validated PNG/JPEG/WebP bytes through private temporary files into the Thread Workspace. Metadata and direct user/assistant messages are committed atomically; a failed state commit removes the newly written files.
+
+The first adapter targets OpenAI-compatible `/images/generations` endpoints and decodes bounded `b64_json` responses. Provider IDs and model IDs remain opaque, so one installation can configure multiple profiles and multiple image models without adding model-specific branches to the runtime or Renderer. Future adapters can report different per-model size, quality, format, editing, and masking capabilities through the same catalog.
+
+Artifact bytes never travel through JSON-RPC or durable JSON state. The authenticated artifact HTTP route resolves metadata first, canonicalizes the owning Workspace path, rejects path escapes and MIME/size mismatches, and serves bytes with private no-store headers. Electron main performs the authenticated fetch; Renderer receives only a bounded image data URL through a narrow IPC method.
 
 ## Codex external Turn backend
 
