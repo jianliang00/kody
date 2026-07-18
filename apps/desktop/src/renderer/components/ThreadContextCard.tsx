@@ -1,7 +1,9 @@
+import { useState } from 'react'
 import {
   Activity,
+  Check,
   ChevronDown,
-  ChevronUp,
+  Clipboard,
   FolderCog,
   FolderGit2,
   MessagesSquare,
@@ -19,6 +21,7 @@ interface ThreadContextCardProps {
   context: ThreadContextView
   detailsOpen: boolean
   onOpenDetails: () => void
+  onCopyText: (text: string) => Promise<void>
 }
 
 export function ThreadContextCard({
@@ -27,7 +30,8 @@ export function ThreadContextCard({
   projects,
   context,
   detailsOpen,
-  onOpenDetails
+  onOpenDetails,
+  onCopyText
 }: ThreadContextCardProps) {
   const activeProcesses = sortManagedProcesses(snapshot.processes.filter(isProcessActive))
   const activeProcessOrigins = new Set(activeProcesses.map((process) => (
@@ -51,19 +55,19 @@ export function ThreadContextCard({
           <p className="eyebrow">Current Thread</p>
           <h2 id="thread-context-card-title">Context</h2>
         </div>
-        <button
-          className="icon-button icon-button--small"
-          type="button"
-          onClick={onOpenDetails}
-          aria-label={detailsOpen ? 'Collapse Content & activity' : 'Expand Content & activity'}
-          aria-controls="thread-inspector"
-          aria-expanded={detailsOpen}
-          title={detailsOpen ? 'Collapse Content & activity' : 'Expand Content & activity'}
-        >
-          {detailsOpen
-            ? <ChevronUp aria-hidden="true" size={15} />
-            : <ChevronDown aria-hidden="true" size={15} />}
-        </button>
+        {!detailsOpen ? (
+          <button
+            className="icon-button icon-button--small"
+            type="button"
+            onClick={onOpenDetails}
+            aria-label="Expand Content & activity"
+            aria-controls="thread-inspector"
+            aria-expanded="false"
+            title="Expand Content & activity"
+          >
+            <ChevronDown aria-hidden="true" size={15} />
+          </button>
+        ) : null}
       </header>
 
       <dl className="thread-context-card__metrics">
@@ -155,14 +159,61 @@ export function ThreadContextCard({
         </section>
       </div> : null}
 
-      {!detailsOpen ? <footer className="thread-context-card__footer">
-        <FolderCog aria-hidden="true" size={13} />
-        <span title={snapshot.workspace.root}>{snapshot.workspace.root}</span>
-        {context.pendingReferences.length > 0 ? (
-          <span className="count-pill" title="References pending for the next message">+{context.pendingReferences.length}</span>
-        ) : null}
-      </footer> : null}
+      {!detailsOpen ? (
+        <WorkspacePath
+          path={snapshot.workspace.root}
+          pendingReferenceCount={context.pendingReferences.length}
+          onCopyText={onCopyText}
+        />
+      ) : null}
     </aside>
+  )
+}
+
+function WorkspacePath({
+  path,
+  pendingReferenceCount,
+  onCopyText
+}: {
+  path: string
+  pendingReferenceCount: number
+  onCopyText: (text: string) => Promise<void>
+}) {
+  const [copied, setCopied] = useState(false)
+
+  return (
+    <footer className="thread-context-card__footer">
+      <details className="thread-context-card__workspace-path">
+        <summary title={path}>
+          <FolderCog aria-hidden="true" size={13} />
+          <code>{path}</code>
+          {pendingReferenceCount > 0 ? (
+            <span className="count-pill" title="References pending for the next message">+{pendingReferenceCount}</span>
+          ) : null}
+          <ChevronDown className="thread-context-card__workspace-chevron" aria-hidden="true" size={13} />
+        </summary>
+        <div className="thread-context-card__workspace-full">
+          <code>{path}</code>
+          <button
+            className="icon-button icon-button--small"
+            type="button"
+            aria-label={copied ? 'Workspace path copied' : 'Copy Workspace path'}
+            title={copied ? 'Copied' : 'Copy Workspace path'}
+            onClick={async () => {
+              try {
+                await onCopyText(path)
+                setCopied(true)
+                window.setTimeout(() => setCopied(false), 1_500)
+              } catch {
+                setCopied(false)
+              }
+            }}
+          >
+            {copied ? <Check aria-hidden="true" size={13} /> : <Clipboard aria-hidden="true" size={13} />}
+          </button>
+        </div>
+      </details>
+    </footer>
   )
 }
 

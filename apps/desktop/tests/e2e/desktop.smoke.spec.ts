@@ -490,7 +490,7 @@ test('creates the first Thread through one idempotent draft request', async () =
         itemDetail: fontSize('.thread-context-card__group li > span:last-child'),
         emptyState: fontSize('.thread-context-card__empty'),
         processEmpty: fontSize('.thread-context-card__process-empty'),
-        workspacePath: fontSize('.thread-context-card__footer > span'),
+        workspacePath: fontSize('.thread-context-card__workspace-path > summary > code'),
         metricLabelsFit: Object.fromEntries(
           [...card.querySelectorAll<HTMLElement>('.thread-context-card__metric dt')]
             .map((element) => [element.textContent?.trim() ?? '', element.scrollWidth <= element.clientWidth])
@@ -514,6 +514,11 @@ test('creates the first Thread through one idempotent draft request', async () =
         'Managed procs': true
       }
     })
+    const workspacePathDisclosure = contextCard.locator('.thread-context-card__workspace-path')
+    await workspacePathDisclosure.locator('summary').click()
+    const completeWorkspacePath = workspacePathDisclosure.locator('.thread-context-card__workspace-full > code')
+    await expect(completeWorkspacePath).toBeVisible()
+    await expect(completeWorkspacePath).toHaveText(durable.snapshot.workspace.root)
     if (process.env.KODY_QA_CONTEXT_SCREENSHOT) {
       await page.screenshot({ path: process.env.KODY_QA_CONTEXT_SCREENSHOT, animations: 'disabled' })
     }
@@ -524,7 +529,28 @@ test('creates the first Thread through one idempotent draft request', async () =
     const inspector = page.getByLabel('Thread context and activity')
     await expect(inspector).toBeVisible()
     await expect(inspector.getByRole('button', { name: 'Collapse Content & activity' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Collapse Content & activity' })).toHaveCount(1)
     await expect(page.getByRole('heading', { name: 'Context & activity', exact: true })).toBeVisible()
+    const rightRailHeadingOffsets = await page.locator('#right-rail').evaluate((rail) => {
+      const railLeft = rail.getBoundingClientRect().left
+      const selectors = [
+        '.thread-context-card__header .eyebrow',
+        '.inspector__header .eyebrow',
+        '.workspace-card > header .eyebrow',
+        '.context-constellation > header .eyebrow',
+        '.project-shelf__header .eyebrow'
+      ]
+      return selectors.map((selector) => {
+        const element = rail.querySelector(selector)
+        if (!(element instanceof HTMLElement)) throw new Error(`Missing right rail alignment fixture: ${selector}`)
+        return element.getBoundingClientRect().left - railLeft
+      })
+    })
+    expect(Math.max(...rightRailHeadingOffsets) - Math.min(...rightRailHeadingOffsets)).toBeLessThanOrEqual(1.1)
+    await expect(inspector.locator('.workspace-card .path-copy code')).toHaveText(durable.snapshot.workspace.root)
+    if (process.env.KODY_QA_INSPECTOR_SCREENSHOT) {
+      await page.screenshot({ path: process.env.KODY_QA_INSPECTOR_SCREENSHOT, animations: 'disabled' })
+    }
     const applicationTypography = await page.evaluate(() => {
       const fontSize = (selector: string) => {
         const element = document.querySelector(selector)

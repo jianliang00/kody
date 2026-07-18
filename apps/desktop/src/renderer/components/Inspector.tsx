@@ -6,7 +6,6 @@ import {
   Clipboard,
   Code2,
   FileCode2,
-  FolderCog,
   ShieldCheck,
   Terminal,
   X
@@ -177,8 +176,7 @@ export function Inspector({
 
       <div className="inspector__scroll">
         <section className="inspector-section workspace-card" aria-labelledby="workspace-title">
-          <header>
-            <span className="constellation-node constellation-node--workspace"><FolderCog aria-hidden="true" size={15} /></span>
+          <header className="section-heading">
             <div>
               <p className="eyebrow">Ephemeral runtime</p>
               <h3 id="workspace-title">Workspace</h3>
@@ -285,7 +283,7 @@ export function Inspector({
 
         <details className="inspector-section disclosure" open>
           <summary>
-            <span><FileCode2 aria-hidden="true" size={15} /> Changed files</span>
+            <span>Changed files</span>
             <span className="summary-tail"><span className="count-pill">{changedFiles.length}</span><ChevronDown aria-hidden="true" size={14} /></span>
           </summary>
           {changedFiles.length === 0 ? (

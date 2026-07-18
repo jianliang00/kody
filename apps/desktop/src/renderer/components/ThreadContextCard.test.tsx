@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ThreadContextView } from '../lib/threadContext'
 import type { Project, Thread, ThreadSnapshot } from '@shared/protocol'
 import { ThreadContextCard } from './ThreadContextCard'
@@ -78,6 +78,7 @@ describe('ThreadContextCard', () => {
         reason: 'Needs permission'
       }]
     }
+    const onCopyText = vi.fn(async () => undefined)
 
     render(
       <ThreadContextCard
@@ -87,6 +88,7 @@ describe('ThreadContextCard', () => {
         context={context}
         detailsOpen={false}
         onOpenDetails={vi.fn()}
+        onCopyText={onCopyText}
       />
     )
 
@@ -103,6 +105,93 @@ describe('ThreadContextCard', () => {
     expect(screen.getByTitle('Active managed background processes').parentElement?.textContent).toContain('3')
     expect(screen.getByTitle('References pending for the next message').textContent).toBe('+1')
     expect(screen.getByRole('button', { name: 'Expand Content & activity' }).getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('reveals and copies the complete Workspace path', async () => {
+    const path = '/Users/jianliang/Library/Application Support/Kody/workspaces/thread-current'
+    const snapshot: ThreadSnapshot = {
+      thread: thread('thread-current', 'Inspect Workspace'),
+      workspace: {
+        id: 'workspace-current',
+        thread_id: 'thread-current',
+        root: path,
+        created_at: now
+      },
+      messages: [],
+      turns: [],
+      pending_approvals: [],
+      pending_user_inputs: [],
+      processes: []
+    }
+    const onCopyText = vi.fn(async () => undefined)
+
+    const { container } = render(
+      <ThreadContextCard
+        snapshot={snapshot}
+        threads={[]}
+        projects={[]}
+        context={{
+          threadReferences: [],
+          projectReferences: [],
+          pendingReferences: [],
+          activeTurns: [],
+          runningTools: [],
+          pendingApprovals: []
+        }}
+        detailsOpen={false}
+        onOpenDetails={vi.fn()}
+        onCopyText={onCopyText}
+      />
+    )
+
+    const disclosure = container.querySelector<HTMLDetailsElement>('.thread-context-card__workspace-path')
+    expect(disclosure?.open).toBe(false)
+    fireEvent.click(disclosure!.querySelector('summary')!)
+    expect(disclosure?.open).toBe(true)
+    expect(container.querySelector('.thread-context-card__workspace-full code')?.textContent).toBe(path)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Workspace path' }))
+    await waitFor(() => expect(onCopyText).toHaveBeenCalledWith(path))
+    expect(screen.getByRole('button', { name: 'Workspace path copied' })).toBeTruthy()
+  })
+
+  it('leaves collapse control ownership to the expanded Inspector', () => {
+    const snapshot: ThreadSnapshot = {
+      thread: thread('thread-current', 'Inspect context'),
+      workspace: {
+        id: 'workspace-current',
+        thread_id: 'thread-current',
+        root: '/tmp/thread-current',
+        created_at: now
+      },
+      messages: [],
+      turns: [],
+      pending_approvals: [],
+      pending_user_inputs: [],
+      processes: []
+    }
+
+    render(
+      <ThreadContextCard
+        snapshot={snapshot}
+        threads={[]}
+        projects={[]}
+        context={{
+          threadReferences: [],
+          projectReferences: [],
+          pendingReferences: [],
+          activeTurns: [],
+          runningTools: [],
+          pendingApprovals: []
+        }}
+        detailsOpen
+        onOpenDetails={vi.fn()}
+        onCopyText={vi.fn(async () => undefined)}
+      />
+    )
+
+    expect(screen.queryByRole('button', { name: 'Collapse Content & activity' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Expand Content & activity' })).toBeNull()
   })
 })
 

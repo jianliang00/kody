@@ -1584,6 +1584,7 @@ export function App() {
             context={threadContext}
             detailsOpen={!inspectorCollapsed}
             onOpenDetails={toggleInspectorDetails}
+            onCopyText={copyText}
           />
         ) : null}
         {snapshot ? (
