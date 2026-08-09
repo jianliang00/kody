@@ -30,6 +30,8 @@ describe('ProviderSettingsDialog', () => {
     fireEvent.click(screen.getByRole('option', { name: 'OpenAI-compatible' }))
     fireEvent.change(screen.getByLabelText(/Default model/), { target: { value: 'team-coder' } })
     fireEvent.change(screen.getByLabelText(/Custom models/), { target: { value: 'fast\nfast, precise' } })
+    fireEvent.change(screen.getByLabelText(/Tool-capable models/), { target: { value: 'team-coder' } })
+    fireEvent.change(screen.getByLabelText(/Vision-capable models/), { target: { value: 'team-coder' } })
     const baseUrl = screen.getByLabelText(/Base URL/)
     fireEvent.change(baseUrl, { target: { value: 'file:///private/models' } })
     fireEvent.blur(baseUrl)
@@ -70,6 +72,8 @@ describe('ProviderSettingsDialog', () => {
       baseUrl: 'https://models.example.test/v1',
       defaultModel: 'team-coder',
       customModels: ['fast', 'precise'],
+      toolModels: ['team-coder'],
+      visionModels: ['team-coder'],
       imageModels: [],
       secret: 'CANARY-renderer-secret'
     })
@@ -169,6 +173,8 @@ function savedProfile(): ProviderProfileView {
     kind: 'openai',
     defaultModel: 'gpt-team',
     customModels: ['gpt-team-fast'],
+    toolModels: ['gpt-team'],
+    visionModels: ['gpt-team'],
     imageModels: ['gpt-image-2'],
     hasSecret: true,
     updatedAt: '2026-07-13T00:00:00.000Z'

@@ -14,6 +14,7 @@ describe('browser mock approvals', () => {
     const startedRequest = bridge.rpc('thread/create-and-start', {
       client_request_id: 'approval-preview-test',
       message: 'Run cargo test for this project',
+      images: [],
       references: [],
       provider: 'echo',
       model: 'kody-demo',

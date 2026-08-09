@@ -57,7 +57,6 @@ Dot aliases such as `turn.start` are accepted for application methods. WebSocket
       "capabilities": {
         "streaming": true,
         "reasoning": true,
-        "tools": true,
         "model_catalog": true,
         "custom_models": true
       },
@@ -71,7 +70,6 @@ Dot aliases such as `turn.start` are accepted for application methods. WebSocket
       "capabilities": {
         "streaming": true,
         "reasoning": true,
-        "tools": true,
         "model_catalog": true,
         "custom_models": false
       }
@@ -89,6 +87,10 @@ Authentication states are `not_required`, `configured`, `missing`, or `unknown`.
       "id": "gpt-example",
       "display_name": "GPT Example",
       "is_default": true,
+      "capabilities": {
+        "tool_calling": true,
+        "input_modalities": ["text", "image"]
+      },
       "description": "General coding model",
       "default_reasoning_effort": "medium",
       "reasoning_efforts": ["low", "medium", "high"],
@@ -99,7 +101,7 @@ Authentication states are `not_required`, `configured`, `missing`, or `unknown`.
 }
 ```
 
-Only `id`, `display_name`, and `is_default` are guaranteed; the remaining model metadata is optional. Model IDs are opaque and must be returned unchanged in `turn/start` or `thread/create-and-start`. If a Turn omits `model`, the selected Provider must advertise a `default_model`; otherwise preparation fails.
+`id`, `display_name`, `is_default`, and `capabilities` are guaranteed; the remaining model metadata is optional. Tool calling and input modalities belong to each model rather than the Provider as a whole. Unknown or unconfigured model IDs are treated as text-only with tool calling disabled. Model IDs are opaque and must be returned unchanged in `turn/start` or `thread/create-and-start`. If a Turn omits `model`, the selected Provider must advertise a `default_model`; otherwise preparation fails.
 
 ## Turn permission modes
 
@@ -126,6 +128,8 @@ The privileged native Provider configuration request is:
     "api_key": "WRITE_ONLY_SECRET",
     "default_model": "gpt-example",
     "custom_models": ["gpt-example"],
+    "tool_models": ["gpt-example"],
+    "vision_models": ["gpt-example"],
     "default_image_model": "gpt-image-2",
     "image_models": ["gpt-image-2", "gpt-image-1.5"]
   }
@@ -136,7 +140,23 @@ The privileged native Provider configuration request is:
 
 `provider/health` takes the same `provider_id` shape and returns a sanitized object such as `{"status":"healthy"}` or `{"status":"unavailable","message":"..."}`. Status values are `healthy`, `degraded`, and `unavailable`.
 
-## Image generation and artifacts
+## Image input, generation, and artifacts
+
+`turn/start` and `thread/create-and-start` accept up to four uploaded images in `images`. Each image is a validated PNG, JPEG, or WebP of at most 16 MiB:
+
+```json
+"images": [
+  {
+    "file_name": "screen.png",
+    "mime_type": "image/png",
+    "data_base64": "..."
+  }
+]
+```
+
+The selected model must advertise `image` in `capabilities.input_modalities`; otherwise Turn preparation fails without persisting the message or files. Uploads are written as durable Thread artifacts, while image bytes are materialized into model input only for the current Turn. Historical images remain lightweight artifact references until the model explicitly calls `view_image` with an artifact ID.
+
+Kody exposes `view_image` only when the selected model supports both tool calling and image input and the Provider adapter has a supported image-delivery strategy. It is a read-only tool, so it remains available in `read_only` mode. Its structured result contains text plus an artifact reference. OpenAI Responses receives that reference as native multimodal function output; OpenAI-compatible Chat Completions receives a tool result followed by a synthetic user image message. Persistent state contains the artifact ID, never another copy of the image bytes.
 
 Image generation has its own provider-neutral registry because chat and image model capabilities are different. `image/provider/list` takes `{}`. `image/models` takes `{"provider_id":"team-openai"}` and returns model descriptors with `generation`, `editing`, `masking`, `max_images`, `sizes`, `qualities`, and `output_formats` capabilities.
 
@@ -162,7 +182,7 @@ Direct generation records one user prompt message, one assistant artifact messag
 
 The response contains `provider`, `model`, and an `artifacts` array. Artifact metadata includes its UUID, owning Thread/message, MIME type, file name, Workspace-relative path, byte size, provider, model, prompt, and creation time; it never embeds image bytes. Authenticated clients fetch bytes from `GET /v1/artifacts/{artifact_id}` with the same Bearer Token. The endpoint only serves validated PNG, JPEG, or WebP files from the owning Workspace and returns `Cache-Control: private, no-store` plus `X-Content-Type-Options: nosniff`.
 
-The native Agent also sees a `generate_image` tool. In `ask` mode it requires approval because it may create billable external usage; `read_only` does not expose it, while `full_access` permits it without an interactive gate. Tool-created artifacts are returned in structured ToolResult metadata and remain durable after the Turn.
+The native Agent also sees a `generate_image` tool. In `ask` mode it requires approval because it may create billable external usage; `read_only` does not expose it, while `full_access` permits it without an interactive gate. Tool-created artifacts are returned as structured `ToolResult.output` parts and remain durable after the Turn. The generated result names each artifact ID so a capable model can inspect a selected result with `view_image`.
 
 ## Codex account and execution backend
 
@@ -186,6 +206,7 @@ Desktop clients should keep a new conversation entirely local until the first me
   "params": {
     "client_request_id": "LOCAL_DRAFT_UUID",
     "message": "Implement OAuth login",
+    "images": [],
     "provider": "openai",
     "model": "gpt-example",
     "working_directory": "/absolute/path/to/repo",

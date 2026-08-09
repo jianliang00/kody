@@ -40,6 +40,7 @@ async fn executes_a_real_turn_with_codex_plan_quota() {
             StartTurn {
                 thread_id: thread.id,
                 message: "Reply with exactly KODY_CODEX_SMOKE_OK. Do not call tools.".into(),
+                images: Vec::new(),
                 references: Vec::new(),
                 provider: "codex".into(),
                 model: Some(model),

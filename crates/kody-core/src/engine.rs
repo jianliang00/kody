@@ -14,7 +14,7 @@ use crate::{
     },
     error::{KodyError, Result},
     event::EventHub,
-    image::{GenerateImageTool, ImageProviderRegistry, ImageService},
+    image::{GenerateImageTool, ImageProviderRegistry, ImageService, ViewImageTool},
     process::{ProcessManager, ProcessManagerConfig},
     provider::ProviderRegistry,
     runtime::{AgentRuntime, AgentRuntimeConfig},
@@ -156,6 +156,7 @@ impl KodyEngine {
         let images = Arc::new(ImageService::new(store.clone(), image_providers.clone()));
         let mut tool_registry = ToolRegistry::with_builtins_and_processes(processes.clone())?;
         tool_registry.register(GenerateImageTool::new(images.clone()))?;
+        tool_registry.register(ViewImageTool::new(images.clone()))?;
         let tools = Arc::new(tool_registry);
         let events = EventHub::new(config.event_buffer);
         let context_builder = Arc::new(DefaultContextBuilder::default());
@@ -164,6 +165,7 @@ impl KodyEngine {
                 store.clone(),
                 providers.clone(),
                 tools.clone(),
+                images.clone(),
                 events.clone(),
                 context_builder,
                 title_generator,
@@ -173,6 +175,7 @@ impl KodyEngine {
                 store.clone(),
                 providers.clone(),
                 tools.clone(),
+                images.clone(),
                 events.clone(),
                 context_builder,
                 config.agent.clone(),

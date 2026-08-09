@@ -21,8 +21,9 @@ use crate::error::{KodyError, Result};
 pub use crate::tools::{ToolCall, ToolDefinition, ToolResult};
 pub use echo::EchoProvider;
 pub use metadata::{
-    AuthState, ModelDescriptor, ProviderCapabilities, ProviderDescriptor, ProviderErrorKind,
-    ProviderFailure, ProviderHealth, ProviderHealthStatus,
+    AuthState, ImageDelivery, InputModality, ModelCapabilities, ModelDescriptor,
+    ProviderCapabilities, ProviderDescriptor, ProviderErrorKind, ProviderFailure, ProviderHealth,
+    ProviderHealthStatus,
 };
 pub use openai_compatible::{OpenAiCompatibleConfig, OpenAiCompatibleProvider};
 pub use openai_responses::{OpenAiResponsesConfig, OpenAiResponsesProvider};
@@ -54,12 +55,27 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         ProviderDescriptor::minimal(self.id(), self.default_model())
     }
 
+    /// Capabilities are model-specific. Unknown models are intentionally
+    /// treated as text-only instead of being guessed from their IDs.
+    fn model_capabilities(&self, _model: &str) -> ModelCapabilities {
+        ModelCapabilities::default()
+    }
+
+    /// How this provider transports an image returned by a function tool.
+    fn image_delivery(&self) -> ImageDelivery {
+        ImageDelivery::Unsupported
+    }
+
     /// Lists currently available models. Providers without a remote catalog
     /// return their configured default model when one exists.
     async fn list_models(&self) -> Result<Vec<ModelDescriptor>> {
         Ok(self
             .default_model()
-            .map(|id| ModelDescriptor::new(id).with_default(true))
+            .map(|id| {
+                let mut descriptor = ModelDescriptor::new(id).with_default(true);
+                descriptor.capabilities = self.model_capabilities(id);
+                descriptor
+            })
             .into_iter()
             .collect())
     }

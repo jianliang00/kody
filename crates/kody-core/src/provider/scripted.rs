@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use crate::error::{KodyError, Result};
 
 use super::{
-    emit_response, AuthState, ModelDeltaSink, ModelProvider, ModelRequest, ModelResponse,
-    ProviderCapabilities, ProviderDescriptor,
+    emit_response, AuthState, ImageDelivery, ModelCapabilities, ModelDeltaSink, ModelProvider,
+    ModelRequest, ModelResponse, ProviderCapabilities, ProviderDescriptor,
 };
 
 #[derive(Debug)]
@@ -23,6 +23,7 @@ enum ScriptedStep {
 #[derive(Debug)]
 pub struct ScriptedProvider {
     id: String,
+    capabilities: ModelCapabilities,
     steps: Mutex<VecDeque<ScriptedStep>>,
     requests: Mutex<Vec<ModelRequest>>,
 }
@@ -31,6 +32,7 @@ impl ScriptedProvider {
     pub fn new(id: impl Into<String>) -> Self {
         Self {
             id: id.into(),
+            capabilities: ModelCapabilities::text(true),
             steps: Mutex::new(VecDeque::new()),
             requests: Mutex::new(Vec::new()),
         }
@@ -49,6 +51,11 @@ impl ScriptedProvider {
             steps.extend(responses.into_iter().map(ScriptedStep::Response));
         }
         provider
+    }
+
+    pub fn with_image_input(mut self) -> Self {
+        self.capabilities = ModelCapabilities::vision(true);
+        self
     }
 
     pub fn enqueue_response(&self, response: ModelResponse) -> Result<()> {
@@ -107,6 +114,14 @@ impl ModelProvider for ScriptedProvider {
             capabilities: ProviderCapabilities::default(),
             default_model: Some("scripted".into()),
         }
+    }
+
+    fn model_capabilities(&self, _model: &str) -> ModelCapabilities {
+        self.capabilities.clone()
+    }
+
+    fn image_delivery(&self) -> ImageDelivery {
+        ImageDelivery::NativeToolOutput
     }
 
     async fn complete(

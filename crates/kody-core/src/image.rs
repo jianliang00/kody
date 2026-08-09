@@ -4,6 +4,7 @@
 use std::{
     collections::HashMap,
     fmt,
+    io::Cursor,
     path::{Component, Path, PathBuf},
     sync::{Arc, RwLock},
     time::Duration,
@@ -24,13 +25,15 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     domain::{
-        Artifact, ArtifactId, ArtifactKind, Message, MessageId, MessagePart, MessageRole, ThreadId,
-        ThreadStatus, TurnId,
+        Artifact, ArtifactId, ArtifactKind, ImageDetail, Message, MessageId, MessagePart,
+        MessageRole, ThreadId, ThreadStatus, ToolOutputPart, TurnId,
     },
     error::{KodyError, Result},
     provider::AuthState,
     store::StateStore,
-    tools::{Tool, ToolCall, ToolContext, ToolDefinition, ToolResult, ToolRisk},
+    tools::{
+        Tool, ToolCall, ToolContext, ToolDefinition, ToolModelRequirements, ToolResult, ToolRisk,
+    },
 };
 
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
@@ -38,8 +41,18 @@ const DEFAULT_IMAGE_MODEL: &str = "gpt-image-2";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_RESPONSE_BYTES: usize = 96 * 1024 * 1024;
 const MAX_IMAGE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_UPLOAD_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PROMPT_CHARS: usize = 64_000;
 const MAX_IMAGES: u8 = 4;
+const MAX_IMAGE_DIMENSION: u32 = 32_768;
+const MAX_IMAGE_PIXELS: u64 = 100_000_000;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UploadedImage {
+    pub file_name: String,
+    pub mime_type: String,
+    pub data_base64: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ImageModelCapabilities {
@@ -672,36 +685,81 @@ impl ImageService {
         })
     }
 
+    pub async fn stage_user_uploads(
+        &self,
+        thread_id: ThreadId,
+        message_id: MessageId,
+        uploads: Vec<UploadedImage>,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<Artifact>> {
+        if uploads.len() > usize::from(MAX_IMAGES) {
+            return Err(KodyError::InvalidInput(format!(
+                "a message may attach at most {MAX_IMAGES} images"
+            )));
+        }
+        let mut outputs = Vec::with_capacity(uploads.len());
+        for upload in uploads {
+            if cancellation.is_cancelled() {
+                return Err(KodyError::Cancelled);
+            }
+            let file_name = upload.file_name.trim();
+            if file_name.is_empty()
+                || file_name.chars().count() > 255
+                || file_name.contains('/')
+                || file_name.contains('\\')
+            {
+                return Err(KodyError::InvalidInput(
+                    "uploaded image has an invalid file name".into(),
+                ));
+            }
+            if upload.data_base64.len() > MAX_UPLOAD_BYTES.saturating_mul(4) / 3 + 4 {
+                return Err(KodyError::InvalidInput(format!(
+                    "uploaded image exceeds the {MAX_UPLOAD_BYTES} byte limit"
+                )));
+            }
+            let bytes = BASE64.decode(upload.data_base64).map_err(|error| {
+                KodyError::InvalidInput(format!("uploaded image is not valid base64: {error}"))
+            })?;
+            if bytes.is_empty() || bytes.len() > MAX_UPLOAD_BYTES {
+                return Err(KodyError::InvalidInput(format!(
+                    "uploaded image size must be between 1 byte and {MAX_UPLOAD_BYTES} bytes"
+                )));
+            }
+            let (detected_mime_type, _) = detect_image_format(&bytes).map_err(|_| {
+                KodyError::InvalidInput(
+                    "uploaded image is not a valid PNG, JPEG, or WebP file".into(),
+                )
+            })?;
+            validate_image_dimensions(&bytes)?;
+            if upload.mime_type != detected_mime_type {
+                return Err(KodyError::InvalidInput(
+                    "uploaded image MIME type does not match its bytes".into(),
+                ));
+            }
+            outputs.push(ImageOutput {
+                bytes,
+                mime_type: detected_mime_type.into(),
+                revised_prompt: Some(file_name.to_owned()),
+            });
+        }
+        self.persist_outputs(
+            thread_id,
+            Some(message_id),
+            "user",
+            "upload",
+            "User image attachment",
+            outputs,
+            cancellation,
+        )
+        .await
+    }
+
+    pub async fn discard_staged_artifacts(&self, artifacts: &[Artifact]) {
+        self.remove_artifact_files(artifacts).await;
+    }
+
     pub async fn read_artifact(&self, artifact_id: ArtifactId) -> Result<(Artifact, Vec<u8>)> {
-        let artifact = self.store.get_artifact(artifact_id).await?;
-        let workspace = self
-            .store
-            .get_workspace_for_thread(artifact.thread_id)
-            .await?;
-        validate_artifact_relative_path(&artifact.relative_path)?;
-        let root = tokio::fs::canonicalize(&workspace.root).await?;
-        let target = tokio::fs::canonicalize(workspace.root.join(&artifact.relative_path)).await?;
-        if !target.starts_with(&root) {
-            return Err(KodyError::Store(format!(
-                "artifact {} escapes its Thread Workspace",
-                artifact.id
-            )));
-        }
-        let bytes = tokio::fs::read(target).await?;
-        if bytes.len() as u64 != artifact.byte_size || bytes.len() > MAX_IMAGE_BYTES {
-            return Err(KodyError::Store(format!(
-                "artifact {} has inconsistent file metadata",
-                artifact.id
-            )));
-        }
-        let (mime_type, _) = detect_image_format(&bytes)?;
-        if mime_type != artifact.mime_type {
-            return Err(KodyError::Store(format!(
-                "artifact {} MIME type does not match its bytes",
-                artifact.id
-            )));
-        }
-        Ok((artifact, bytes))
+        read_artifact_from_store(self.store.as_ref(), artifact_id).await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -743,6 +801,7 @@ impl ImageService {
                 ));
             }
             let (detected_mime_type, extension) = detect_image_format(&output.bytes)?;
+            validate_image_dimensions(&output.bytes)?;
             if output.mime_type != detected_mime_type {
                 self.remove_artifact_files(&artifacts).await;
                 return Err(KodyError::Provider(
@@ -803,6 +862,39 @@ impl ImageService {
             }
         }
     }
+}
+
+pub(crate) async fn read_artifact_from_store(
+    store: &dyn StateStore,
+    artifact_id: ArtifactId,
+) -> Result<(Artifact, Vec<u8>)> {
+    let artifact = store.get_artifact(artifact_id).await?;
+    let workspace = store.get_workspace_for_thread(artifact.thread_id).await?;
+    validate_artifact_relative_path(&artifact.relative_path)?;
+    let root = tokio::fs::canonicalize(&workspace.root).await?;
+    let target = tokio::fs::canonicalize(workspace.root.join(&artifact.relative_path)).await?;
+    if !target.starts_with(&root) {
+        return Err(KodyError::Store(format!(
+            "artifact {} escapes its Thread Workspace",
+            artifact.id
+        )));
+    }
+    let bytes = tokio::fs::read(target).await?;
+    if bytes.len() as u64 != artifact.byte_size || bytes.len() > MAX_IMAGE_BYTES {
+        return Err(KodyError::Store(format!(
+            "artifact {} has inconsistent file metadata",
+            artifact.id
+        )));
+    }
+    let (mime_type, _) = detect_image_format(&bytes)?;
+    validate_image_dimensions(&bytes)?;
+    if mime_type != artifact.mime_type {
+        return Err(KodyError::Store(format!(
+            "artifact {} MIME type does not match its bytes",
+            artifact.id
+        )));
+    }
+    Ok((artifact, bytes))
 }
 
 #[derive(Debug, Deserialize)]
@@ -894,13 +986,89 @@ impl Tool for GenerateImageTool {
         Ok(ToolResult::success(
             call,
             format!(
-                "generated {} image artifact{} with {}",
+                "generated {} image artifact{} with {}: {}",
                 result.artifacts.len(),
                 if result.artifacts.len() == 1 { "" } else { "s" },
-                result.model
+                result.model,
+                result
+                    .artifacts
+                    .iter()
+                    .map(|artifact| artifact.id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
             json!({ "artifacts": result.artifacts }),
         ))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ViewImageArguments {
+    artifact_id: ArtifactId,
+    #[serde(default)]
+    detail: ImageDetail,
+}
+
+#[derive(Debug, Clone)]
+pub struct ViewImageTool {
+    service: Arc<ImageService>,
+}
+
+impl ViewImageTool {
+    pub fn new(service: Arc<ImageService>) -> Self {
+        Self { service }
+    }
+}
+
+#[async_trait]
+impl Tool for ViewImageTool {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new(
+            "view_image",
+            "Load one image artifact from this Thread and make its pixels available to the model.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "artifact_id": { "type": "string", "format": "uuid" },
+                    "detail": { "type": "string", "enum": ["auto", "low", "high"], "default": "auto" }
+                },
+                "required": ["artifact_id"],
+                "additionalProperties": false
+            }),
+        )
+    }
+
+    fn model_requirements(&self) -> ToolModelRequirements {
+        ToolModelRequirements { image_input: true }
+    }
+
+    async fn execute(&self, call: &ToolCall, context: &ToolContext) -> Result<ToolResult> {
+        let arguments: ViewImageArguments = serde_json::from_value(call.arguments.clone())
+            .map_err(|error| {
+                KodyError::InvalidInput(format!("invalid view_image arguments: {error}"))
+            })?;
+        let (artifact, _) = self.service.read_artifact(arguments.artifact_id).await?;
+        if artifact.thread_id != context.thread_id {
+            return Err(KodyError::Conflict(format!(
+                "artifact {} belongs to a different Thread",
+                artifact.id
+            )));
+        }
+        Ok(ToolResult::success(
+            call,
+            format!("loaded image artifact {}", artifact.id),
+            json!({ "artifact": artifact }),
+        )
+        .with_output(vec![
+            ToolOutputPart::Text {
+                text: format!("Loaded image artifact {}.", arguments.artifact_id),
+            },
+            ToolOutputPart::Artifact {
+                artifact_id: arguments.artifact_id,
+                detail: arguments.detail,
+            },
+        ]))
     }
 }
 
@@ -1111,6 +1279,27 @@ fn detect_image_format(bytes: &[u8]) -> Result<(&'static str, &'static str)> {
     Err(KodyError::Provider(
         "image provider returned an unsupported or invalid image file".into(),
     ))
+}
+
+fn validate_image_dimensions(bytes: &[u8]) -> Result<()> {
+    let reader = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|error| KodyError::InvalidInput(format!("could not inspect image: {error}")))?;
+    let (width, height) = reader.into_dimensions().map_err(|error| {
+        KodyError::InvalidInput(format!("could not read image dimensions: {error}"))
+    })?;
+    let pixels = u64::from(width).saturating_mul(u64::from(height));
+    if width == 0
+        || height == 0
+        || width > MAX_IMAGE_DIMENSION
+        || height > MAX_IMAGE_DIMENSION
+        || pixels > MAX_IMAGE_PIXELS
+    {
+        return Err(KodyError::InvalidInput(format!(
+            "image dimensions {width}x{height} exceed the supported limits"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_artifact_relative_path(path: &Path) -> Result<()> {

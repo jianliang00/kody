@@ -944,12 +944,12 @@ pub(super) mod tests {
 
         let read = ToolCall::new("read-1", "read_file", json!({ "path": "src/main.rs" }));
         let result = registry.execute(&read, &context).await.unwrap();
-        assert_eq!(result.content, "fn main() {}\n");
+        assert_eq!(result.text(), "fn main() {}\n");
         assert!(!result.is_error);
 
         let list = ToolCall::new("list-1", "list_directory", json!({ "path": "src" }));
         let result = registry.execute(&list, &context).await.unwrap();
-        assert_eq!(result.content, "main.rs");
+        assert_eq!(result.text(), "main.rs");
     }
 
     #[tokio::test]
@@ -998,7 +998,7 @@ pub(super) mod tests {
             json!({ "path": "README.md", "project_id": project_id }),
         );
         assert_eq!(
-            registry.execute(&read, &context).await.unwrap().content,
+            registry.execute(&read, &context).await.unwrap().text(),
             "hello"
         );
 
@@ -1035,9 +1035,9 @@ pub(super) mod tests {
 
         let result = registry.execute(&call, &context).await.unwrap();
         assert!(result.is_error);
-        assert!(result.content.contains("abcd"));
-        assert!(!result.content.contains("abcdefgh"));
-        assert!(result.content.contains("fail"));
+        assert!(result.text().contains("abcd"));
+        assert!(!result.text().contains("abcdefgh"));
+        assert!(result.text().contains("fail"));
         assert_eq!(result.metadata["exit_code"], 7);
         assert_eq!(result.metadata["stdout_truncated"], true);
         assert_eq!(result.metadata["stderr_truncated"], true);
@@ -1059,7 +1059,7 @@ pub(super) mod tests {
         let result = registry.execute(&call, &context).await.unwrap();
         assert!(!result.is_error);
         let child_pid = result
-            .content
+            .text()
             .lines()
             .skip_while(|line| *line != "stdout:")
             .nth(1)

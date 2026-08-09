@@ -16,9 +16,54 @@ pub enum AuthState {
 pub struct ProviderCapabilities {
     pub streaming: bool,
     pub reasoning: bool,
-    pub tools: bool,
     pub model_catalog: bool,
     pub custom_models: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputModality {
+    Text,
+    Image,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelCapabilities {
+    pub tool_calling: bool,
+    pub input_modalities: Vec<InputModality>,
+}
+
+impl ModelCapabilities {
+    pub fn text(tool_calling: bool) -> Self {
+        Self {
+            tool_calling,
+            input_modalities: vec![InputModality::Text],
+        }
+    }
+
+    pub fn vision(tool_calling: bool) -> Self {
+        Self {
+            tool_calling,
+            input_modalities: vec![InputModality::Text, InputModality::Image],
+        }
+    }
+
+    pub fn accepts_images(&self) -> bool {
+        self.input_modalities.contains(&InputModality::Image)
+    }
+}
+
+impl Default for ModelCapabilities {
+    fn default() -> Self {
+        Self::text(false)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageDelivery {
+    NativeToolOutput,
+    SyntheticUserMessage,
+    Unsupported,
 }
 
 /// Public, credential-free metadata for one configured provider instance.
@@ -55,6 +100,7 @@ pub struct ModelDescriptor {
     /// Whether this is the provider instance's currently configured default.
     #[serde(default)]
     pub is_default: bool,
+    pub capabilities: ModelCapabilities,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -74,6 +120,7 @@ impl ModelDescriptor {
             display_name: id.clone(),
             id,
             is_default: false,
+            capabilities: ModelCapabilities::default(),
             description: None,
             default_reasoning_effort: None,
             reasoning_efforts: Vec::new(),
@@ -186,10 +233,14 @@ mod tests {
     use super::ModelDescriptor;
 
     #[test]
-    fn model_descriptor_accepts_catalogs_without_optional_metadata() {
+    fn model_descriptor_accepts_catalogs_with_required_capabilities() {
         let model: ModelDescriptor = serde_json::from_value(json!({
             "id": "model-1",
-            "display_name": "Model 1"
+            "display_name": "Model 1",
+            "capabilities": {
+                "tool_calling": true,
+                "input_modalities": ["text", "image"]
+            }
         }))
         .unwrap();
 
@@ -197,6 +248,7 @@ mod tests {
         assert!(model.description.is_none());
         assert!(model.default_reasoning_effort.is_none());
         assert!(model.reasoning_efforts.is_empty());
+        assert!(model.capabilities.accepts_images());
     }
 
     #[test]

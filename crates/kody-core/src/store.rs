@@ -84,6 +84,14 @@ pub trait StateStore: Send + Sync {
         assistant: Message,
         artifacts: Vec<Artifact>,
     ) -> Result<(Message, Message, Vec<Artifact>)>;
+    /// Atomically persists one queued Turn, its user input, and any uploaded
+    /// image artifacts referenced by that input.
+    async fn insert_turn_input(
+        &self,
+        input: Message,
+        turn: Turn,
+        artifacts: Vec<Artifact>,
+    ) -> Result<(Message, Turn, Vec<Artifact>)>;
 
     async fn insert_turn(&self, turn: Turn) -> Result<Turn>;
     async fn get_turn(&self, id: TurnId) -> Result<Turn>;
@@ -137,7 +145,7 @@ pub struct JsonFileStore {
     persistence: Arc<Mutex<()>>,
 }
 
-const JSON_SNAPSHOT_VERSION: u32 = 3;
+const JSON_SNAPSHOT_VERSION: u32 = 4;
 const OLDEST_SUPPORTED_JSON_SNAPSHOT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -348,7 +356,6 @@ impl InMemoryStore {
                 "version 1 snapshots cannot contain managed processes",
             ));
         }
-
         let mut state = StoreState::default();
         for project in snapshot.projects {
             if state.projects.insert(project.id, project.clone()).is_some() {
@@ -1280,6 +1287,67 @@ impl StateStore for InMemoryStore {
         Ok((user, assistant, artifacts))
     }
 
+    async fn insert_turn_input(
+        &self,
+        input: Message,
+        turn: Turn,
+        artifacts: Vec<Artifact>,
+    ) -> Result<(Message, Turn, Vec<Artifact>)> {
+        if input.role != crate::domain::MessageRole::User
+            || input.thread_id != turn.thread_id
+            || input.id != turn.input_message_id
+            || input.turn_id != Some(turn.id)
+        {
+            return Err(KodyError::InvalidInput(
+                "queued Turn input must be a linked user message in the same Thread".into(),
+            ));
+        }
+        if artifacts.iter().any(|artifact| {
+            artifact.thread_id != input.thread_id || artifact.message_id != Some(input.id)
+        }) {
+            return Err(KodyError::InvalidInput(
+                "uploaded artifacts must belong to the queued Turn input message".into(),
+            ));
+        }
+        let mut state = self.inner.write().await;
+        let mut candidate = state.clone();
+        if candidate.messages.contains_key(&input.id) {
+            return Err(conflict(format!("message {} already exists", input.id)));
+        }
+        if candidate.turns.contains_key(&turn.id) {
+            return Err(conflict(format!("turn {} already exists", turn.id)));
+        }
+        candidate
+            .message_order_by_thread
+            .entry(input.thread_id)
+            .or_default()
+            .push(input.id);
+        candidate.messages.insert(input.id, input.clone());
+        candidate
+            .turn_order_by_thread
+            .entry(turn.thread_id)
+            .or_default()
+            .push(turn.id);
+        candidate.turns.insert(turn.id, turn.clone());
+        for artifact in &artifacts {
+            if candidate
+                .artifacts
+                .insert(artifact.id, artifact.clone())
+                .is_some()
+            {
+                return Err(conflict(format!("artifact {} already exists", artifact.id)));
+            }
+        }
+        if let Some(thread) = candidate.threads.get_mut(&input.thread_id) {
+            thread.updated_at = thread.updated_at.max(input.created_at);
+        }
+        validate_store_state(&candidate).map_err(|error| {
+            KodyError::InvalidInput(format!("invalid queued Turn input state: {error}"))
+        })?;
+        *state = candidate;
+        Ok((input, turn, artifacts))
+    }
+
     async fn insert_turn(&self, turn: Turn) -> Result<Turn> {
         let mut state = self.inner.write().await;
         if state.turns.contains_key(&turn.id) {
@@ -1694,6 +1762,19 @@ impl StateStore for JsonFileStore {
         )
     }
 
+    async fn insert_turn_input(
+        &self,
+        input: Message,
+        turn: Turn,
+        artifacts: Vec<Artifact>,
+    ) -> Result<(Message, Turn, Vec<Artifact>)> {
+        persistent_mutation!(
+            self,
+            candidate,
+            candidate.insert_turn_input(input, turn, artifacts).await
+        )
+    }
+
     async fn insert_turn(&self, turn: Turn) -> Result<Turn> {
         persistent_mutation!(self, candidate, candidate.insert_turn(turn).await)
     }
@@ -1935,28 +2016,46 @@ fn validate_message(state: &StoreState, message: &Message) -> Result<()> {
     }
     validate_references(state, message.thread_id, &message.references)?;
     for part in &message.parts {
-        if let MessagePart::Artifact {
-            artifact_id,
-            kind,
-            mime_type,
-            file_name,
-        } = part
-        {
-            let artifact = state
-                .artifacts
-                .get(artifact_id)
-                .ok_or(KodyError::ArtifactNotFound(*artifact_id))?;
-            if artifact.thread_id != message.thread_id
-                || artifact.message_id != Some(message.id)
-                || artifact.kind != *kind
-                || artifact.mime_type != *mime_type
-                || artifact.file_name != *file_name
-            {
-                return Err(conflict(format!(
-                    "artifact {artifact_id} does not match message {}",
-                    message.id
-                )));
+        match part {
+            MessagePart::Artifact {
+                artifact_id,
+                kind,
+                mime_type,
+                file_name,
+            } => {
+                let artifact = state
+                    .artifacts
+                    .get(artifact_id)
+                    .ok_or(KodyError::ArtifactNotFound(*artifact_id))?;
+                if artifact.thread_id != message.thread_id
+                    || artifact.message_id != Some(message.id)
+                    || artifact.kind != *kind
+                    || artifact.mime_type != *mime_type
+                    || artifact.file_name != *file_name
+                {
+                    return Err(conflict(format!(
+                        "artifact {artifact_id} does not match message {}",
+                        message.id
+                    )));
+                }
             }
+            MessagePart::ToolResult { output, .. } => {
+                for output_part in output {
+                    if let crate::domain::ToolOutputPart::Artifact { artifact_id, .. } = output_part
+                    {
+                        let artifact = state
+                            .artifacts
+                            .get(artifact_id)
+                            .ok_or(KodyError::ArtifactNotFound(*artifact_id))?;
+                        if artifact.thread_id != message.thread_id {
+                            return Err(conflict(format!(
+                                "tool result artifact {artifact_id} belongs to a different Thread"
+                            )));
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
     Ok(())
@@ -2257,6 +2356,7 @@ mod tests {
     use super::*;
     use crate::domain::{
         MessagePart, MessageRole, PermissionMode, ProjectAccess, ProjectKind, ThreadReferenceMode,
+        ToolOutputPart,
     };
 
     fn timestamp(second: i64) -> chrono::DateTime<Utc> {
@@ -2950,30 +3050,137 @@ mod tests {
 
         let raw: serde_json::Value =
             serde_json::from_slice(&tokio::fs::read(path).await.unwrap()).unwrap();
-        assert_eq!(raw["version"], 3);
+        assert_eq!(raw["version"], 4);
         assert_eq!(raw["processes"].as_array().unwrap().len(), 1);
     }
 
     #[tokio::test]
-    async fn json_store_migrates_v1_snapshot_to_latest_on_open() {
+    async fn json_store_migrates_v1_through_v3_snapshots_to_v4_on_open() {
+        let directory = tempfile::tempdir().unwrap();
+        for version in 1..JSON_SNAPSHOT_VERSION {
+            let path = directory.path().join(format!("state-v{version}.json"));
+            let store = JsonFileStore::open(&path).await.unwrap();
+            let (thread, _) = seed_thread(&store, 1, 2, 1).await;
+            let turn = seed_turn(&store, &thread, 10, 20, 2).await;
+            let process = managed_process(30, thread.id, turn.id, None, 3);
+            store.insert_process(process.clone()).await.unwrap();
+            drop(store);
+
+            let mut snapshot: serde_json::Value =
+                serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
+            snapshot["version"] = serde_json::json!(version);
+            if version == 1 {
+                snapshot.as_object_mut().unwrap().remove("processes");
+            }
+            if version < 3 {
+                snapshot.as_object_mut().unwrap().remove("artifacts");
+            }
+            tokio::fs::write(&path, serde_json::to_vec_pretty(&snapshot).unwrap())
+                .await
+                .unwrap();
+
+            let reopened = JsonFileStore::open(&path).await.unwrap();
+            assert_eq!(reopened.get_thread(thread.id).await.unwrap(), thread);
+            assert_eq!(reopened.get_turn(turn.id).await.unwrap(), turn);
+            if version == 1 {
+                assert!(reopened.list_processes(None).await.unwrap().is_empty());
+            } else {
+                assert_eq!(reopened.get_process(process.id).await.unwrap(), process);
+            }
+            drop(reopened);
+
+            let migrated: serde_json::Value =
+                serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
+            assert_eq!(migrated["version"], JSON_SNAPSHOT_VERSION);
+            assert!(migrated["processes"].is_array());
+            assert!(migrated["artifacts"].is_array());
+            assert!(std::fs::read_dir(directory.path())
+                .unwrap()
+                .all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".tmp")));
+        }
+    }
+
+    #[tokio::test]
+    async fn json_store_migrates_legacy_tool_result_content_to_text_output() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("state.json");
-        drop(JsonFileStore::open(&path).await.unwrap());
+        let store = JsonFileStore::open(&path).await.unwrap();
+        let (thread, _) = seed_thread(&store, 1, 2, 1).await;
+        let mut tool_message = message(10, thread.id, 2);
+        tool_message.role = MessageRole::Tool;
+        tool_message.parts = vec![MessagePart::ToolResult {
+            tool_call_id: "call-1".into(),
+            name: "read_file".into(),
+            output: vec![ToolOutputPart::Text {
+                text: "legacy output".into(),
+            }],
+            is_error: false,
+            metadata: serde_json::Value::Null,
+        }];
+        store.append_message(tool_message.clone()).await.unwrap();
+        drop(store);
 
         let mut snapshot: serde_json::Value =
             serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
-        snapshot["version"] = serde_json::json!(1);
-        snapshot.as_object_mut().unwrap().remove("processes");
+        snapshot["version"] = serde_json::json!(3);
+        let part = snapshot["messages"][0]["parts"][0].as_object_mut().unwrap();
+        part.remove("output");
+        part.insert(
+            "content".into(),
+            serde_json::Value::String("legacy output".into()),
+        );
         tokio::fs::write(&path, serde_json::to_vec_pretty(&snapshot).unwrap())
             .await
             .unwrap();
 
-        drop(JsonFileStore::open(&path).await.unwrap());
+        let reopened = JsonFileStore::open(&path).await.unwrap();
+        assert_eq!(
+            reopened.list_messages(thread.id).await.unwrap(),
+            vec![tool_message]
+        );
+        drop(reopened);
+
         let migrated: serde_json::Value =
-            serde_json::from_slice(&tokio::fs::read(path).await.unwrap()).unwrap();
-        assert_eq!(migrated["version"], 3);
-        assert_eq!(migrated["processes"], serde_json::json!([]));
-        assert_eq!(migrated["artifacts"], serde_json::json!([]));
+            serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
+        let migrated_part = &migrated["messages"][0]["parts"][0];
+        assert_eq!(migrated["version"], JSON_SNAPSHOT_VERSION);
+        assert!(migrated_part.get("content").is_none());
+        assert_eq!(
+            migrated_part["output"],
+            serde_json::json!([{ "type": "text", "text": "legacy output" }])
+        );
+    }
+
+    #[tokio::test]
+    async fn json_store_rejects_v1_snapshot_with_managed_processes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.json");
+        let store = JsonFileStore::open(&path).await.unwrap();
+        let (thread, _) = seed_thread(&store, 1, 2, 1).await;
+        let turn = seed_turn(&store, &thread, 10, 20, 2).await;
+        store
+            .insert_process(managed_process(30, thread.id, turn.id, None, 3))
+            .await
+            .unwrap();
+        drop(store);
+
+        let mut snapshot: serde_json::Value =
+            serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
+        snapshot["version"] = serde_json::json!(1);
+        tokio::fs::write(&path, serde_json::to_vec_pretty(&snapshot).unwrap())
+            .await
+            .unwrap();
+
+        let error = JsonFileStore::open(&path).await.unwrap_err();
+        assert!(matches!(
+            error,
+            KodyError::Store(message)
+                if message.contains("version 1 snapshots cannot contain managed processes")
+        ));
     }
 
     #[tokio::test]

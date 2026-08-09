@@ -23,6 +23,8 @@ export interface ProviderProfileView {
   baseUrl?: string
   defaultModel: string
   customModels: string[]
+  toolModels: string[]
+  visionModels: string[]
   defaultImageModel?: string
   imageModels: string[]
   hasSecret: boolean
@@ -36,6 +38,8 @@ export interface ProviderProfileSubmission {
   baseUrl?: string
   defaultModel: string
   customModels: string[]
+  toolModels: string[]
+  visionModels: string[]
   defaultImageModel?: string
   imageModels: string[]
   /** Write-only; callers must not reflect this value back into renderer state. */
@@ -73,6 +77,8 @@ interface ProfileDraft {
   baseUrl: string
   defaultModel: string
   customModels: string
+  toolModels: string
+  visionModels: string
   defaultImageModel: string
   imageModels: string
 }
@@ -100,6 +106,8 @@ const EMPTY_DRAFT: ProfileDraft = {
   baseUrl: '',
   defaultModel: '',
   customModels: '',
+  toolModels: '',
+  visionModels: '',
   defaultImageModel: 'gpt-image-2',
   imageModels: 'gpt-image-2\ngpt-image-1.5\ngpt-image-1\ngpt-image-1-mini'
 }
@@ -189,6 +197,8 @@ export function ProviderSettingsDialog({
         ...(draft.baseUrl.trim() ? { baseUrl: draft.baseUrl.trim() } : {}),
         defaultModel: draft.defaultModel.trim(),
         customModels: parseCustomModels(draft.customModels),
+        toolModels: parseCustomModels(draft.toolModels),
+        visionModels: parseCustomModels(draft.visionModels),
         ...(draft.defaultImageModel.trim() ? { defaultImageModel: draft.defaultImageModel.trim() } : {}),
         imageModels: parseCustomModels(draft.imageModels),
         ...(submittedSecret ? { secret: submittedSecret } : {}),
@@ -492,6 +502,46 @@ export function ProviderSettingsDialog({
                     onBlur={() => validateField('customModels')}
                   />
                 </Field>
+
+                <Field
+                  label="Tool-capable models"
+                  error={errors.toolModels}
+                  hint="Models that support function calling. Separate names with commas or new lines."
+                  id={`${id}-tool-models`}
+                >
+                  <textarea
+                    id={`${id}-tool-models`}
+                    name="tool-models"
+                    rows={2}
+                    value={draft.toolModels}
+                    maxLength={10_000}
+                    spellCheck={false}
+                    aria-invalid={Boolean(errors.toolModels)}
+                    aria-describedby={`${id}-tool-models-hint${errors.toolModels ? ` ${id}-tool-models-error` : ''}`}
+                    onChange={(event) => setDraft((current) => ({ ...current, toolModels: event.target.value }))}
+                    onBlur={() => validateField('toolModels')}
+                  />
+                </Field>
+
+                <Field
+                  label="Vision-capable models"
+                  error={errors.visionModels}
+                  hint="Models that accept image inputs. Separate names with commas or new lines."
+                  id={`${id}-vision-models`}
+                >
+                  <textarea
+                    id={`${id}-vision-models`}
+                    name="vision-models"
+                    rows={2}
+                    value={draft.visionModels}
+                    maxLength={10_000}
+                    spellCheck={false}
+                    aria-invalid={Boolean(errors.visionModels)}
+                    aria-describedby={`${id}-vision-models-hint${errors.visionModels ? ` ${id}-vision-models-error` : ''}`}
+                    onChange={(event) => setDraft((current) => ({ ...current, visionModels: event.target.value }))}
+                    onBlur={() => validateField('visionModels')}
+                  />
+                </Field>
               </div>
 
               <fieldset className="provider-secret-fieldset">
@@ -650,6 +700,8 @@ function draftFromProfile(profile: ProviderProfileView): ProfileDraft {
     baseUrl: profile.baseUrl ?? '',
     defaultModel: profile.defaultModel,
     customModels: profile.customModels.join('\n'),
+    toolModels: profile.toolModels.join('\n'),
+    visionModels: profile.visionModels.join('\n'),
     defaultImageModel: profile.defaultImageModel ?? '',
     imageModels: profile.imageModels.join('\n')
   }
@@ -686,6 +738,18 @@ function validateDraft(draft: ProfileDraft): DraftErrors {
     errors.customModels = 'Save no more than 200 custom model names.'
   } else if (customModels.some((model) => model.length > 200)) {
     errors.customModels = 'Each custom model name must be 200 characters or fewer.'
+  }
+  const toolModels = parseCustomModels(draft.toolModels)
+  if (toolModels.length > 200) {
+    errors.toolModels = 'Save no more than 200 tool model names.'
+  } else if (toolModels.some((model) => model.length > 200)) {
+    errors.toolModels = 'Each tool model name must be 200 characters or fewer.'
+  }
+  const visionModels = parseCustomModels(draft.visionModels)
+  if (visionModels.length > 200) {
+    errors.visionModels = 'Save no more than 200 vision model names.'
+  } else if (visionModels.some((model) => model.length > 200)) {
+    errors.visionModels = 'Each vision model name must be 200 characters or fewer.'
   }
   const imageModels = parseCustomModels(draft.imageModels)
   if (imageModels.length > 200) {

@@ -14,7 +14,7 @@ use kody_core::{
     AgentEvent, ContextReference, EngineConfig, ExternalTurnBackend, InMemoryStore, KodyEngine,
     KodyError, Message, MessageId, MessagePart, MessageRole, PermissionMode, ResolvedContext,
     Result, StartTurn, ThreadReferenceMode, ThreadStatus, ThreadTitleGenerator, ThreadTitleRequest,
-    Turn, TurnEventEmitter, TurnStatus, DEFAULT_THREAD_TITLE,
+    Turn, TurnEventEmitter, TurnStatus, UploadedImage, DEFAULT_THREAD_TITLE,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -27,6 +27,17 @@ async fn engine() -> (KodyEngine, TempDir) {
         ..EngineConfig::default()
     };
     (KodyEngine::new(config).await.unwrap(), state)
+}
+
+const ONE_PIXEL_PNG_BASE64: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+3MxZ5wAAAABJRU5ErkJggg==";
+
+fn uploaded_pixel() -> UploadedImage {
+    UploadedImage {
+        file_name: "pixel.png".into(),
+        mime_type: "image/png".into(),
+        data_base64: ONE_PIXEL_PNG_BASE64.into(),
+    }
 }
 
 async fn wait_for_title(engine: &KodyEngine, thread_id: kody_core::ThreadId) -> String {
@@ -60,6 +71,7 @@ async fn first_completed_echo_turn_generates_one_deterministic_title() {
         .prepare_turn(StartTurn {
             thread_id: thread.id,
             message: "## Implement OAuth callback handling!\nKeep existing sessions.".into(),
+            images: Vec::new(),
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
@@ -85,6 +97,7 @@ async fn first_completed_echo_turn_generates_one_deterministic_title() {
         .prepare_turn(StartTurn {
             thread_id: thread.id,
             message: "Replace the title with something else".into(),
+            images: Vec::new(),
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
@@ -123,6 +136,7 @@ async fn an_explicit_thread_title_is_never_overwritten() {
         .prepare_turn(StartTurn {
             thread_id: thread.id,
             message: "This message would otherwise become a title".into(),
+            images: Vec::new(),
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
@@ -194,6 +208,7 @@ async fn provider_backed_title_generation_never_blocks_turn_completion() {
         .prepare_turn(StartTurn {
             thread_id: thread.id,
             message: "Complete without waiting for a title model".into(),
+            images: Vec::new(),
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
@@ -234,6 +249,7 @@ async fn terminal_event_is_emitted_only_after_thread_is_idle() {
         .prepare_turn(StartTurn {
             thread_id: thread.id,
             message: "Complete this turn".into(),
+            images: Vec::new(),
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
@@ -354,6 +370,7 @@ async fn external_backend_tool_activity_is_part_of_durable_message_history() {
         .prepare_turn(StartTurn {
             thread_id: thread.id,
             message: "Run the tests".into(),
+            images: Vec::new(),
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
@@ -390,12 +407,12 @@ async fn external_backend_tool_activity_is_part_of_durable_message_history() {
         &messages[2].parts[..],
         [MessagePart::ToolResult {
             tool_call_id,
-            content,
+            output,
             is_error: false,
             metadata,
             ..
         }] if tool_call_id == "external-call-1"
-            && content == "test result: ok"
+            && matches!(&output[..], [kody_core::ToolOutputPart::Text { text }] if text == "test result: ok")
             && metadata["exitCode"] == 0
     ));
     assert_eq!(messages[3].role, MessageRole::Assistant);
@@ -418,6 +435,7 @@ async fn external_backend_uses_durable_lifecycle_and_generates_title_after_termi
         .prepare_turn(StartTurn {
             thread_id: thread.id,
             message: "External backend lifecycle".into(),
+            images: Vec::new(),
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
@@ -539,6 +557,7 @@ async fn external_backend_failure_is_terminal_and_releases_the_thread() {
     let request = || StartTurn {
         thread_id: thread.id,
         message: "Run external backend".into(),
+        images: Vec::new(),
         references: Vec::new(),
         provider: "echo".into(),
         model: None,
@@ -634,6 +653,7 @@ async fn external_backend_cancellation_persists_no_answer_and_releases_the_threa
         .prepare_turn(StartTurn {
             thread_id: thread.id,
             message: "Wait for cancellation".into(),
+            images: Vec::new(),
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
@@ -679,6 +699,7 @@ async fn external_backend_cancellation_persists_no_answer_and_releases_the_threa
         .prepare_turn(StartTurn {
             thread_id: thread.id,
             message: "Thread is available again".into(),
+            images: Vec::new(),
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
@@ -707,6 +728,7 @@ async fn queued_turn_keeps_its_provider_lease_across_registry_replace_and_remove
     let request = |message: &str| StartTurn {
         thread_id: thread.id,
         message: message.into(),
+        images: Vec::new(),
         references: Vec::new(),
         provider: "hot-provider".into(),
         model: None,
@@ -796,6 +818,7 @@ async fn agent_loop_executes_tools_persists_history_and_emits_ordered_events() {
         .prepare_turn(StartTurn {
             thread_id: thread.id,
             message: "Create a greeting file".into(),
+            images: Vec::new(),
             references: Vec::new(),
             provider: "test".into(),
             model: None,
@@ -843,6 +866,10 @@ async fn agent_loop_executes_tools_persists_history_and_emits_ordered_events() {
         .tools
         .iter()
         .any(|definition| definition.name == "generate_image"));
+    assert!(requests[0]
+        .tools
+        .iter()
+        .all(|definition| definition.name != "view_image"));
     assert!(requests[0].messages[0]
         .text_content()
         .contains(&project.id.to_string()));
@@ -920,6 +947,7 @@ async fn cancellation_cleans_up_and_a_duplicate_executor_cannot_claim_the_turn()
         .prepare_turn(StartTurn {
             thread_id: thread.id,
             message: "wait".into(),
+            images: Vec::new(),
             references: Vec::new(),
             provider: "blocking".into(),
             model: None,
@@ -983,6 +1011,7 @@ async fn shell_waits_for_an_explicit_approval_decision() {
         .prepare_turn(StartTurn {
             thread_id: thread.id,
             message: "run the command".into(),
+            images: Vec::new(),
             references: Vec::new(),
             provider: "approval-provider".into(),
             model: None,
@@ -1074,6 +1103,7 @@ async fn read_only_mode_blocks_a_write_tool_even_if_the_provider_calls_it() {
         .prepare_turn(StartTurn {
             thread_id: thread.id,
             message: "do not modify anything".into(),
+            images: Vec::new(),
             references: Vec::new(),
             provider: "read-only-provider".into(),
             model: None,
@@ -1146,6 +1176,7 @@ async fn full_access_mode_runs_a_command_without_creating_an_approval() {
         .prepare_turn(StartTurn {
             thread_id: thread.id,
             message: "run without asking".into(),
+            images: Vec::new(),
             references: Vec::new(),
             provider: "full-access-provider".into(),
             model: None,
@@ -1210,6 +1241,7 @@ async fn managed_process_start_uses_command_approval_and_outlives_its_turn() {
         .prepare_turn(StartTurn {
             thread_id: thread.id,
             message: "start the managed process".into(),
+            images: Vec::new(),
             references: Vec::new(),
             provider: "process-approval-provider".into(),
             model: None,
@@ -1311,6 +1343,7 @@ async fn referenced_thread_context_is_resolved_without_copying_messages() {
         .prepare_turn(StartTurn {
             thread_id: target.id,
             message: "Implement the referenced design".into(),
+            images: Vec::new(),
             references: vec![ContextReference::Thread {
                 thread_id: source.id,
                 mode: ThreadReferenceMode::Summary,
@@ -1368,6 +1401,7 @@ async fn provider_failure_releases_thread_for_the_next_turn() {
     let request = || StartTurn {
         thread_id: thread.id,
         message: "try".into(),
+        images: Vec::new(),
         references: Vec::new(),
         provider: "failing".into(),
         model: Some("model".into()),
@@ -1420,6 +1454,7 @@ async fn durable_engine_recovers_an_interrupted_queued_turn_on_restart() {
         .prepare_turn(StartTurn {
             thread_id: thread.id,
             message: "this turn will be interrupted".into(),
+            images: Vec::new(),
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
@@ -1448,4 +1483,189 @@ async fn durable_engine_recovers_an_interrupted_queued_turn_on_restart() {
             .status,
         ThreadStatus::Idle
     );
+}
+
+#[tokio::test]
+async fn current_turn_upload_is_materialized_as_model_image_input() {
+    let (engine, _state) = engine().await;
+    let provider = Arc::new(
+        ScriptedProvider::with_responses("vision", [ModelResponse::text("I can see the image.")])
+            .with_image_input(),
+    );
+    engine.providers().register(provider.clone()).unwrap();
+    let (thread, _, _) = engine.create_thread("vision", None).await.unwrap();
+
+    let turn = engine
+        .runtime()
+        .prepare_turn(StartTurn {
+            thread_id: thread.id,
+            message: "Describe this image".into(),
+            images: vec![uploaded_pixel()],
+            references: Vec::new(),
+            provider: "vision".into(),
+            model: Some("scripted".into()),
+            permission_mode: None,
+            temperature: None,
+            max_output_tokens: None,
+        })
+        .await
+        .unwrap();
+    engine
+        .runtime()
+        .execute_turn(turn.id, CancellationToken::new())
+        .await
+        .unwrap();
+
+    let requests = provider.requests().unwrap();
+    assert!(requests[0].messages.iter().any(|message| {
+        message.content.iter().any(|part| {
+            matches!(
+                part,
+                ModelContent::Image { mime_type, data, .. }
+                    if mime_type == "image/png" && !data.is_empty()
+            )
+        })
+    }));
+    let artifacts = engine.store().list_artifacts(thread.id).await.unwrap();
+    assert_eq!(artifacts.len(), 1);
+    assert_eq!(artifacts[0].message_id, Some(turn.input_message_id));
+}
+
+#[tokio::test]
+async fn image_upload_is_rejected_before_persistence_for_text_only_models() {
+    let (engine, _state) = engine().await;
+    engine
+        .providers()
+        .register(Arc::new(ScriptedProvider::new("text-only")))
+        .unwrap();
+    let (thread, _, _) = engine.create_thread("text only", None).await.unwrap();
+
+    let error = engine
+        .runtime()
+        .prepare_turn(StartTurn {
+            thread_id: thread.id,
+            message: String::new(),
+            images: vec![uploaded_pixel()],
+            references: Vec::new(),
+            provider: "text-only".into(),
+            model: Some("scripted".into()),
+            permission_mode: None,
+            temperature: None,
+            max_output_tokens: None,
+        })
+        .await
+        .unwrap_err();
+
+    assert!(error.to_string().contains("does not accept image inputs"));
+    assert!(engine
+        .store()
+        .list_messages(thread.id)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(engine
+        .store()
+        .list_artifacts(thread.id)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn view_image_materializes_only_the_selected_artifact_in_the_current_turn() {
+    let (engine, _state) = engine().await;
+    let provider = Arc::new(ScriptedProvider::new("vision").with_image_input());
+    provider
+        .enqueue_response(ModelResponse::text("Stored the image."))
+        .unwrap();
+    engine.providers().register(provider.clone()).unwrap();
+    let (thread, _, _) = engine.create_thread("vision", None).await.unwrap();
+
+    let upload_turn = engine
+        .runtime()
+        .prepare_turn(StartTurn {
+            thread_id: thread.id,
+            message: "Remember this".into(),
+            images: vec![uploaded_pixel()],
+            references: Vec::new(),
+            provider: "vision".into(),
+            model: Some("scripted".into()),
+            permission_mode: None,
+            temperature: None,
+            max_output_tokens: None,
+        })
+        .await
+        .unwrap();
+    engine
+        .runtime()
+        .execute_turn(upload_turn.id, CancellationToken::new())
+        .await
+        .unwrap();
+    let artifact = engine
+        .store()
+        .list_artifacts(thread.id)
+        .await
+        .unwrap()
+        .remove(0);
+
+    provider
+        .enqueue_response(ModelResponse {
+            content: vec![ModelContent::ToolCall {
+                id: "view-1".into(),
+                name: "view_image".into(),
+                arguments: json!({ "artifact_id": artifact.id, "detail": "low" }),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            usage: None,
+        })
+        .unwrap();
+    provider
+        .enqueue_response(ModelResponse::text("The image is one pixel."))
+        .unwrap();
+    let view_turn = engine
+        .runtime()
+        .prepare_turn(StartTurn {
+            thread_id: thread.id,
+            message: "Inspect the saved image".into(),
+            images: Vec::new(),
+            references: Vec::new(),
+            provider: "vision".into(),
+            model: Some("scripted".into()),
+            permission_mode: Some(PermissionMode::ReadOnly),
+            temperature: None,
+            max_output_tokens: None,
+        })
+        .await
+        .unwrap();
+    engine
+        .runtime()
+        .execute_turn(view_turn.id, CancellationToken::new())
+        .await
+        .unwrap();
+
+    let requests = provider.requests().unwrap();
+    assert!(requests[1]
+        .tools
+        .iter()
+        .any(|definition| definition.name == "view_image"));
+    assert!(!requests[1].messages.iter().any(|message| {
+        message
+            .content
+            .iter()
+            .any(|part| matches!(part, ModelContent::Image { .. }))
+    }));
+    assert!(requests[2].messages.iter().any(|message| {
+        message.content.iter().any(|part| match part {
+            ModelContent::ToolResult { output, .. } => output.iter().any(|output| {
+                matches!(
+                    output,
+                    ModelContent::Image {
+                        detail: kody_core::ImageDetail::Low,
+                        ..
+                    }
+                )
+            }),
+            _ => false,
+        })
+    }));
 }

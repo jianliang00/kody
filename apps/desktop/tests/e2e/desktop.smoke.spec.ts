@@ -194,7 +194,7 @@ test('creates the first Thread through one idempotent draft request', async () =
         itemMinHeight: getComputedStyle(item).minHeight
       }
     })
-    expect(selectSurface.borderRadius).toBe('10px')
+    expect(selectSurface.borderRadius).toBe('8px')
     expect(selectSurface.boxShadow).not.toBe('none')
     expect(selectSurface.itemFontSize).toBe('14px')
     expect(selectSurface.itemMinHeight).toBe('36px')
@@ -312,7 +312,7 @@ test('creates the first Thread through one idempotent draft request', async () =
     })
     expect(typography.bodyFontSize).toBe('14px')
     expect(typography.composerMinHeight).toBe('48px')
-    expect(typography.composerHeight).toBeLessThanOrEqual(56)
+    expect(typography.composerHeight).toBeLessThanOrEqual(58)
     expect(typography.sendButtonWeight).toBe('500')
     await expect(page.getByRole('button', { name: 'Working directory', exact: true })).toBeVisible()
     const permissionMode = page.getByLabel('Permission mode')
@@ -397,7 +397,7 @@ test('creates the first Thread through one idempotent draft request', async () =
     const addContext = page.getByRole('button', { name: 'Add context' })
     const permissionControl = page.locator('.permission-mode-control')
     await page.mouse.move(800, 300)
-    await expect(providerTrigger).toHaveCSS('background-color', 'rgb(252, 251, 248)')
+    await expect(providerTrigger).toHaveCSS('background-color', 'rgb(246, 246, 246)')
     const compactControlSurfaces = await page.evaluate(() => {
       const provider = document.querySelector<HTMLElement>('#composer-provider')
       const context = document.querySelector<HTMLElement>('.composer .context-button')
@@ -418,8 +418,8 @@ test('creates the first Thread through one idempotent draft request', async () =
     expect(compactControlSurfaces.permission).toEqual(compactControlSurfaces.context)
     const hoverSurface = async (control: typeof providerTrigger) => {
       await control.hover()
-      await expect(control).toHaveCSS('background-color', 'rgb(232, 231, 225)')
-      await expect(control).toHaveCSS('border-top-color', 'rgb(199, 196, 186)')
+      await expect(control).toHaveCSS('background-color', 'rgb(236, 236, 239)')
+      await expect(control).toHaveCSS('border-top-color', 'rgba(60, 60, 67, 0.28)')
       return control.evaluate((element) => {
         const style = getComputedStyle(element)
         return { backgroundColor: style.backgroundColor, borderColor: style.borderTopColor }

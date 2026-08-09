@@ -7,7 +7,7 @@ use axum::{
     body::{Body, Bytes},
     extract::{
         ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
-        Path as AxumPath, Query, State,
+        DefaultBodyLimit, Path as AxumPath, Query, State,
     },
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -30,6 +30,7 @@ use crate::{
 };
 
 const CREATE_REQUEST_CACHE_CAPACITY: usize = 1_024;
+const MAX_RPC_MESSAGE_BYTES: usize = 96 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CreateRequestRecord {
@@ -291,6 +292,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/artifacts/{artifact_id}", get(get_artifact))
         .route("/v1/ws", get(websocket_upgrade))
         .route("/v1/app-server", get(websocket_upgrade))
+        .layer(DefaultBodyLimit::max(MAX_RPC_MESSAGE_BYTES))
         .with_state(state)
 }
 
@@ -417,7 +419,10 @@ async fn websocket_upgrade(
         )
             .into_response();
     }
-    websocket.on_upgrade(move |socket| websocket_session(socket, state))
+    websocket
+        .max_message_size(MAX_RPC_MESSAGE_BYTES)
+        .max_frame_size(MAX_RPC_MESSAGE_BYTES)
+        .on_upgrade(move |socket| websocket_session(socket, state))
 }
 
 #[derive(Debug, serde::Deserialize)]

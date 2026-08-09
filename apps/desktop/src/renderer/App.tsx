@@ -36,6 +36,7 @@ import type {
   Thread,
   ThreadSnapshot,
   Turn,
+  UploadedImage,
   UserInputAnswers
 } from '@shared/protocol'
 import { AssetRail } from './components/AssetRail'
@@ -105,11 +106,11 @@ function appendLiveEvent(history: EventEnvelope[], envelope: EventEnvelope): Eve
   return [...history, envelope].slice(-200)
 }
 
-function initialTheme(): boolean {
+function initialThemeOverride(): boolean | undefined {
   const saved = window.localStorage.getItem('kody.theme')
   if (saved === 'dark') return true
   if (saved === 'light') return false
-  return window.matchMedia('(prefers-color-scheme: dark)').matches
+  return undefined
 }
 
 function useMediaQuery(query: string): boolean {
@@ -161,7 +162,7 @@ function optimisticMessage(
     thread_id: threadId,
     turn_id: turn.id,
     role: 'user',
-    parts: [{ type: 'text', text: message }],
+    parts: message ? [{ type: 'text', text: message }] : [],
     references,
     created_at: turn.created_at
   }
@@ -169,6 +170,7 @@ function optimisticMessage(
 
 interface ComposerDraftState {
   message: string
+  images: UploadedImage[]
   references: ContextReference[]
   providerId: string
   model: string
@@ -177,6 +179,7 @@ interface ComposerDraftState {
 
 const EMPTY_COMPOSER_DRAFT: ComposerDraftState = {
   message: '',
+  images: [],
   references: [],
   providerId: '',
   model: '',
@@ -237,7 +240,9 @@ export function App() {
   const [rightRailWidth, setRightRailWidth] = useState(
     () => readStoredSidebarWidth(window.localStorage, RIGHT_RAIL_WIDTH_KEY, RIGHT_RAIL_LIMITS)
   )
-  const [darkTheme, setDarkTheme] = useState(initialTheme)
+  const systemDarkTheme = useMediaQuery('(prefers-color-scheme: dark)')
+  const [darkThemeOverride, setDarkThemeOverride] = useState(initialThemeOverride)
+  const darkTheme = darkThemeOverride ?? systemDarkTheme
   const [composerDockHeight, setComposerDockHeight] = useState(0)
   const inspectorIsNarrow = useMediaQuery('(max-width: 72rem)')
   const railIsNarrow = useMediaQuery('(max-width: 48rem)')
@@ -587,8 +592,9 @@ export function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = darkTheme ? 'dark' : 'light'
-    window.localStorage.setItem('kody.theme', darkTheme ? 'dark' : 'light')
-  }, [darkTheme])
+    if (darkThemeOverride === undefined) window.localStorage.removeItem('kody.theme')
+    else window.localStorage.setItem('kody.theme', darkThemeOverride ? 'dark' : 'light')
+  }, [darkTheme, darkThemeOverride])
 
   useLayoutEffect(() => {
     const dock = document.querySelector<HTMLElement>('.composer-dock')
@@ -909,6 +915,12 @@ export function App() {
       return { ...current, [composerDraftKey]: { ...existing, message } }
     })
   }, [composerDraftKey, initialComposerDraft])
+  const setComposerImages = useCallback((images: UploadedImage[]): void => {
+    setComposerDrafts((current) => {
+      const existing = current[composerDraftKey] ?? initialComposerDraft
+      return { ...current, [composerDraftKey]: { ...existing, images } }
+    })
+  }, [composerDraftKey, initialComposerDraft])
   const setComposerProvider = useCallback((providerId: string): void => {
     const descriptor = providers.find((item) => item.id === providerId)
     const catalog = modelsByProvider[providerId] ?? []
@@ -1032,6 +1044,7 @@ export function App() {
 
   const handleStartTurn = async (
     message: string,
+    images: UploadedImage[],
     references: ContextReference[],
     providerId: string,
     model: string,
@@ -1046,6 +1059,7 @@ export function App() {
         const started = await bridge.rpc('thread/create-and-start', {
           client_request_id: requestDraftId,
           message,
+          images,
           references,
           provider: providerId,
           model,
@@ -1063,6 +1077,7 @@ export function App() {
           ...current,
           [`thread:${started.thread.id}`]: {
             message: '',
+            images: [],
             references: [],
             providerId,
             model,
@@ -1102,6 +1117,7 @@ export function App() {
       const turn = await bridge.rpc('turn/start', {
         thread_id: snapshot.thread.id,
         message,
+        images,
         references,
         provider: providerId,
         model,
@@ -1553,7 +1569,7 @@ export function App() {
           }}
           onToggleRightSidebar={toggleRightSidebar}
           onRetry={() => void bootstrap()}
-          onToggleTheme={() => setDarkTheme((current) => !current)}
+          onToggleTheme={() => setDarkThemeOverride(!darkTheme)}
           onWindowAction={(action) => void bridge.windowAction(action)}
         />
 
@@ -1640,12 +1656,14 @@ export function App() {
                     modelsLoading={loadingModelProviders.has(composerProviderId)}
                     running={isRunning}
                     message={composerDraft.message}
+                    images={composerDraft.images}
                     unavailable={status.phase !== 'connected' || loadingThread || snapshot.thread.id !== activeThreadId}
                     onReferencesChange={setDraftReferences}
                     onProviderChange={setComposerProvider}
                     onModelChange={setComposerModel}
                     onPermissionModeChange={setComposerPermissionMode}
                     onMessageChange={setComposerMessage}
+                    onImagesChange={setComposerImages}
                     onSend={handleStartTurn}
                     onCancel={handleCancelTurn}
                     imageGenerationAvailable={canGenerateImages}
@@ -1684,6 +1702,7 @@ export function App() {
                     modelsLoading={loadingModelProviders.has(composerProviderId)}
                     running={false}
                     message={composerDraft.message}
+                    images={composerDraft.images}
                     draft
                     workingDirectory={draftWorkingDirectory}
                     unavailable={status.phase !== 'connected'}
@@ -1692,6 +1711,7 @@ export function App() {
                     onModelChange={setComposerModel}
                     onPermissionModeChange={setComposerPermissionMode}
                     onMessageChange={setComposerMessage}
+                    onImagesChange={setComposerImages}
                     onPickWorkingDirectory={async () => {
                       const path = await bridge.pickDirectory('working-directory')
                       if (path) setDraftWorkingDirectory(path)
@@ -1710,9 +1730,10 @@ export function App() {
         </main>
       </section>
 
-      <div
+      <aside
         id="right-rail"
         className={`right-rail${inspectorOpen && inspectorIsNarrow ? ' right-rail--inspector-open' : ''}`}
+        aria-label="Thread context and projects"
       >
         {snapshot && threadContext ? (
           <ThreadContextCard
@@ -1757,7 +1778,7 @@ export function App() {
           onImportProject={handleImportProject}
           onAddProject={addProjectContext}
         />
-      </div>
+      </aside>
 
       {desktopAssetRailVisible ? (
         <SidebarResizeHandle

@@ -61,6 +61,7 @@ describe('renderer RPC allowlist', () => {
     const params = {
       thread_id: 'thread-1',
       message: 'Inspect the project',
+      images: [],
       references: [],
       provider: 'codex',
       model: 'codex-default',
@@ -73,5 +74,30 @@ describe('renderer RPC allowlist', () => {
     })).toThrow(/permission_mode/)
     const { permission_mode: _omitted, ...withoutPermissionMode } = params
     expect(() => validateRpcInvocation('turn/start', withoutPermissionMode)).toThrow(/missing/)
+  })
+
+  it('accepts bounded image inputs and rejects empty or unsupported Turn content', () => {
+    const params = {
+      thread_id: 'thread-1',
+      message: '',
+      images: [{
+        file_name: 'reference.png',
+        mime_type: 'image/png',
+        data_base64: 'aGVsbG8='
+      }],
+      references: [],
+      provider: 'codex',
+      permission_mode: 'ask'
+    }
+    expect(() => validateRpcInvocation('turn/start', params)).not.toThrow()
+    expect(() => validateRpcInvocation('turn/start', { ...params, images: [] })).toThrow(/message or image/)
+    expect(() => validateRpcInvocation('turn/start', {
+      ...params,
+      images: [{ ...params.images[0], mime_type: 'image/svg+xml' }]
+    })).toThrow(/mime_type/)
+    expect(() => validateRpcInvocation('turn/start', {
+      ...params,
+      images: Array.from({ length: 5 }, () => params.images[0])
+    })).toThrow(/uploaded images/)
   })
 })

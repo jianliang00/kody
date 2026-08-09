@@ -20,6 +20,8 @@ export interface ProviderProfileRecord {
   baseUrl?: string
   defaultModel: string
   customModels: string[]
+  toolModels: string[]
+  visionModels: string[]
   defaultImageModel?: string
   imageModels: string[]
   hasSecret: boolean
@@ -34,6 +36,8 @@ export interface ProviderProfileUpdate {
   baseUrl?: string
   defaultModel: string
   customModels?: string[]
+  toolModels?: string[]
+  visionModels?: string[]
   defaultImageModel?: string
   imageModels?: string[]
   /** Write-only. Main must never return or broadcast this value. */

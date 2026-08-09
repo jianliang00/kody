@@ -1,10 +1,10 @@
 import {
   ChevronRight,
-  MessageCircle,
+  FileText,
   PanelLeftClose,
-  Plus,
   Search,
   Settings2,
+  SquarePen,
   X
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
@@ -76,7 +76,7 @@ export function AssetRail({
 
       <div className="asset-actions">
         <button className="primary-action" type="button" onClick={onNewThread}>
-          <Plus aria-hidden="true" size={16} />
+          <SquarePen aria-hidden="true" size={16} />
           <span>New Thread</span>
         </button>
       </div>
@@ -117,7 +117,7 @@ export function AssetRail({
                     }}
                   >
                     <span className="asset-row__icon asset-row__icon--thread">
-                      <MessageCircle aria-hidden="true" size={15} />
+                      <FileText aria-hidden="true" size={15} />
                     </span>
                     <span className="asset-row__body">
                       <strong>{thread.title}</strong>

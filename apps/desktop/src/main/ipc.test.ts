@@ -39,7 +39,12 @@ describe('provider and Codex IPC boundary', () => {
       customModels: ['gpt-test'],
       secret: 'write-only'
     }
-    expect(validateProviderProfileUpdate(valid)).toEqual({ ...valid, imageModels: [] })
+    expect(validateProviderProfileUpdate(valid)).toEqual({
+      ...valid,
+      toolModels: [],
+      visionModels: [],
+      imageModels: []
+    })
     expect(() => validateProviderProfileUpdate({ ...valid, api_key: 'smuggled' }))
       .toThrow(/unsupported fields/)
     expect(() => validateProviderProfileUpdate({ ...valid, customModels: ['ok', 42] }))
@@ -188,6 +193,8 @@ function profile(id: string, name: string): ProviderProfileRecord {
     kind: 'openai',
     defaultModel: `gpt-${name.toLowerCase()}`,
     customModels: [],
+    toolModels: [],
+    visionModels: [],
     imageModels: [],
     hasSecret: true,
     createdAt: '2026-07-13T00:00:00.000Z',

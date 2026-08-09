@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::codex::{
     CodexClient, CodexClientOptions, CodexNotification, CodexServerRequest, ModelInfo,
-    ThreadResumeParams, ThreadStartParams, TurnInterruptParams, TurnStartParams,
+    ThreadResumeParams, ThreadStartParams, TurnInterruptParams, TurnStartParams, UserInput,
 };
 
 const PROVIDER_ID: &str = "codex";
@@ -213,12 +213,15 @@ impl ModelProvider for CodexCatalogProvider {
             capabilities: ProviderCapabilities {
                 streaming: true,
                 reasoning: true,
-                tools: true,
                 model_catalog: true,
                 custom_models: false,
             },
             default_model: None,
         }
+    }
+
+    fn model_capabilities(&self, _model: &str) -> kody_core::provider::ModelCapabilities {
+        kody_core::provider::ModelCapabilities::vision(true)
     }
 
     async fn list_models(&self) -> Result<Vec<ModelDescriptor>> {
@@ -271,6 +274,25 @@ impl ExternalTurnBackend for CodexService {
         )
         .await?;
         let mut start = TurnStartParams::text(external_thread_id.clone(), prompt);
+        let input_message = self
+            .engine
+            .store()
+            .get_message(turn.input_message_id)
+            .await?;
+        for part in input_message.parts {
+            if let kody_core::MessagePart::Artifact { artifact_id, .. } = part {
+                let (artifact, _) = self.engine.images().read_artifact(artifact_id).await?;
+                if artifact.thread_id != turn.thread_id {
+                    return Err(KodyError::Conflict(format!(
+                        "artifact {artifact_id} belongs to a different Thread"
+                    )));
+                }
+                start.input.push(UserInput::LocalImage {
+                    path: context.workspace.root.join(artifact.relative_path),
+                    detail: Some("auto".into()),
+                });
+            }
+        }
         start.model = Some(turn.model.clone());
         start.cwd = Some(context.workspace.root.clone());
         start.approval_policy = Some(codex_approval_policy(turn.permission_mode).into());
@@ -527,6 +549,7 @@ fn model_descriptor(model: ModelInfo) -> ModelDescriptor {
         id: model.id,
         display_name: model.display_name,
         is_default: model.is_default,
+        capabilities: kody_core::provider::ModelCapabilities::vision(true),
         description: Some(model.description),
         default_reasoning_effort: Some(model.default_reasoning_effort),
         reasoning_efforts: model

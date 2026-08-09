@@ -15,7 +15,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    domain::{Project, ProjectAccess, ProjectId, ThreadId, TurnId, Workspace},
+    domain::{Project, ProjectAccess, ProjectId, ThreadId, ToolOutputPart, TurnId, Workspace},
     error::{KodyError, Result},
     process::ProcessManager,
 };
@@ -79,7 +79,7 @@ impl ToolCall {
 pub struct ToolResult {
     pub tool_call_id: String,
     pub name: String,
-    pub content: String,
+    pub output: Vec<ToolOutputPart>,
     pub is_error: bool,
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub metadata: Value,
@@ -90,7 +90,9 @@ impl ToolResult {
         Self {
             tool_call_id: call.id.clone(),
             name: call.name.clone(),
-            content: content.into(),
+            output: vec![ToolOutputPart::Text {
+                text: content.into(),
+            }],
             is_error: false,
             metadata,
         }
@@ -100,11 +102,34 @@ impl ToolResult {
         Self {
             tool_call_id: call.id.clone(),
             name: call.name.clone(),
-            content: content.into(),
+            output: vec![ToolOutputPart::Text {
+                text: content.into(),
+            }],
             is_error: true,
             metadata,
         }
     }
+
+    pub fn with_output(mut self, output: Vec<ToolOutputPart>) -> Self {
+        self.output = output;
+        self
+    }
+
+    pub fn text(&self) -> String {
+        self.output
+            .iter()
+            .filter_map(|part| match part {
+                ToolOutputPart::Text { text } => Some(text.as_str()),
+                ToolOutputPart::Artifact { .. } => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ToolModelRequirements {
+    pub image_input: bool,
 }
 
 /// A project attached to a thread and the access granted for this execution.
@@ -169,6 +194,10 @@ pub trait Tool: Send + Sync {
 
     fn risk(&self) -> ToolRisk {
         ToolRisk::ReadOnly
+    }
+
+    fn model_requirements(&self) -> ToolModelRequirements {
+        ToolModelRequirements::default()
     }
 
     fn approval_reason(&self) -> Option<&'static str> {
@@ -254,6 +283,12 @@ impl ToolRegistry {
 
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
         self.tools.get(name).cloned()
+    }
+
+    pub fn model_requirements(&self, name: &str) -> Result<ToolModelRequirements> {
+        self.get(name)
+            .map(|tool| tool.model_requirements())
+            .ok_or_else(|| KodyError::ToolNotFound(name.to_owned()))
     }
 
     pub fn definitions(&self) -> Vec<ToolDefinition> {

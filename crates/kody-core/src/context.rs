@@ -8,6 +8,7 @@ use crate::{
         ThreadReferenceMode, Turn,
     },
     error::{KodyError, Result},
+    image::read_artifact_from_store,
     provider::{ModelContent, ModelMessage, ModelRole},
     store::StateStore,
     tools::ProjectBinding,
@@ -148,7 +149,9 @@ impl ContextBuilder for DefaultContextBuilder {
                 ),
             ));
         }
-        messages.extend(budget_history(&history, self.max_current_history_chars));
+        for message in budget_history(&history, self.max_current_history_chars) {
+            messages.push(message_to_model(store, message, turn).await?);
+        }
 
         Ok(ResolvedContext {
             messages,
@@ -224,55 +227,106 @@ fn collect_references(
     (threads, projects)
 }
 
-fn message_to_model(message: &Message) -> ModelMessage {
-    ModelMessage {
+async fn message_to_model(
+    store: &dyn StateStore,
+    message: &Message,
+    current_turn: &Turn,
+) -> Result<ModelMessage> {
+    let materialize_images = message.turn_id == Some(current_turn.id);
+    let mut content = Vec::with_capacity(message.parts.len());
+    for part in &message.parts {
+        content.push(match part {
+            MessagePart::Text { text } => ModelContent::Text { text: text.clone() },
+            MessagePart::ToolCall {
+                id,
+                name,
+                arguments,
+            } => ModelContent::ToolCall {
+                id: id.clone(),
+                name: name.clone(),
+                arguments: arguments.clone(),
+            },
+            MessagePart::ToolResult {
+                tool_call_id,
+                name,
+                output,
+                is_error,
+                metadata,
+            } => {
+                let mut resolved_output = Vec::with_capacity(output.len());
+                for output_part in output {
+                    resolved_output.push(match output_part {
+                        crate::domain::ToolOutputPart::Text { text } => {
+                            ModelContent::Text { text: text.clone() }
+                        }
+                        crate::domain::ToolOutputPart::Artifact {
+                            artifact_id,
+                            detail,
+                        } if materialize_images => {
+                            let (artifact, data) =
+                                read_artifact_from_store(store, *artifact_id).await?;
+                            if artifact.thread_id != message.thread_id {
+                                return Err(KodyError::Conflict(format!(
+                                    "artifact {artifact_id} belongs to a different Thread"
+                                )));
+                            }
+                            ModelContent::Image {
+                                mime_type: artifact.mime_type,
+                                data,
+                                detail: *detail,
+                            }
+                        }
+                        crate::domain::ToolOutputPart::Artifact { artifact_id, .. } => {
+                            ModelContent::Text {
+                                text: format!("[Image artifact {artifact_id}]"),
+                            }
+                        }
+                    });
+                }
+                ModelContent::ToolResult {
+                    tool_call_id: tool_call_id.clone(),
+                    name: name.clone(),
+                    output: resolved_output,
+                    is_error: *is_error,
+                    metadata: metadata.clone(),
+                }
+            }
+            MessagePart::Artifact { artifact_id, .. }
+                if materialize_images && message.role == MessageRole::User =>
+            {
+                let (artifact, data) = read_artifact_from_store(store, *artifact_id).await?;
+                if artifact.thread_id != message.thread_id {
+                    return Err(KodyError::Conflict(format!(
+                        "artifact {artifact_id} belongs to a different Thread"
+                    )));
+                }
+                ModelContent::Image {
+                    mime_type: artifact.mime_type,
+                    data,
+                    detail: crate::domain::ImageDetail::Auto,
+                }
+            }
+            MessagePart::Artifact {
+                artifact_id,
+                file_name,
+                ..
+            } => ModelContent::Text {
+                text: format!("[Image artifact {artifact_id}: {file_name}]"),
+            },
+        });
+    }
+    Ok(ModelMessage {
         role: match message.role {
             MessageRole::System => ModelRole::System,
             MessageRole::User => ModelRole::User,
             MessageRole::Assistant => ModelRole::Assistant,
             MessageRole::Tool => ModelRole::Tool,
         },
-        content: message
-            .parts
-            .iter()
-            .map(|part| match part {
-                MessagePart::Text { text } => ModelContent::Text { text: text.clone() },
-                MessagePart::ToolCall {
-                    id,
-                    name,
-                    arguments,
-                } => ModelContent::ToolCall {
-                    id: id.clone(),
-                    name: name.clone(),
-                    arguments: arguments.clone(),
-                },
-                MessagePart::ToolResult {
-                    tool_call_id,
-                    name,
-                    content,
-                    is_error,
-                    metadata,
-                } => ModelContent::ToolResult {
-                    tool_call_id: tool_call_id.clone(),
-                    name: name.clone(),
-                    content: content.clone(),
-                    is_error: *is_error,
-                    metadata: metadata.clone(),
-                },
-                MessagePart::Artifact {
-                    artifact_id,
-                    kind,
-                    file_name,
-                    ..
-                } => ModelContent::Text {
-                    text: format!("[Generated {kind:?} artifact {artifact_id}: {file_name}]"),
-                },
-            })
-            .collect(),
-    }
+        content,
+    })
 }
 
-fn budget_history(messages: &[Message], max_chars: usize) -> Vec<ModelMessage> {
+fn budget_history(messages: &[Message], max_chars: usize) -> Vec<&Message> {
     if messages.is_empty() {
         return Vec::new();
     }
@@ -311,11 +365,7 @@ fn budget_history(messages: &[Message], max_chars: usize) -> Vec<ModelMessage> {
         selected.push(group);
     }
     selected.reverse();
-    selected
-        .into_iter()
-        .flatten()
-        .map(message_to_model)
-        .collect()
+    selected.into_iter().flatten().collect()
 }
 
 fn format_transcript(messages: &[Message]) -> String {
@@ -338,10 +388,20 @@ fn format_transcript(messages: &[Message]) -> String {
                 }
                 MessagePart::ToolResult {
                     name,
-                    content,
+                    output: result_output,
                     is_error,
                     ..
                 } => {
+                    let content = result_output
+                        .iter()
+                        .map(|part| match part {
+                            crate::domain::ToolOutputPart::Text { text } => text.clone(),
+                            crate::domain::ToolOutputPart::Artifact { artifact_id, .. } => {
+                                format!("<image artifact={artifact_id} />")
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
                     write!(
                         output,
                         "<tool_result name={name:?} error={is_error}>{content}</tool_result>"

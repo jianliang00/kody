@@ -21,6 +21,7 @@ use crate::{
     engine::validate_reference,
     error::{KodyError, Result},
     event::{AgentEvent, EventEnvelope, EventHub},
+    image::{ImageService, UploadedImage},
     provider::{
         FinishReason, ModelContent, ModelDelta, ModelDeltaSink, ModelProvider, ModelRequest,
         ModelResponse, ProviderRegistry, ToolDefinition as ProviderToolDefinition,
@@ -58,8 +59,9 @@ impl Default for AgentRuntimeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartTurn {
     pub thread_id: ThreadId,
-    #[serde(alias = "text")]
     pub message: String,
+    #[serde(default)]
+    pub images: Vec<UploadedImage>,
     #[serde(default)]
     pub references: Vec<ContextReference>,
     #[serde(default = "default_provider")]
@@ -118,6 +120,7 @@ pub struct AgentRuntime {
     store: Arc<dyn StateStore>,
     providers: Arc<ProviderRegistry>,
     tools: Arc<ToolRegistry>,
+    images: Arc<ImageService>,
     events: EventHub,
     context_builder: Arc<dyn ContextBuilder>,
     title_generator: Arc<dyn ThreadTitleGenerator>,
@@ -134,6 +137,7 @@ impl AgentRuntime {
         store: Arc<dyn StateStore>,
         providers: Arc<ProviderRegistry>,
         tools: Arc<ToolRegistry>,
+        images: Arc<ImageService>,
         events: EventHub,
         context_builder: Arc<dyn ContextBuilder>,
         config: AgentRuntimeConfig,
@@ -142,6 +146,7 @@ impl AgentRuntime {
             store,
             providers,
             tools,
+            images,
             events,
             context_builder,
             Arc::new(LocalThreadTitleGenerator),
@@ -157,6 +162,7 @@ impl AgentRuntime {
         store: Arc<dyn StateStore>,
         providers: Arc<ProviderRegistry>,
         tools: Arc<ToolRegistry>,
+        images: Arc<ImageService>,
         events: EventHub,
         context_builder: Arc<dyn ContextBuilder>,
         title_generator: Arc<dyn ThreadTitleGenerator>,
@@ -166,6 +172,7 @@ impl AgentRuntime {
             store,
             providers,
             tools,
+            images,
             events,
             context_builder,
             Arc::new(FallbackThreadTitleGenerator::new(title_generator)),
@@ -178,6 +185,7 @@ impl AgentRuntime {
         store: Arc<dyn StateStore>,
         providers: Arc<ProviderRegistry>,
         tools: Arc<ToolRegistry>,
+        images: Arc<ImageService>,
         events: EventHub,
         context_builder: Arc<dyn ContextBuilder>,
         title_generator: Arc<dyn ThreadTitleGenerator>,
@@ -187,6 +195,7 @@ impl AgentRuntime {
             store,
             providers,
             tools,
+            images,
             events,
             context_builder,
             title_generator,
@@ -227,6 +236,12 @@ impl AgentRuntime {
                 ))
             })?
             .to_owned();
+
+        if !request.images.is_empty() && !provider.model_capabilities(&model).accepts_images() {
+            return Err(KodyError::InvalidInput(format!(
+                "model '{model}' does not accept image inputs"
+            )));
+        }
 
         let thread = self.store.get_thread(request.thread_id).await?;
         if thread.status == ThreadStatus::Archived {
@@ -277,22 +292,6 @@ impl AgentRuntime {
     ) -> Result<Turn> {
         let turn_id = TurnId::new();
         let input_message_id = MessageId::new();
-        let input = Message {
-            id: input_message_id,
-            thread_id: thread.id,
-            // The turn must reference an existing message and the store also
-            // validates message -> turn links, so the link is filled after
-            // both records exist.
-            turn_id: None,
-            role: MessageRole::User,
-            parts: vec![MessagePart::Text {
-                text: request.message,
-            }],
-            references: request.references,
-            created_at: Utc::now(),
-        };
-        self.store.append_message(input.clone()).await?;
-
         let default_permission_mode = if self.config.require_command_approval {
             PermissionMode::Ask
         } else {
@@ -313,16 +312,42 @@ impl AgentRuntime {
             completed_at: None,
             error: None,
         };
-        if let Err(error) = self.store.insert_turn(turn.clone()).await {
-            let _ = self.store.delete_message(input.id).await;
-            return Err(error);
+        let artifacts = self
+            .images
+            .stage_user_uploads(
+                thread.id,
+                input_message_id,
+                request.images,
+                &CancellationToken::new(),
+            )
+            .await?;
+        let mut parts = Vec::with_capacity(1 + artifacts.len());
+        if !request.message.trim().is_empty() {
+            parts.push(MessagePart::Text {
+                text: request.message,
+            });
         }
-
-        let mut linked_input = input;
-        linked_input.turn_id = Some(turn.id);
-        if let Err(error) = self.store.update_message(linked_input).await {
-            let _ = self.store.delete_turn(turn.id).await;
-            let _ = self.store.delete_message(input_message_id).await;
+        parts.extend(artifacts.iter().map(|artifact| MessagePart::Artifact {
+            artifact_id: artifact.id,
+            kind: artifact.kind,
+            mime_type: artifact.mime_type.clone(),
+            file_name: artifact.file_name.clone(),
+        }));
+        let input = Message {
+            id: input_message_id,
+            thread_id: thread.id,
+            turn_id: Some(turn.id),
+            role: MessageRole::User,
+            parts,
+            references: request.references,
+            created_at: Utc::now(),
+        };
+        if let Err(error) = self
+            .store
+            .insert_turn_input(input, turn.clone(), artifacts.clone())
+            .await
+        {
+            self.images.discard_staged_artifacts(&artifacts).await;
             return Err(error);
         }
         Ok(turn)
@@ -553,23 +578,36 @@ impl AgentRuntime {
         emitter: TurnEventEmitter,
         provider: Arc<dyn ModelProvider>,
     ) -> Result<String> {
-        let tool_definitions = self
-            .tools
-            .definitions()
-            .into_iter()
-            .filter(|definition| {
-                turn.permission_mode != PermissionMode::ReadOnly
-                    || matches!(
-                        self.tools.risk(&definition.name),
-                        Ok(crate::tools::ToolRisk::ReadOnly)
-                    )
-            })
-            .map(|definition| ProviderToolDefinition {
-                name: definition.name,
-                description: definition.description,
-                input_schema: definition.input_schema,
-            })
-            .collect::<Vec<_>>();
+        let model_capabilities = provider.model_capabilities(&turn.model);
+        let image_delivery = provider.image_delivery();
+        let tool_definitions = if model_capabilities.tool_calling {
+            self.tools
+                .definitions()
+                .into_iter()
+                .filter(|definition| {
+                    let permitted = turn.permission_mode != PermissionMode::ReadOnly
+                        || matches!(
+                            self.tools.risk(&definition.name),
+                            Ok(crate::tools::ToolRisk::ReadOnly)
+                        );
+                    let requirements = self
+                        .tools
+                        .model_requirements(&definition.name)
+                        .unwrap_or_default();
+                    let image_supported = !requirements.image_input
+                        || (model_capabilities.accepts_images()
+                            && image_delivery != crate::provider::ImageDelivery::Unsupported);
+                    permitted && image_supported
+                })
+                .map(|definition| ProviderToolDefinition {
+                    name: definition.name,
+                    description: definition.description,
+                    input_schema: definition.input_schema,
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
 
         for step in 1..=self.config.max_steps {
             check_cancelled(&cancellation)?;
@@ -642,7 +680,7 @@ impl AgentRuntime {
                     emitter.emit(AgentEvent::ToolCompleted {
                         tool_call_id: result.tool_call_id.clone(),
                         name: result.name.clone(),
-                        content: result.content.clone(),
+                        content: result.text(),
                         is_error: true,
                         metadata: result.metadata.clone(),
                     });
@@ -668,7 +706,7 @@ impl AgentRuntime {
                         emitter.emit(AgentEvent::ToolCompleted {
                             tool_call_id: result.tool_call_id.clone(),
                             name: result.name.clone(),
-                            content: result.content.clone(),
+                            content: result.text(),
                             is_error: true,
                             metadata: result.metadata.clone(),
                         });
@@ -693,7 +731,7 @@ impl AgentRuntime {
                 emitter.emit(AgentEvent::ToolCompleted {
                     tool_call_id: result.tool_call_id.clone(),
                     name: result.name.clone(),
-                    content: result.content.clone(),
+                    content: result.text(),
                     is_error: result.is_error,
                     metadata: result.metadata.clone(),
                 });
@@ -880,7 +918,9 @@ impl AgentRuntime {
                     parts: vec![MessagePart::ToolResult {
                         tool_call_id: activity.id,
                         name: activity.name,
-                        content: result.content,
+                        output: vec![crate::domain::ToolOutputPart::Text {
+                            text: result.content,
+                        }],
                         is_error: result.is_error,
                         metadata: result.metadata,
                     }],
@@ -901,7 +941,7 @@ impl AgentRuntime {
             parts: vec![MessagePart::ToolResult {
                 tool_call_id: result.tool_call_id,
                 name: result.name,
-                content: result.content,
+                output: result.output,
                 is_error: result.is_error,
                 metadata: result.metadata,
             }],
@@ -1090,9 +1130,9 @@ impl ApprovalBroker {
 }
 
 fn validate_start_turn(request: &StartTurn) -> Result<()> {
-    if request.message.trim().is_empty() {
+    if request.message.trim().is_empty() && request.images.is_empty() {
         return Err(KodyError::InvalidInput(
-            "turn message cannot be empty".into(),
+            "turn requires text or at least one image".into(),
         ));
     }
     if request.message.chars().count() > 128_000 {
@@ -1150,6 +1190,11 @@ fn validate_model_response(response: &ModelResponse) -> Result<()> {
                     "provider returned a tool result in assistant output".into(),
                 ));
             }
+            ModelContent::Image { .. } => {
+                return Err(KodyError::Provider(
+                    "provider returned an image in assistant output".into(),
+                ));
+            }
             ModelContent::Text { .. } => {}
         }
     }
@@ -1199,16 +1244,25 @@ fn model_part_to_domain(content: &ModelContent) -> MessagePart {
         ModelContent::ToolResult {
             tool_call_id,
             name,
-            content,
+            output,
             is_error,
             metadata,
         } => MessagePart::ToolResult {
             tool_call_id: tool_call_id.clone(),
             name: name.clone(),
-            content: content.clone(),
+            output: output
+                .iter()
+                .filter_map(|part| match part {
+                    ModelContent::Text { text } => {
+                        Some(crate::domain::ToolOutputPart::Text { text: text.clone() })
+                    }
+                    _ => None,
+                })
+                .collect(),
             is_error: *is_error,
             metadata: metadata.clone(),
         },
+        ModelContent::Image { .. } => unreachable!("assistant image output is rejected"),
     }
 }
 

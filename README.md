@@ -28,6 +28,7 @@ This model keeps conversation history independent from code location and makes m
 - Multi-step Rust agent loop with streaming model output, tool calls, cancellation, terminal state guarantees, and bounded context.
 - Extensible, object-safe `ModelProvider` API with runtime provider registration and per-Turn model selection.
 - Built-in OpenAI Responses and OpenAI-compatible Chat Completions adapters.
+- Per-model text/image/tool capabilities, direct image attachments, selective `view_image`, and Provider-neutral multimodal delivery.
 - Provider-neutral image generation with configurable image-model catalogs, an OpenAI-compatible Images adapter, durable Workspace artifacts, and in-conversation preview/download.
 - Optional Codex backend that uses the official `codex app-server` protocol and the user's ChatGPT/Codex plan quota without reading or repurposing Codex credentials.
 - Per-Turn permission modes: **Read only**, **Ask for commands**, and **Full access**.
@@ -103,6 +104,8 @@ More setup and debugging information is available in the [development guide](doc
 
 Desktop Settings can manage multiple named provider profiles. Every Turn selects a provider, model, and permission mode independently.
 
+Chat models declare their own tool-calling and input-modality capabilities. Configure model IDs independently under **Tool-capable models** and **Vision-capable models**; `view_image` appears only when both capabilities are enabled. Uploaded PNG/JPEG/WebP files are capped at four images and 16 MiB each. Kody injects them only into their current Turn; later Turns see artifact IDs and can ask `view_image` to load a selected image, avoiding automatic repeated image input.
+
 The same profile can optionally expose one or more image models. The desktop image composer selects the image provider, model, size, quality, format, and count independently from the chat model. Generated files are stored under the owning Thread Workspace's `artifacts/` directory and recorded in durable conversation state. OpenAI profiles default new configurations to `gpt-image-2`; OpenAI-compatible profiles can name any image model served by their `/images/generations` endpoint. Clearing the default image model disables image generation for that profile.
 
 The built-in native adapters are:
@@ -142,6 +145,7 @@ Starting a Turn uses explicit execution choices:
   "params": {
     "thread_id": "THREAD_UUID",
     "message": "Inspect the auth flow and fix the failing test",
+    "images": [],
     "provider": "openai",
     "model": "MODEL_ID",
     "permission_mode": "ask",

@@ -104,6 +104,7 @@ export function ImageComposer({
     <form
       className="composer image-composer"
       aria-label="Image generator"
+      aria-busy={generating}
       onSubmit={(event) => {
         event.preventDefault()
         void submit()
@@ -138,6 +139,7 @@ export function ImageComposer({
         </div>
       </div>
 
+      <label className="sr-only" htmlFor="image-prompt">Image prompt</label>
       <textarea
         id="image-prompt"
         value={message}
@@ -145,6 +147,7 @@ export function ImageComposer({
         disabled={unavailable || generating}
         placeholder="Describe the image, composition, style, lighting, and text…"
         aria-invalid={Boolean(error)}
+        aria-describedby={error ? 'image-prompt-error' : undefined}
         onChange={(event) => {
           setError('')
           onMessageChange(event.target.value)
@@ -157,7 +160,7 @@ export function ImageComposer({
           }
         }}
       />
-      {error ? <p className="composer__error" role="alert">{error}</p> : null}
+      {error ? <p id="image-prompt-error" className="composer__error" role="alert">{error}</p> : null}
 
       <footer className="composer__footer">
         <div className="image-composer__options">

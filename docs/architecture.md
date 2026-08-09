@@ -64,7 +64,7 @@ The important ownership rules are:
 6. A desktop draft is not a domain entity. `thread/create-and-start` materializes Thread, Workspace, optional Project, user Message, and first Turn only on Send; its client request ID is process-locally idempotent.
 7. A Managed Process belongs to one Thread and records the Turn/tool-call origin that created it. Its lifecycle is independent from that Turn, so cancellation never implicitly kills a successfully started process.
 8. External Thread IDs are opaque values namespaced by backend ID. A Kody Thread may resume the same Codex Thread without making Codex authentication or wire state part of Kody's domain model.
-9. An Artifact belongs to exactly one Thread and stores only validated Workspace-relative metadata in state. Direct image generation associates artifacts with its assistant Message; tool-generated artifacts remain discoverable through ToolResult metadata.
+9. An Artifact belongs to exactly one Thread and stores only validated Workspace-relative metadata in state. User uploads and direct image generation associate artifacts with their Message; tool-generated artifacts remain discoverable through structured ToolResult output.
 
 ## Agent loop
 
@@ -100,12 +100,12 @@ The command must remain in the foreground of its managed process group. The supe
 
 ## Provider abstraction and catalogs
 
-`ModelProvider` consumes provider-neutral `ModelRequest` values and returns `ModelResponse`. Provider-specific authentication, URL formats and wire payloads remain inside the adapter. `ModelDeltaSink` allows a streaming Provider to emit text, reasoning, and tool deltas while non-streaming Providers can emit their completed output through the same path.
+`ModelProvider` consumes provider-neutral `ModelRequest` values and returns `ModelResponse`. Request content can contain text, images, tool calls, and structured tool outputs. Provider-specific authentication, URL formats and wire payloads remain inside the adapter. `ModelDeltaSink` allows a streaming Provider to emit text, reasoning, and tool deltas while non-streaming Providers can emit their completed output through the same path.
 
 The public catalog is also provider-neutral:
 
-- `ProviderDescriptor` exposes ID, display name, adapter kind, authentication state, capabilities, and an optional default model. It never contains credential values.
-- `ModelDescriptor` exposes an opaque model ID, display name, default marker, and optional description, owner, creation time, and supported/default reasoning effort.
+- `ProviderDescriptor` exposes ID, display name, adapter kind, transport-level capabilities, authentication state, and an optional default model. It never contains credential values.
+- `ModelDescriptor` exposes an opaque model ID, display name, default marker, tool-calling support, input modalities, and optional descriptive/reasoning metadata. Unknown models default to text-only rather than inheriting Provider-wide assumptions.
 - `list_models` may query the upstream catalog and fall back to explicitly configured model IDs when an upstream catalog is unavailable.
 - `health` reports `healthy`, `degraded`, or `unavailable` without revealing secrets.
 
@@ -128,7 +128,11 @@ The registry replaces a provider atomically. `prepare_turn` resolves the adapter
 
 The first adapter targets OpenAI-compatible `/images/generations` endpoints and decodes bounded `b64_json` responses. Provider IDs and model IDs remain opaque, so one installation can configure multiple profiles and multiple image models without adding model-specific branches to the runtime or Renderer. Future adapters can report different per-model size, quality, format, editing, and masking capabilities through the same catalog.
 
-Artifact bytes never travel through JSON-RPC or durable JSON state. The authenticated artifact HTTP route resolves metadata first, canonicalizes the owning Workspace path, rejects path escapes and MIME/size mismatches, and serves bytes with private no-store headers. Electron main performs the authenticated fetch; Renderer receives only a bounded image data URL through a narrow IPC method.
+Direct user uploads cross the authenticated JSON-RPC boundary once as bounded Base64 data. They are validated by signature, MIME type, dimensions, count, and size before being written to the Workspace; the user Message, Turn, and artifact metadata are then committed atomically. A failed commit removes staged files. Durable JSON state never contains the image bytes.
+
+The context builder materializes an uploaded image only while constructing the owning current Turn. Historical messages carry artifact references, so images are not repeatedly billed on every later model call. A vision/tool-capable model can selectively recover one with Kody's read-only `view_image` tool. Its durable ToolResult contains text and an artifact ID; the context layer resolves that ID to bytes only in the current Turn and only after validating Thread ownership. OpenAI Responses encodes this as native multimodal function output, while OpenAI-compatible Chat Completions emits a normal tool message followed by a synthetic user image message.
+
+The authenticated artifact HTTP route resolves metadata first, canonicalizes the owning Workspace path, rejects path escapes and MIME/size mismatches, and serves bytes with private no-store headers. Electron main performs the authenticated fetch; Renderer receives only a bounded image data URL through a narrow IPC method.
 
 ## Codex external Turn backend
 
@@ -167,7 +171,7 @@ The default builder combines:
 2. Direct referenced Thread data as prior user-level JSON reference messages.
 3. The current Thread's linear message history.
 
-Referenced content is never inserted into the system instruction and is JSON escaped to reduce delimiter/prompt-injection elevation. Current history is retained in complete Turn groups so a ToolResult is not separated from its ToolCall. Independent budgets cap current history, each reference, total reference material, and reference counts.
+Referenced content is never inserted into the system instruction and is JSON escaped to reduce delimiter/prompt-injection elevation. Current history is retained in complete Turn groups so a ToolResult is not separated from its ToolCall. Image bytes are materialized only for the current Turn; historical artifacts remain textual references until selected through `view_image`. Independent budgets cap current history, each reference, total reference material, and reference counts.
 
 ## State and recovery
 

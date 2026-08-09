@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    domain::{Message, MessagePart, MessageRole},
+    domain::{ImageDetail, Message, MessagePart, MessageRole, ToolOutputPart},
     error::Result,
     tools::{ToolCall, ToolDefinition, ToolResult},
 };
@@ -111,6 +111,12 @@ pub enum ModelContent {
     Text {
         text: String,
     },
+    Image {
+        mime_type: String,
+        data: Vec<u8>,
+        #[serde(default)]
+        detail: ImageDetail,
+    },
     ToolCall {
         id: String,
         name: String,
@@ -119,7 +125,7 @@ pub enum ModelContent {
     ToolResult {
         tool_call_id: String,
         name: String,
-        content: String,
+        output: Vec<ModelContent>,
         is_error: bool,
         #[serde(default, skip_serializing_if = "Value::is_null")]
         metadata: Value,
@@ -151,13 +157,13 @@ impl From<&MessagePart> for ModelContent {
             MessagePart::ToolResult {
                 tool_call_id,
                 name,
-                content,
+                output,
                 is_error,
                 metadata,
             } => Self::ToolResult {
                 tool_call_id: tool_call_id.clone(),
                 name: name.clone(),
-                content: content.clone(),
+                output: output.iter().map(model_output_placeholder).collect(),
                 is_error: *is_error,
                 metadata: metadata.clone(),
             },
@@ -168,36 +174,6 @@ impl From<&MessagePart> for ModelContent {
                 ..
             } => Self::Text {
                 text: format!("[Generated {kind:?} artifact {artifact_id}: {file_name}]"),
-            },
-        }
-    }
-}
-
-impl From<ModelContent> for MessagePart {
-    fn from(value: ModelContent) -> Self {
-        match value {
-            ModelContent::Text { text } => Self::Text { text },
-            ModelContent::ToolCall {
-                id,
-                name,
-                arguments,
-            } => Self::ToolCall {
-                id,
-                name,
-                arguments,
-            },
-            ModelContent::ToolResult {
-                tool_call_id,
-                name,
-                content,
-                is_error,
-                metadata,
-            } => Self::ToolResult {
-                tool_call_id,
-                name,
-                content,
-                is_error,
-                metadata,
             },
         }
     }
@@ -218,10 +194,22 @@ impl From<ToolResult> for ModelContent {
         Self::ToolResult {
             tool_call_id: value.tool_call_id,
             name: value.name,
-            content: value.content,
+            output: value.output.iter().map(model_output_placeholder).collect(),
             is_error: value.is_error,
             metadata: value.metadata,
         }
+    }
+}
+
+fn model_output_placeholder(part: &ToolOutputPart) -> ModelContent {
+    match part {
+        ToolOutputPart::Text { text } => ModelContent::Text { text: text.clone() },
+        ToolOutputPart::Artifact {
+            artifact_id,
+            detail: _,
+        } => ModelContent::Text {
+            text: format!("[Image artifact {artifact_id}]"),
+        },
     }
 }
 
@@ -342,6 +330,7 @@ pub(crate) async fn emit_response(
     for content in &response.content {
         let delta = match content {
             ModelContent::Text { text } => ModelDelta::Text { text: text.clone() },
+            ModelContent::Image { .. } => continue,
             ModelContent::ToolCall {
                 id,
                 name,

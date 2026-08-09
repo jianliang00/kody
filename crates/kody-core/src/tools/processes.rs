@@ -583,6 +583,7 @@ mod tests {
             .prepare_turn(StartTurn {
                 thread_id: thread.id,
                 message: "start a test process".to_owned(),
+                images: Vec::new(),
                 references: Vec::new(),
                 provider: "echo".to_owned(),
                 model: None,

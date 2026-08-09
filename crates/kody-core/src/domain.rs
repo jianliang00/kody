@@ -177,7 +177,8 @@ pub enum MessagePart {
     ToolResult {
         tool_call_id: String,
         name: String,
-        content: String,
+        #[serde(alias = "content", deserialize_with = "deserialize_tool_result_output")]
+        output: Vec<ToolOutputPart>,
         is_error: bool,
         #[serde(default, skip_serializing_if = "Value::is_null")]
         metadata: Value,
@@ -188,6 +189,47 @@ pub enum MessagePart {
         mime_type: String,
         file_name: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageDetail {
+    #[default]
+    Auto,
+    Low,
+    High,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolOutputPart {
+    Text {
+        text: String,
+    },
+    Artifact {
+        artifact_id: ArtifactId,
+        #[serde(default)]
+        detail: ImageDetail,
+    },
+}
+
+fn deserialize_tool_result_output<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<ToolOutputPart>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StoredToolResultOutput {
+        Current(Vec<ToolOutputPart>),
+        LegacyText(String),
+    }
+
+    Ok(match StoredToolResultOutput::deserialize(deserializer)? {
+        StoredToolResultOutput::Current(output) => output,
+        StoredToolResultOutput::LegacyText(text) => vec![ToolOutputPart::Text { text }],
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -404,5 +446,37 @@ mod tests {
         let serialized = serde_json::to_value(reference).unwrap();
         assert_eq!(serialized["mode"], "full");
         assert!(serialized.get("message_ids").is_none());
+    }
+
+    #[test]
+    fn legacy_tool_result_content_deserializes_as_text_output() {
+        let part: MessagePart = serde_json::from_value(json!({
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "name": "read_file",
+            "content": "legacy output",
+            "is_error": false
+        }))
+        .unwrap();
+
+        assert_eq!(
+            part,
+            MessagePart::ToolResult {
+                tool_call_id: "call-1".into(),
+                name: "read_file".into(),
+                output: vec![ToolOutputPart::Text {
+                    text: "legacy output".into(),
+                }],
+                is_error: false,
+                metadata: Value::Null,
+            }
+        );
+
+        let serialized = serde_json::to_value(part).unwrap();
+        assert!(serialized.get("content").is_none());
+        assert_eq!(
+            serialized["output"],
+            json!([{ "type": "text", "text": "legacy output" }])
+        );
     }
 }

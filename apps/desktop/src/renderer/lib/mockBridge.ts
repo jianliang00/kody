@@ -362,7 +362,6 @@ function createMockStore() {
               capabilities: {
                 streaming: true,
                 reasoning: false,
-                tools: true,
                 model_catalog: false,
                 custom_models: false
               },
@@ -376,7 +375,6 @@ function createMockStore() {
               capabilities: {
                 streaming: true,
                 reasoning: true,
-                tools: true,
                 model_catalog: true,
                 custom_models: false
               },
@@ -389,10 +387,10 @@ function createMockStore() {
         return {
           models: input.provider_id === 'codex'
             ? [
-                { id: 'codex-default', display_name: 'Codex default', is_default: true },
-                { id: 'codex-fast', display_name: 'Codex fast' }
+                { id: 'codex-default', display_name: 'Codex default', is_default: true, capabilities: { tool_calling: true, input_modalities: ['text', 'image'] } },
+                { id: 'codex-fast', display_name: 'Codex fast', capabilities: { tool_calling: true, input_modalities: ['text', 'image'] } }
               ]
-            : [{ id: 'kody-demo', display_name: 'Kody demo', is_default: true }]
+            : [{ id: 'kody-demo', display_name: 'Kody demo', is_default: true, capabilities: { tool_calling: false, input_modalities: ['text'] } }]
         } as RpcMethodMap[M]['result']
       }
       case 'image/provider/list':
@@ -561,6 +559,7 @@ function createMockStore() {
         const turn = await rpc('turn/start', {
           thread_id: created.thread.id,
           message: input.message,
+          images: input.images,
           references: input.references,
           provider: input.provider,
           model: input.model,
@@ -805,6 +804,8 @@ export function createMockBridge(): KodyDesktopBridge {
         ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
         defaultModel: input.defaultModel,
         customModels: input.customModels ?? [],
+        toolModels: input.toolModels ?? [],
+        visionModels: input.visionModels ?? [],
         ...(input.defaultImageModel ? { defaultImageModel: input.defaultImageModel } : {}),
         imageModels: input.imageModels ?? [],
         hasSecret: input.clearSecret ? false : Boolean(input.secret || existing?.hasSecret),

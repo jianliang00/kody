@@ -86,11 +86,13 @@ export function validateRpcInvocation(method: unknown, params: unknown): asserts
     case 'thread/create-and-start':
       requireKeys(
         params,
-        ['client_request_id', 'message', 'references', 'provider', 'permission_mode'],
+        ['client_request_id', 'message', 'images', 'references', 'provider', 'permission_mode'],
         ['model', 'working_directory']
       )
       requireId(params.client_request_id, 'client_request_id')
-      requireString(params.message, 'message', 128_000)
+      requireString(params.message, 'message', 128_000, true)
+      requireUploadedImages(params.images)
+      requireTurnContent(params.message, params.images)
       requireString(params.provider, 'provider', 256)
       requirePermissionMode(params.permission_mode)
       requireOptionalString(params.model, 'model', 256)
@@ -112,11 +114,13 @@ export function validateRpcInvocation(method: unknown, params: unknown): asserts
     case 'turn/start':
       requireKeys(
         params,
-        ['thread_id', 'message', 'references', 'provider', 'permission_mode'],
+        ['thread_id', 'message', 'images', 'references', 'provider', 'permission_mode'],
         ['model']
       )
       requireId(params.thread_id, 'thread_id')
-      requireString(params.message, 'message', 128_000)
+      requireString(params.message, 'message', 128_000, true)
+      requireUploadedImages(params.images)
+      requireTurnContent(params.message, params.images)
       requireString(params.provider, 'provider', 256)
       requirePermissionMode(params.permission_mode)
       requireOptionalString(params.model, 'model', 256)
@@ -188,6 +192,26 @@ export function validateRpcInvocation(method: unknown, params: unknown): asserts
 function requirePermissionMode(value: unknown): asserts value is PermissionMode {
   if (value !== 'read_only' && value !== 'ask' && value !== 'full_access') {
     throw new Error("'permission_mode' must be read_only, ask, or full_access")
+  }
+}
+
+function requireUploadedImages(value: unknown): asserts value is Array<Record<string, unknown>> {
+  if (!Array.isArray(value) || value.length > 4) throw new Error('Invalid uploaded images')
+  const maximumBase64Length = Math.ceil((16 * 1024 * 1024) / 3) * 4
+  for (const image of value) {
+    if (!isRecord(image)) throw new Error('Invalid uploaded image')
+    requireKeys(image, ['file_name', 'mime_type', 'data_base64'])
+    requireString(image.file_name, 'file_name', 512)
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(String(image.mime_type))) {
+      throw new Error("'mime_type' must be PNG, JPEG, or WebP")
+    }
+    requireString(image.data_base64, 'data_base64', maximumBase64Length)
+  }
+}
+
+function requireTurnContent(message: unknown, images: unknown[]): void {
+  if (typeof message === 'string' && message.trim().length === 0 && images.length === 0) {
+    throw new Error('A Turn requires a message or image')
   }
 }
 

@@ -12,6 +12,87 @@ import {
 } from './provider-settings'
 
 describe('ProviderSettingsStore', () => {
+  it('atomically migrates v1 settings to v2 without losing encrypted credentials', async () => {
+    const fileSystem = new MemoryFileSystem()
+    const safeStorage = new FakeSafeStorage('kwallet6')
+    const secret = 'CANARY-v1-provider-secret'
+    const encryptedSecret = safeStorage.encryptString(secret).toString('base64')
+    fileSystem.seed('/state/provider-settings.json', JSON.stringify({
+      version: 1,
+      profiles: [{
+        id: 'legacy-profile',
+        name: 'Legacy provider',
+        kind: 'openai',
+        defaultModel: 'gpt-legacy',
+        customModels: ['gpt-legacy-fast'],
+        defaultImageModel: '',
+        imageModels: [],
+        encryptedSecret,
+        createdAt: '2026-07-12T00:00:00.000Z',
+        updatedAt: '2026-07-13T00:00:00.000Z'
+      }]
+    }), 0o600)
+    const store = createStore(fileSystem, safeStorage)
+
+    expect((await store.snapshot()).profiles[0]).toMatchObject({
+      id: 'legacy-profile',
+      toolModels: [],
+      visionModels: [],
+      hasSecret: true
+    })
+    expect(await store.getSecret('legacy-profile')).toBe(secret)
+
+    const persisted = JSON.parse(fileSystem.contents('/state/provider-settings.json'))
+    expect(persisted).toMatchObject({
+      version: 2,
+      profiles: [{
+        id: 'legacy-profile',
+        toolModels: [],
+        visionModels: [],
+        encryptedSecret
+      }]
+    })
+    expect(fileSystem.operations).toEqual(expect.arrayContaining([
+      'write:/state/provider-settings.json.tmp-write-1:600:wx',
+      'sync:/state/provider-settings.json.tmp-write-1',
+      'rename:/state/provider-settings.json.tmp-write-1->/state/provider-settings.json',
+      'sync:/state'
+    ]))
+  })
+
+  it('keeps v2 model-routing fields strict', async () => {
+    for (const missingField of ['toolModels', 'visionModels'] as const) {
+      const fileSystem = new MemoryFileSystem()
+      const profile: Record<string, unknown> = {
+        id: `missing-${missingField}`,
+        name: 'Incomplete v2 provider',
+        kind: 'openai',
+        defaultModel: 'gpt-test',
+        customModels: [],
+        toolModels: [],
+        visionModels: [],
+        defaultImageModel: '',
+        imageModels: [],
+        createdAt: '2026-07-13T00:00:00.000Z',
+        updatedAt: '2026-07-13T00:00:00.000Z'
+      }
+      delete profile[missingField]
+      fileSystem.seed(`/state/${missingField}.json`, JSON.stringify({
+        version: 2,
+        profiles: [profile]
+      }), 0o600)
+      const store = new ProviderSettingsStore({
+        filePath: `/state/${missingField}.json`,
+        fileSystem,
+        safeStorage: new FakeSafeStorage('kwallet6'),
+        platform: 'linux'
+      })
+
+      await expect(store.snapshot()).rejects.toThrow(`invalid ${missingField === 'toolModels' ? 'tool' : 'vision'} models`)
+      expect(fileSystem.operations.some((operation) => operation.startsWith('rename:'))).toBe(false)
+    }
+  })
+
   it('persists an explicitly disabled image provider across reloads', async () => {
     const fileSystem = new MemoryFileSystem()
     const safeStorage = new FakeSafeStorage('kwallet6')
@@ -114,13 +195,15 @@ describe('ProviderSettingsStore', () => {
     const encryptor = new FakeSafeStorage('kwallet6')
     const encryptedSecret = encryptor.encryptString('CANARY-existing-secret').toString('base64')
     fileSystem.seed('/state/existing-settings.json', JSON.stringify({
-      version: 1,
+      version: 2,
       profiles: [{
         id: 'existing-profile',
         name: 'Existing provider',
         kind: 'openai',
         defaultModel: 'gpt-test',
         customModels: [],
+        toolModels: [],
+        visionModels: [],
         encryptedSecret,
         createdAt: '2026-07-13T00:00:00.000Z',
         updatedAt: '2026-07-13T00:00:00.000Z'
@@ -232,7 +315,7 @@ describe('ProviderSettingsStore', () => {
   it('shares first load across concurrent readers and tightens legacy permissions', async () => {
     const fileSystem = new MemoryFileSystem()
     fileSystem.seed('/state/provider-settings.json', JSON.stringify({
-      version: 1,
+      version: 2,
       profiles: []
     }), 0o644)
     const store = createStore(fileSystem, new FakeSafeStorage('kwallet6'))

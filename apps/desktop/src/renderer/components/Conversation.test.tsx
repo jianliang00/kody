@@ -296,7 +296,7 @@ describe('tool activity in messages', () => {
             type: 'tool_result',
             tool_call_id: 'call-shell',
             name: 'shell',
-            content: 'test result: ok',
+            output: [{ type: 'text', text: 'test result: ok' }],
             is_error: false,
             metadata: { exit_code: 0 }
           }],

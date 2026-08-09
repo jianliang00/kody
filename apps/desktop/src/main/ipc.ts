@@ -185,6 +185,8 @@ export function validateProviderProfileUpdate(input: unknown): ProviderProfileUp
     'baseUrl',
     'defaultModel',
     'customModels',
+    'toolModels',
+    'visionModels',
     'defaultImageModel',
     'imageModels',
     'secret',
@@ -246,6 +248,26 @@ export function validateProviderProfileUpdate(input: unknown): ProviderProfileUp
   ) {
     throw new Error('Provider custom models are invalid')
   }
+  if (!Array.isArray(input.toolModels) && input.toolModels !== undefined) {
+    throw new Error('Provider tool models are invalid')
+  }
+  const toolModels = input.toolModels ?? []
+  if (
+    toolModels.length > 200
+    || toolModels.some((model) => typeof model !== 'string' || model.length > 200)
+  ) {
+    throw new Error('Provider tool models are invalid')
+  }
+  if (!Array.isArray(input.visionModels) && input.visionModels !== undefined) {
+    throw new Error('Provider vision models are invalid')
+  }
+  const visionModels = input.visionModels ?? []
+  if (
+    visionModels.length > 200
+    || visionModels.some((model) => typeof model !== 'string' || model.length > 200)
+  ) {
+    throw new Error('Provider vision models are invalid')
+  }
   if (!Array.isArray(input.imageModels) && input.imageModels !== undefined) {
     throw new Error('Provider image models are invalid')
   }
@@ -266,6 +288,8 @@ export function validateProviderProfileUpdate(input: unknown): ProviderProfileUp
     ...(input.baseUrl === undefined ? {} : { baseUrl: input.baseUrl }),
     defaultModel: input.defaultModel,
     customModels: [...customModels],
+    toolModels: [...toolModels],
+    visionModels: [...visionModels],
     ...(input.defaultImageModel === undefined ? {} : { defaultImageModel: input.defaultImageModel }),
     imageModels: [...imageModels],
     ...(input.secret === undefined ? {} : { secret: input.secret }),

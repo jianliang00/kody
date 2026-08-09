@@ -1,6 +1,7 @@
 use std::{collections::HashSet, fmt, time::Duration};
 
 use async_trait::async_trait;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::StreamExt;
 use reqwest::{header, Client, Method, RequestBuilder, Response, StatusCode, Url};
 use serde::Deserialize;
@@ -9,10 +10,10 @@ use serde_json::{json, Map, Value};
 use crate::error::{KodyError, Result};
 
 use super::{
-    AuthState, FinishReason, ModelContent, ModelDelta, ModelDeltaSink, ModelDescriptor,
-    ModelMessage, ModelProvider, ModelRequest, ModelResponse, ModelRole, ModelUsage,
-    ProviderCapabilities, ProviderDescriptor, ProviderErrorKind, ProviderFailure, ProviderHealth,
-    ToolDefinition,
+    AuthState, FinishReason, ImageDelivery, ModelCapabilities, ModelContent, ModelDelta,
+    ModelDeltaSink, ModelDescriptor, ModelMessage, ModelProvider, ModelRequest, ModelResponse,
+    ModelRole, ModelUsage, ProviderCapabilities, ProviderDescriptor, ProviderErrorKind,
+    ProviderFailure, ProviderHealth, ToolDefinition,
 };
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
@@ -33,6 +34,8 @@ pub struct OpenAiResponsesConfig {
     /// Offline/catalog fallback model IDs. They are used only if `/models`
     /// cannot be reached or returns no usable models.
     pub configured_models: Vec<String>,
+    pub tool_calling_models: Vec<String>,
+    pub image_input_models: Vec<String>,
     pub organization: Option<String>,
     pub project: Option<String>,
     pub timeout: Duration,
@@ -48,6 +51,8 @@ impl Default for OpenAiResponsesConfig {
             require_api_key: true,
             default_model: None,
             configured_models: Vec::new(),
+            tool_calling_models: Vec::new(),
+            image_input_models: Vec::new(),
             organization: None,
             project: None,
             timeout: DEFAULT_TIMEOUT,
@@ -78,6 +83,8 @@ impl fmt::Debug for OpenAiResponsesConfig {
             .field("require_api_key", &self.require_api_key)
             .field("default_model", &self.default_model)
             .field("configured_models", &self.configured_models)
+            .field("tool_calling_models", &self.tool_calling_models)
+            .field("image_input_models", &self.image_input_models)
             .field("organization", &self.organization)
             .field("project", &self.project)
             .field("timeout", &self.timeout)
@@ -197,15 +204,19 @@ impl OpenAiResponsesProvider {
             .data
             .into_iter()
             .filter(|model| !model.id.trim().is_empty())
-            .map(|model| ModelDescriptor {
-                display_name: model.id.clone(),
-                is_default: self.config.default_model.as_deref() == Some(model.id.as_str()),
-                id: model.id,
-                description: None,
-                default_reasoning_effort: None,
-                reasoning_efforts: Vec::new(),
-                owned_by: model.owned_by,
-                created_at: model.created,
+            .map(|model| {
+                let capabilities = self.model_capabilities(&model.id);
+                ModelDescriptor {
+                    display_name: model.id.clone(),
+                    is_default: self.config.default_model.as_deref() == Some(model.id.as_str()),
+                    capabilities,
+                    id: model.id,
+                    description: None,
+                    default_reasoning_effort: None,
+                    reasoning_efforts: Vec::new(),
+                    owned_by: model.owned_by,
+                    created_at: model.created,
+                }
             })
             .collect::<Vec<_>>();
         models.sort_by(|left, right| left.id.cmp(&right.id));
@@ -221,6 +232,8 @@ impl OpenAiResponsesProvider {
 
     fn configured_models(&self) -> Vec<ModelDescriptor> {
         let mut ids = self.config.configured_models.clone();
+        ids.extend(self.config.tool_calling_models.iter().cloned());
+        ids.extend(self.config.image_input_models.iter().cloned());
         if let Some(default) = self.config.default_model.as_ref() {
             ids.push(default.clone());
         }
@@ -230,7 +243,9 @@ impl OpenAiResponsesProvider {
         ids.into_iter()
             .map(|id| {
                 let is_default = self.config.default_model.as_deref() == Some(id.as_str());
-                ModelDescriptor::new(id).with_default(is_default)
+                let mut descriptor = ModelDescriptor::new(id).with_default(is_default);
+                descriptor.capabilities = self.model_capabilities(&descriptor.id);
+                descriptor
             })
             .collect()
     }
@@ -303,6 +318,28 @@ impl ModelProvider for OpenAiResponsesProvider {
         self.config.default_model.as_deref()
     }
 
+    fn model_capabilities(&self, model: &str) -> ModelCapabilities {
+        let tool_calling = self
+            .config
+            .tool_calling_models
+            .iter()
+            .any(|candidate| candidate == model);
+        if self
+            .config
+            .image_input_models
+            .iter()
+            .any(|candidate| candidate == model)
+        {
+            ModelCapabilities::vision(tool_calling)
+        } else {
+            ModelCapabilities::text(tool_calling)
+        }
+    }
+
+    fn image_delivery(&self) -> ImageDelivery {
+        ImageDelivery::NativeToolOutput
+    }
+
     fn descriptor(&self) -> ProviderDescriptor {
         ProviderDescriptor {
             id: self.config.id.clone(),
@@ -318,7 +355,6 @@ impl ModelProvider for OpenAiResponsesProvider {
             capabilities: ProviderCapabilities {
                 streaming: true,
                 reasoning: true,
-                tools: true,
                 model_catalog: true,
                 custom_models: true,
             },
@@ -328,7 +364,12 @@ impl ModelProvider for OpenAiResponsesProvider {
 
     async fn list_models(&self) -> Result<Vec<ModelDescriptor>> {
         match self.fetch_models().await {
-            Ok(models) => Ok(models),
+            Ok(mut models) => {
+                models.extend(self.configured_models());
+                models.sort_by(|left, right| left.id.cmp(&right.id));
+                models.dedup_by(|left, right| left.id == right.id);
+                Ok(models)
+            }
             Err(error) => {
                 let fallback = self.configured_models();
                 if fallback.is_empty() {
@@ -470,17 +511,16 @@ fn encode_request(request: &ModelRequest, model: String) -> Result<Value> {
 
 fn encode_input_message(message: &ModelMessage, input: &mut Vec<Value>) -> Result<()> {
     match message.role {
-        ModelRole::System | ModelRole::User => {
-            let role = if message.role == ModelRole::System {
-                "system"
-            } else {
-                "user"
-            };
-            let text = text_only(message, role)?;
+        ModelRole::System => {
+            let text = text_only(message, "system")?;
             input.push(json!({
-                "role": role,
+                "role": "system",
                 "content": [{ "type": "input_text", "text": text }]
             }));
+        }
+        ModelRole::User => {
+            let content = encode_multimodal_input(&message.content, "user")?;
+            input.push(json!({ "role": "user", "content": content }));
         }
         ModelRole::Assistant => {
             let mut text = Vec::new();
@@ -502,6 +542,11 @@ fn encode_input_message(message: &ModelMessage, input: &mut Vec<Value>) -> Resul
                             "assistant messages cannot contain tool results".into(),
                         ));
                     }
+                    ModelContent::Image { .. } => {
+                        return Err(KodyError::InvalidInput(
+                            "assistant messages cannot contain image inputs".into(),
+                        ));
+                    }
                 }
             }
             if !text.is_empty() {
@@ -521,12 +566,12 @@ fn encode_input_message(message: &ModelMessage, input: &mut Vec<Value>) -> Resul
                 match content {
                     ModelContent::ToolResult {
                         tool_call_id,
-                        content,
+                        output,
                         ..
                     } => input.push(json!({
                         "type": "function_call_output",
                         "call_id": tool_call_id,
-                        "output": content,
+                        "output": encode_multimodal_input(output, "tool result")?,
                     })),
                     _ => {
                         return Err(KodyError::InvalidInput(
@@ -538,6 +583,40 @@ fn encode_input_message(message: &ModelMessage, input: &mut Vec<Value>) -> Resul
         }
     }
     Ok(())
+}
+
+fn encode_multimodal_input(content: &[ModelContent], role: &str) -> Result<Vec<Value>> {
+    if content.is_empty() {
+        return Err(KodyError::InvalidInput(format!(
+            "{role} messages must contain at least one content part"
+        )));
+    }
+    content
+        .iter()
+        .map(|part| match part {
+            ModelContent::Text { text } => Ok(json!({ "type": "input_text", "text": text })),
+            ModelContent::Image {
+                mime_type,
+                data,
+                detail,
+            } => Ok(json!({
+                "type": "input_image",
+                "image_url": format!("data:{mime_type};base64,{}", BASE64.encode(data)),
+                "detail": image_detail(*detail),
+            })),
+            _ => Err(KodyError::InvalidInput(format!(
+                "{role} messages may only contain text and images"
+            ))),
+        })
+        .collect()
+}
+
+fn image_detail(detail: crate::domain::ImageDetail) -> &'static str {
+    match detail {
+        crate::domain::ImageDetail::Auto => "auto",
+        crate::domain::ImageDetail::Low => "low",
+        crate::domain::ImageDetail::High => "high",
+    }
 }
 
 fn text_only(message: &ModelMessage, role: &str) -> Result<String> {
@@ -1130,6 +1209,78 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+
+    #[test]
+    fn resolves_tool_and_image_capabilities_independently_per_model() {
+        let mut config = OpenAiResponsesConfig::new("test", "http://127.0.0.1:1/v1");
+        config.require_api_key = false;
+        config.tool_calling_models = vec!["tool-only".into(), "both".into()];
+        config.image_input_models = vec!["vision-only".into(), "both".into()];
+        let provider = OpenAiResponsesProvider::new(config).unwrap();
+
+        assert_eq!(
+            provider.model_capabilities("tool-only"),
+            ModelCapabilities::text(true)
+        );
+        assert_eq!(
+            provider.model_capabilities("vision-only"),
+            ModelCapabilities::vision(false)
+        );
+        assert_eq!(
+            provider.model_capabilities("both"),
+            ModelCapabilities::vision(true)
+        );
+        assert_eq!(
+            provider.model_capabilities("unknown"),
+            ModelCapabilities::text(false)
+        );
+    }
+
+    #[test]
+    fn encodes_images_in_user_messages_and_function_outputs() {
+        let request = ModelRequest::new(
+            "vision-model",
+            vec![
+                ModelMessage::new(
+                    ModelRole::User,
+                    vec![
+                        ModelContent::Text {
+                            text: "describe".into(),
+                        },
+                        ModelContent::Image {
+                            mime_type: "image/png".into(),
+                            data: vec![1, 2, 3],
+                            detail: crate::domain::ImageDetail::High,
+                        },
+                    ],
+                ),
+                ModelMessage::new(
+                    ModelRole::Tool,
+                    vec![ModelContent::ToolResult {
+                        tool_call_id: "call-1".into(),
+                        name: "view_image".into(),
+                        output: vec![ModelContent::Image {
+                            mime_type: "image/png".into(),
+                            data: vec![4, 5, 6],
+                            detail: crate::domain::ImageDetail::Low,
+                        }],
+                        is_error: false,
+                        metadata: Value::Null,
+                    }],
+                ),
+            ],
+        );
+
+        let body = encode_request(&request, "vision-model".into()).unwrap();
+        assert_eq!(body["input"][0]["content"][1]["type"], "input_image");
+        assert_eq!(body["input"][0]["content"][1]["detail"], "high");
+        assert!(body["input"][0]["content"][1]["image_url"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,"));
+        assert_eq!(body["input"][1]["type"], "function_call_output");
+        assert_eq!(body["input"][1]["output"][0]["detail"], "low");
+    }
 
     #[derive(Default)]
     struct RecordingSink {

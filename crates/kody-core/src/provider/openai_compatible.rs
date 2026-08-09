@@ -1,6 +1,7 @@
 use std::{env, fmt, time::Duration};
 
 use async_trait::async_trait;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use reqwest::{header, Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -8,9 +9,9 @@ use serde_json::Value;
 use crate::error::{KodyError, Result};
 
 use super::{
-    emit_response, AuthState, FinishReason, ModelContent, ModelDeltaSink, ModelMessage,
-    ModelProvider, ModelRequest, ModelResponse, ModelRole, ModelUsage, ProviderCapabilities,
-    ProviderDescriptor, ToolDefinition,
+    emit_response, AuthState, FinishReason, ImageDelivery, ModelCapabilities, ModelContent,
+    ModelDeltaSink, ModelMessage, ModelProvider, ModelRequest, ModelResponse, ModelRole,
+    ModelUsage, ProviderCapabilities, ProviderDescriptor, ToolDefinition,
 };
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
@@ -27,6 +28,8 @@ pub struct OpenAiCompatibleConfig {
     pub api_key: Option<String>,
     pub default_model: Option<String>,
     pub configured_models: Vec<String>,
+    pub tool_calling_models: Vec<String>,
+    pub image_input_models: Vec<String>,
     pub organization: Option<String>,
     pub project: Option<String>,
     pub timeout: Duration,
@@ -42,6 +45,8 @@ impl fmt::Debug for OpenAiCompatibleConfig {
             .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
             .field("default_model", &self.default_model)
             .field("configured_models", &self.configured_models)
+            .field("tool_calling_models", &self.tool_calling_models)
+            .field("image_input_models", &self.image_input_models)
             .field("organization", &self.organization)
             .field("project", &self.project)
             .field("timeout", &self.timeout)
@@ -58,6 +63,8 @@ impl Default for OpenAiCompatibleConfig {
             api_key: None,
             default_model: None,
             configured_models: Vec::new(),
+            tool_calling_models: Vec::new(),
+            image_input_models: Vec::new(),
             organization: None,
             project: None,
             timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
@@ -138,6 +145,7 @@ impl OpenAiCompatibleConfig {
         }
 
         let id = id.unwrap_or_else(|| "openai".into());
+        let default_model = kody_model.or(standard_model);
         Ok(Some(Self {
             display_name: id.clone(),
             id,
@@ -145,8 +153,10 @@ impl OpenAiCompatibleConfig {
                 .or(standard_base_url)
                 .unwrap_or_else(|| DEFAULT_BASE_URL.into()),
             api_key: kody_api_key.or(standard_api_key),
-            default_model: kody_model.or(standard_model),
+            tool_calling_models: default_model.iter().cloned().collect(),
+            default_model,
             configured_models: Vec::new(),
+            image_input_models: Vec::new(),
             organization: kody_organization.or(standard_organization),
             project: kody_project.or(standard_project),
             timeout: Duration::from_secs(timeout),
@@ -247,6 +257,28 @@ impl ModelProvider for OpenAiCompatibleProvider {
         self.config.default_model.as_deref()
     }
 
+    fn model_capabilities(&self, model: &str) -> ModelCapabilities {
+        let tool_calling = self
+            .config
+            .tool_calling_models
+            .iter()
+            .any(|candidate| candidate == model);
+        if self
+            .config
+            .image_input_models
+            .iter()
+            .any(|candidate| candidate == model)
+        {
+            ModelCapabilities::vision(tool_calling)
+        } else {
+            ModelCapabilities::text(tool_calling)
+        }
+    }
+
+    fn image_delivery(&self) -> ImageDelivery {
+        ImageDelivery::SyntheticUserMessage
+    }
+
     fn descriptor(&self) -> ProviderDescriptor {
         ProviderDescriptor {
             id: self.config.id.clone(),
@@ -260,7 +292,6 @@ impl ModelProvider for OpenAiCompatibleProvider {
             capabilities: ProviderCapabilities {
                 streaming: false,
                 reasoning: false,
-                tools: true,
                 model_catalog: false,
                 custom_models: true,
             },
@@ -270,6 +301,8 @@ impl ModelProvider for OpenAiCompatibleProvider {
 
     async fn list_models(&self) -> Result<Vec<super::ModelDescriptor>> {
         let mut models = self.config.configured_models.clone();
+        models.extend(self.config.tool_calling_models.iter().cloned());
+        models.extend(self.config.image_input_models.iter().cloned());
         if let Some(default) = self.config.default_model.as_ref() {
             models.push(default.clone());
         }
@@ -280,7 +313,9 @@ impl ModelProvider for OpenAiCompatibleProvider {
             .into_iter()
             .map(|model| {
                 let is_default = self.config.default_model.as_deref() == Some(model.as_str());
-                super::ModelDescriptor::new(model).with_default(is_default)
+                let mut descriptor = super::ModelDescriptor::new(model).with_default(is_default);
+                descriptor.capabilities = self.model_capabilities(&descriptor.id);
+                descriptor
             })
             .collect())
     }
@@ -438,7 +473,7 @@ struct OpenAiRequest {
 struct OpenAiMessage {
     role: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<String>,
+    content: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -451,7 +486,7 @@ impl OpenAiMessage {
     fn plain(role: &'static str, content: String) -> Self {
         Self {
             role,
-            content: Some(content),
+            content: Some(Value::String(content)),
             tool_call_id: None,
             name: None,
             tool_calls: None,
@@ -507,20 +542,65 @@ fn encode_messages(messages: &[ModelMessage]) -> Result<Vec<OpenAiMessage>> {
     let mut encoded = Vec::new();
     for message in messages {
         match message.role {
-            ModelRole::System | ModelRole::User => {
-                let role = if message.role == ModelRole::System {
-                    "system"
-                } else {
-                    "user"
-                };
-                let text = text_only(message, role)?;
-                encoded.push(OpenAiMessage::plain(role, text));
+            ModelRole::System => {
+                encoded.push(OpenAiMessage::plain(
+                    "system",
+                    text_only(message, "system")?,
+                ));
+            }
+            ModelRole::User => {
+                encoded.push(OpenAiMessage {
+                    role: "user",
+                    content: Some(Value::Array(encode_chat_input(&message.content, "user")?)),
+                    tool_call_id: None,
+                    name: None,
+                    tool_calls: None,
+                });
             }
             ModelRole::Assistant => encoded.push(encode_assistant_message(message)?),
             ModelRole::Tool => encode_tool_messages(message, &mut encoded)?,
         }
     }
     Ok(encoded)
+}
+
+fn encode_chat_input(content: &[ModelContent], role: &str) -> Result<Vec<Value>> {
+    if content.is_empty() {
+        return Err(KodyError::InvalidInput(format!(
+            "{role} messages must contain at least one content part"
+        )));
+    }
+    content
+        .iter()
+        .map(|part| match part {
+            ModelContent::Text { text } => Ok(serde_json::json!({
+                "type": "text",
+                "text": text,
+            })),
+            ModelContent::Image {
+                mime_type,
+                data,
+                detail,
+            } => Ok(serde_json::json!({
+                "type": "image_url",
+                "image_url": {
+                    "url": format!("data:{mime_type};base64,{}", BASE64.encode(data)),
+                    "detail": chat_image_detail(*detail),
+                }
+            })),
+            _ => Err(KodyError::InvalidInput(format!(
+                "{role} messages may only contain text and images"
+            ))),
+        })
+        .collect()
+}
+
+fn chat_image_detail(detail: crate::domain::ImageDetail) -> &'static str {
+    match detail {
+        crate::domain::ImageDetail::Auto => "auto",
+        crate::domain::ImageDetail::Low => "low",
+        crate::domain::ImageDetail::High => "high",
+    }
 }
 
 fn text_only(message: &ModelMessage, role: &str) -> Result<String> {
@@ -561,11 +641,16 @@ fn encode_assistant_message(message: &ModelMessage) -> Result<OpenAiMessage> {
                     "assistant model messages cannot contain tool results".into(),
                 ))
             }
+            ModelContent::Image { .. } => {
+                return Err(KodyError::InvalidInput(
+                    "assistant model messages cannot contain image inputs".into(),
+                ))
+            }
         }
     }
     Ok(OpenAiMessage {
         role: "assistant",
-        content: (!texts.is_empty()).then(|| texts.join("\n")),
+        content: (!texts.is_empty()).then(|| Value::String(texts.join("\n"))),
         tool_call_id: None,
         name: None,
         tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
@@ -579,26 +664,57 @@ fn encode_tool_messages(message: &ModelMessage, encoded: &mut Vec<OpenAiMessage>
         ));
     }
 
+    let mut images = Vec::new();
     for content in &message.content {
         match content {
             ModelContent::ToolResult {
                 tool_call_id,
                 name,
-                content,
+                output,
                 ..
-            } => encoded.push(OpenAiMessage {
-                role: "tool",
-                content: Some(content.clone()),
-                tool_call_id: Some(tool_call_id.clone()),
-                name: Some(name.clone()),
-                tool_calls: None,
-            }),
+            } => {
+                let text = output
+                    .iter()
+                    .filter_map(|part| match part {
+                        ModelContent::Text { text } => Some(text.as_str()),
+                        ModelContent::Image { .. } => None,
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                images.extend(
+                    output
+                        .iter()
+                        .filter(|part| matches!(part, ModelContent::Image { .. }))
+                        .cloned(),
+                );
+                encoded.push(OpenAiMessage {
+                    role: "tool",
+                    content: Some(Value::String(text)),
+                    tool_call_id: Some(tool_call_id.clone()),
+                    name: Some(name.clone()),
+                    tool_calls: None,
+                });
+            }
             _ => {
                 return Err(KodyError::InvalidInput(
                     "tool model messages may only contain tool results".into(),
                 ))
             }
         }
+    }
+    if !images.is_empty() {
+        let mut parts = vec![ModelContent::Text {
+            text: "Images loaded by the preceding tool call(s).".into(),
+        }];
+        parts.extend(images);
+        encoded.push(OpenAiMessage {
+            role: "user",
+            content: Some(Value::Array(encode_chat_input(&parts, "synthetic image")?)),
+            tool_call_id: None,
+            name: None,
+            tool_calls: None,
+        });
     }
     Ok(())
 }
@@ -778,6 +894,65 @@ mod tests {
         task::JoinHandle,
     };
 
+    #[test]
+    fn resolves_tool_and_image_capabilities_independently_per_model() {
+        let mut config = OpenAiCompatibleConfig::new("test", "http://127.0.0.1:1/v1");
+        config.tool_calling_models = vec!["tool-only".into(), "both".into()];
+        config.image_input_models = vec!["vision-only".into(), "both".into()];
+        let provider = OpenAiCompatibleProvider::new(config).unwrap();
+
+        assert_eq!(
+            provider.model_capabilities("tool-only"),
+            ModelCapabilities::text(true)
+        );
+        assert_eq!(
+            provider.model_capabilities("vision-only"),
+            ModelCapabilities::vision(false)
+        );
+        assert_eq!(
+            provider.model_capabilities("both"),
+            ModelCapabilities::vision(true)
+        );
+        assert_eq!(
+            provider.model_capabilities("unknown"),
+            ModelCapabilities::text(false)
+        );
+    }
+
+    #[test]
+    fn encodes_user_images_and_synthesizes_tool_output_images() {
+        let messages = vec![
+            ModelMessage::new(
+                ModelRole::User,
+                vec![ModelContent::Image {
+                    mime_type: "image/webp".into(),
+                    data: vec![1, 2, 3],
+                    detail: crate::domain::ImageDetail::Auto,
+                }],
+            ),
+            ModelMessage::new(
+                ModelRole::Tool,
+                vec![ModelContent::ToolResult {
+                    tool_call_id: "call-1".into(),
+                    name: "view_image".into(),
+                    output: vec![ModelContent::Image {
+                        mime_type: "image/png".into(),
+                        data: vec![4, 5, 6],
+                        detail: crate::domain::ImageDetail::Low,
+                    }],
+                    is_error: false,
+                    metadata: Value::Null,
+                }],
+            ),
+        ];
+
+        let encoded = serde_json::to_value(encode_messages(&messages).unwrap()).unwrap();
+        assert_eq!(encoded[0]["content"][0]["type"], "image_url");
+        assert_eq!(encoded[1]["role"], "tool");
+        assert_eq!(encoded[2]["role"], "user");
+        assert_eq!(encoded[2]["content"][1]["image_url"]["detail"], "low");
+    }
+
     async fn spawn_mock_response(
         status: u16,
         reason: &str,
@@ -902,14 +1077,14 @@ mod tests {
                 ModelContent::ToolResult {
                     tool_call_id: "one".into(),
                     name: "first".into(),
-                    content: "a".into(),
+                    output: vec![ModelContent::Text { text: "a".into() }],
                     is_error: false,
                     metadata: Value::Null,
                 },
                 ModelContent::ToolResult {
                     tool_call_id: "two".into(),
                     name: "second".into(),
-                    content: "b".into(),
+                    output: vec![ModelContent::Text { text: "b".into() }],
                     is_error: false,
                     metadata: Value::Null,
                 },

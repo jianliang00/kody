@@ -1,4 +1,4 @@
-use std::{collections::HashSet, path::PathBuf, sync::Arc};
+use std::{collections::HashSet, io::Write, path::PathBuf, sync::Arc};
 
 use kody_core::{
     image::{OpenAiImageConfig, OpenAiImageProvider},
@@ -11,6 +11,7 @@ use kody_core::{
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
 use crate::server::{AppState, CreateRequestRecord};
@@ -261,6 +262,8 @@ impl RpcDispatcher {
                         config.require_api_key = true;
                         config.default_model = Some(params.default_model);
                         config.configured_models = params.custom_models;
+                        config.tool_calling_models = params.tool_models;
+                        config.image_input_models = params.vision_models;
                         Arc::new(OpenAiResponsesProvider::new(config).map_err(RpcError::from)?)
                     }
                     "openai-compatible" => {
@@ -276,6 +279,8 @@ impl RpcDispatcher {
                         config.api_key = params.api_key;
                         config.default_model = Some(params.default_model);
                         config.configured_models = params.custom_models;
+                        config.tool_calling_models = params.tool_models;
+                        config.image_input_models = params.vision_models;
                         Arc::new(OpenAiCompatibleProvider::new(config).map_err(RpcError::from)?)
                     }
                     unsupported => {
@@ -738,6 +743,7 @@ impl RpcDispatcher {
         let start = StartTurn {
             thread_id: thread.id,
             message: params.message,
+            images: params.images,
             references: params.references,
             provider: params.provider,
             model: params.model,
@@ -779,6 +785,7 @@ impl RpcDispatcher {
 #[derive(Serialize)]
 struct CreateRequestFingerprint<'a> {
     message: &'a str,
+    images: &'a [kody_core::UploadedImage],
     references: &'a [ContextReference],
     provider: &'a str,
     model: &'a Option<String>,
@@ -787,15 +794,34 @@ struct CreateRequestFingerprint<'a> {
 }
 
 fn create_request_fingerprint(params: &CreateThreadAndStartParams) -> Result<String, RpcError> {
-    serde_json::to_string(&CreateRequestFingerprint {
-        message: &params.message,
-        references: &params.references,
-        provider: &params.provider,
-        model: &params.model,
-        permission_mode: &params.permission_mode,
-        working_directory: &params.working_directory,
-    })
-    .map_err(RpcError::invalid_params)
+    let mut writer = Sha256Writer(Sha256::new());
+    serde_json::to_writer(
+        &mut writer,
+        &CreateRequestFingerprint {
+            message: &params.message,
+            images: &params.images,
+            references: &params.references,
+            provider: &params.provider,
+            model: &params.model,
+            permission_mode: &params.permission_mode,
+            working_directory: &params.working_directory,
+        },
+    )
+    .map_err(RpcError::invalid_params)?;
+    Ok(format!("{:x}", writer.0.finalize()))
+}
+
+struct Sha256Writer(Sha256);
+
+impl Write for Sha256Writer {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        Digest::update(&mut self.0, buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 async fn hydrate_create_response(
@@ -863,6 +889,9 @@ fn initialize_result() -> Value {
             "provider_health": true,
             "image_generation": true,
             "image_provider_catalog": true,
+            "image_input": true,
+            "model_capabilities": true,
+            "view_image_tool": true,
             "durable_artifacts": true,
             "codex_chatgpt_auth": true,
             "codex_external_turn_backend": true,
@@ -894,6 +923,10 @@ struct ConfigureProviderParams {
     default_model: String,
     #[serde(default)]
     custom_models: Vec<String>,
+    #[serde(default)]
+    tool_models: Vec<String>,
+    #[serde(default)]
+    vision_models: Vec<String>,
     #[serde(default)]
     default_image_model: Option<String>,
     #[serde(default)]
@@ -927,6 +960,8 @@ struct ThreadCreateParams {
 struct CreateThreadAndStartParams {
     client_request_id: String,
     message: String,
+    #[serde(default)]
+    images: Vec<kody_core::UploadedImage>,
     #[serde(default)]
     references: Vec<ContextReference>,
     provider: String,

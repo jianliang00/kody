@@ -12,9 +12,13 @@ export type ProviderAuthState = 'not_required' | 'configured' | 'missing' | 'unk
 export interface ProviderCapabilities {
   streaming: boolean
   reasoning: boolean
-  tools: boolean
   model_catalog: boolean
   custom_models: boolean
+}
+
+export interface ModelCapabilities {
+  tool_calling: boolean
+  input_modalities: Array<'text' | 'image'>
 }
 
 /** Public provider metadata. Credentials never cross the app-server boundary. */
@@ -30,6 +34,7 @@ export interface ProviderDescriptor {
 export interface ModelDescriptor {
   id: string
   display_name: string
+  capabilities: ModelCapabilities
   owned_by?: string
   created_at?: number
   is_default?: boolean
@@ -116,7 +121,7 @@ export type MessagePart =
       type: 'tool_result'
       tool_call_id: string
       name: string
-      content: string
+      output: ToolOutputPart[]
       is_error: boolean
       metadata?: unknown
     }
@@ -141,6 +146,16 @@ export interface Artifact {
   model: string
   prompt: string
   created_at: string
+}
+
+export type ToolOutputPart =
+  | { type: 'text'; text: string }
+  | { type: 'artifact'; artifact_id: EntityId; detail: 'auto' | 'low' | 'high' }
+
+export interface UploadedImage {
+  file_name: string
+  mime_type: 'image/png' | 'image/jpeg' | 'image/webp'
+  data_base64: string
 }
 
 export interface ChatMessage {
@@ -355,6 +370,7 @@ export interface StartedThread extends CreatedThread {
 export interface StartTurnInput {
   thread_id: EntityId
   message: string
+  images: UploadedImage[]
   references: ContextReference[]
   provider: string
   model?: string
@@ -401,6 +417,7 @@ export interface RpcMethodMap {
     params: {
       client_request_id: string
       message: string
+      images: UploadedImage[]
       references: ContextReference[]
       provider: string
       model?: string

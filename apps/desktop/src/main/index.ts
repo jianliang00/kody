@@ -180,10 +180,12 @@ function createMainWindow(): BrowserWindow {
     minWidth: 360,
     minHeight: 560,
     show: false,
-    backgroundColor: '#f4f2ed',
+    backgroundColor: isMac ? '#00000000' : '#f5f5f7',
     autoHideMenuBar: !isMac,
     frame: isMac,
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
+    vibrancy: isMac ? 'under-window' : undefined,
+    visualEffectState: isMac ? 'followWindow' : undefined,
     webPreferences: {
       preload: join(moduleDirectory, '../preload/index.cjs'),
       contextIsolation: true,

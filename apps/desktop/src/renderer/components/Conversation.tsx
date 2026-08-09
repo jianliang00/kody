@@ -134,7 +134,10 @@ function indexToolActivity(messages: ChatMessage[], events: EventEnvelope[]): To
           ...existing,
           id: part.tool_call_id,
           name: part.name,
-          content: part.content,
+          content: part.output
+            .filter((output) => output.type === 'text')
+            .map((output) => output.text)
+            .join('\n'),
           metadata: part.metadata,
           status: part.is_error ? 'failed' : 'completed'
         })
@@ -471,6 +474,7 @@ export function Conversation({
     <div
       ref={scrollRef}
       className="conversation-scroll"
+      role="region"
       aria-label="Conversation"
       onScroll={() => {
         const element = scrollRef.current
@@ -528,7 +532,7 @@ export function Conversation({
         })}
 
         {running ? (
-          <article className="message message--assistant message--live">
+          <article className="message message--assistant message--live" aria-busy="true">
             <header>
               <span className="assistant-identity">
                 <span className="assistant-identity__mark assistant-identity__mark--live" aria-hidden="true"><LoaderCircle className="spin" size={13} /></span>
@@ -573,7 +577,10 @@ export function Conversation({
         ))}
 
         {!running && latestFailure ? (
-          <div className={`turn-terminal turn-terminal--${latestFailure.event.type}`}>
+          <div
+            className={`turn-terminal turn-terminal--${latestFailure.event.type}`}
+            role={latestFailure.event.type === 'turn_failed' ? 'alert' : 'status'}
+          >
             {latestFailure.event.type === 'turn_failed'
               ? `Turn failed: ${latestFailure.event.error}`
               : 'Turn stopped by user.'}

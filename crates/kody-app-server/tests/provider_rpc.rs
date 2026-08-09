@@ -57,6 +57,8 @@ async fn provider_profiles_are_structured_and_model_selection_is_explicit() {
             "api_key": "must-not-appear",
             "default_model": "default-model",
             "custom_models": ["other-model", "default-model"],
+            "tool_models": ["default-model"],
+            "vision_models": ["default-model", "other-model"],
             "default_image_model": "image-model-2",
             "image_models": ["image-model-1", "image-model-2"]
         }),
@@ -74,11 +76,17 @@ async fn provider_profiles_are_structured_and_model_selection_is_explicit() {
     )
     .await;
     assert_eq!(models["models"].as_array().unwrap().len(), 2);
-    assert!(models["models"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|model| model["id"] == "default-model" && model["is_default"] == true));
+    assert!(models["models"].as_array().unwrap().iter().any(|model| {
+        model["id"] == "default-model"
+            && model["is_default"] == true
+            && model["capabilities"]["tool_calling"] == true
+            && model["capabilities"]["input_modalities"] == json!(["text", "image"])
+    }));
+    assert!(models["models"].as_array().unwrap().iter().any(|model| {
+        model["id"] == "other-model"
+            && model["capabilities"]["tool_calling"] == false
+            && model["capabilities"]["input_modalities"] == json!(["text", "image"])
+    }));
 
     let catalog = rpc(&dispatcher, "provider/list", json!({})).await;
     let providers = catalog["providers"].as_array().unwrap();

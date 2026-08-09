@@ -22,23 +22,24 @@ describe('Composer provider and model selection', () => {
           capabilities: {
             streaming: true,
             reasoning: true,
-            tools: true,
             model_catalog: true,
             custom_models: false
           },
           default_model: 'codex-default'
         }]}
         providerId="codex"
-        models={[{ id: 'codex-default', display_name: 'Codex default' }]}
+        models={[{ id: 'codex-default', display_name: 'Codex default', capabilities: { tool_calling: true, input_modalities: ['text', 'image'] } }]}
         model="codex-default"
         permissionMode="ask"
         running={false}
         message="Inspect the workspace"
+        images={[]}
         onReferencesChange={vi.fn()}
         onProviderChange={vi.fn()}
         onModelChange={vi.fn()}
         onPermissionModeChange={permissionChange}
         onMessageChange={vi.fn()}
+        onImagesChange={vi.fn()}
         onSend={send}
         onCancel={vi.fn()}
       />
@@ -57,6 +58,7 @@ describe('Composer provider and model selection', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(send).toHaveBeenCalledWith(
       'Inspect the workspace',
+      [],
       [],
       'codex',
       'codex-default',
@@ -78,7 +80,6 @@ describe('Composer provider and model selection', () => {
           capabilities: {
             streaming: true,
             reasoning: false,
-            tools: true,
             model_catalog: false,
             custom_models: true
           },
@@ -90,11 +91,13 @@ describe('Composer provider and model selection', () => {
         permissionMode="ask"
         running={false}
         message="Hello"
+        images={[]}
         onReferencesChange={vi.fn()}
         onProviderChange={vi.fn()}
         onModelChange={vi.fn()}
         onPermissionModeChange={vi.fn()}
         onMessageChange={vi.fn()}
+        onImagesChange={vi.fn()}
         onSend={vi.fn()}
         onCancel={vi.fn()}
       />
@@ -104,5 +107,58 @@ describe('Composer provider and model selection', () => {
     fireEvent.click(screen.getByRole('combobox', { name: 'Provider' }))
     const option = screen.getByRole('option', { name: 'Team gateway · setup required' })
     expect(option.getAttribute('aria-disabled')).toBe('true')
+  })
+
+  it('reads an attached image for a vision-capable model', async () => {
+    const imagesChange = vi.fn()
+    render(
+      <Composer
+        threads={[]}
+        projects={[]}
+        references={[]}
+        providers={[{
+          id: 'vision',
+          display_name: 'Vision',
+          kind: 'openai',
+          auth: 'configured',
+          capabilities: {
+            streaming: true,
+            reasoning: true,
+            model_catalog: true,
+            custom_models: true
+          },
+          default_model: 'vision-model'
+        }]}
+        providerId="vision"
+        models={[{
+          id: 'vision-model',
+          display_name: 'Vision model',
+          capabilities: { tool_calling: true, input_modalities: ['text', 'image'] }
+        }]}
+        model="vision-model"
+        permissionMode="ask"
+        running={false}
+        message=""
+        images={[]}
+        onReferencesChange={vi.fn()}
+        onProviderChange={vi.fn()}
+        onModelChange={vi.fn()}
+        onPermissionModeChange={vi.fn()}
+        onMessageChange={vi.fn()}
+        onImagesChange={imagesChange}
+        onSend={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+
+    expect((screen.getByRole('button', { name: 'Attach image' }) as HTMLButtonElement).disabled).toBe(false)
+    const file = new File(['image-bytes'], 'sample.png', { type: 'image/png' })
+    fireEvent.change(screen.getByLabelText('Image files'), { target: { files: [file] } })
+
+    await waitFor(() => expect(imagesChange).toHaveBeenCalledWith([{
+      file_name: 'sample.png',
+      mime_type: 'image/png',
+      data_base64: btoa('image-bytes')
+    }]))
   })
 })

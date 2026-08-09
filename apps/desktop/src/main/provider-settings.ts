@@ -11,7 +11,8 @@ import {
 } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
-export const PROVIDER_SETTINGS_VERSION = 1 as const
+export const PROVIDER_SETTINGS_VERSION = 2 as const
+const LEGACY_PROVIDER_SETTINGS_VERSION = 1 as const
 
 export type ProviderKind = 'openai' | 'openai-compatible'
 
@@ -22,6 +23,8 @@ export interface ProviderProfile {
   baseUrl?: string
   defaultModel: string
   customModels: string[]
+  toolModels: string[]
+  visionModels: string[]
   defaultImageModel?: string
   imageModels: string[]
   hasSecret: boolean
@@ -36,6 +39,8 @@ export interface ProviderProfileInput {
   baseUrl?: string
   defaultModel: string
   customModels?: string[]
+  toolModels?: string[]
+  visionModels?: string[]
   defaultImageModel?: string
   imageModels?: string[]
   /** Write-only. It is never included in a returned profile or persisted as plaintext. */
@@ -88,6 +93,8 @@ interface StoredProviderProfile {
   baseUrl?: string
   defaultModel: string
   customModels: string[]
+  toolModels: string[]
+  visionModels: string[]
   /** Empty string explicitly disables image generation for this profile. */
   defaultImageModel: string
   imageModels: string[]
@@ -99,6 +106,11 @@ interface StoredProviderProfile {
 interface ProviderSettingsDocument {
   version: typeof PROVIDER_SETTINGS_VERSION
   profiles: StoredProviderProfile[]
+}
+
+interface ParsedProviderSettingsDocument {
+  document: ProviderSettingsDocument
+  requiresMigration: boolean
 }
 
 export interface ProviderSettingsStoreOptions {
@@ -243,6 +255,8 @@ export class ProviderSettingsStore {
         ...(normalized.baseUrl ? { baseUrl: normalized.baseUrl } : {}),
         defaultModel: normalized.defaultModel,
         customModels: normalized.customModels,
+        toolModels: normalized.toolModels,
+        visionModels: normalized.visionModels,
         defaultImageModel: normalized.defaultImageModel ?? '',
         imageModels: normalized.imageModels,
         ...(encryptedSecret ? { encryptedSecret } : {}),
@@ -323,8 +337,15 @@ export class ProviderSettingsStore {
     await this.#fileSystem.mkdir(directory, { recursive: true, mode: 0o700 })
     await this.#fileSystem.chmod(directory, 0o700)
     await this.#fileSystem.chmod(this.#filePath, 0o600)
-    this.#document = parseDocument(serialized)
-    return this.#document
+    const parsed = parseDocument(serialized)
+    if (parsed.requiresMigration) {
+      // Reuse the durable write path so a failed upgrade leaves the readable
+      // v1 document intact and a successful upgrade is committed atomically.
+      await this.#persist(parsed.document)
+    } else {
+      this.#document = parsed.document
+    }
+    return parsed.document
   }
 
   async #persist(document: ProviderSettingsDocument): Promise<void> {
@@ -403,6 +424,8 @@ async function sendProviderConfiguration(
     api_key: apiKey,
     default_model: profile.defaultModel,
     custom_models: profile.customModels,
+    tool_models: profile.toolModels,
+    vision_models: profile.visionModels,
     default_image_model: profile.defaultImageModel,
     image_models: profile.imageModels
   })
@@ -482,7 +505,7 @@ async function syncDirectoryBestEffort(
 }
 
 function normalizeInput(input: ProviderProfileInput): Required<
-  Pick<ProviderProfileInput, 'name' | 'kind' | 'defaultModel' | 'customModels' | 'imageModels'>
+  Pick<ProviderProfileInput, 'name' | 'kind' | 'defaultModel' | 'customModels' | 'toolModels' | 'visionModels' | 'imageModels'>
 > & Pick<ProviderProfileInput, 'id' | 'baseUrl' | 'secret' | 'clearSecret' | 'defaultImageModel'> {
   const id = input.id?.trim()
   if (id && id.length > 200) throw new Error('Provider id must be 200 characters or fewer')
@@ -502,6 +525,18 @@ function normalizeInput(input: ProviderProfileInput): Required<
     .filter(Boolean)
   if (customModels.some((model) => model.length > 200)) {
     throw new Error('Custom model names must be 200 characters or fewer')
+  }
+  if ((input.toolModels?.length ?? 0) > 200) throw new Error('At most 200 tool models may be saved')
+  const toolModels = [...new Set((input.toolModels ?? []).map((model) => model.trim()))]
+    .filter(Boolean)
+  if (toolModels.some((model) => model.length > 200)) {
+    throw new Error('Tool model names must be 200 characters or fewer')
+  }
+  if ((input.visionModels?.length ?? 0) > 200) throw new Error('At most 200 vision models may be saved')
+  const visionModels = [...new Set((input.visionModels ?? []).map((model) => model.trim()))]
+    .filter(Boolean)
+  if (visionModels.some((model) => model.length > 200)) {
+    throw new Error('Vision model names must be 200 characters or fewer')
   }
   const defaultImageModel = input.defaultImageModel?.trim() || undefined
   if (defaultImageModel && defaultImageModel.length > 200) {
@@ -525,6 +560,8 @@ function normalizeInput(input: ProviderProfileInput): Required<
     ...(baseUrl ? { baseUrl } : {}),
     defaultModel,
     customModels,
+    toolModels,
+    visionModels,
     ...(defaultImageModel ? { defaultImageModel } : {}),
     imageModels,
     ...(secret ? { secret } : {}),
@@ -578,6 +615,8 @@ function toPublicProfile(profile: StoredProviderProfile): ProviderProfile {
     ...(profile.baseUrl ? { baseUrl: profile.baseUrl } : {}),
     defaultModel: profile.defaultModel,
     customModels: [...profile.customModels],
+    toolModels: [...profile.toolModels],
+    visionModels: [...profile.visionModels],
     ...(profile.defaultImageModel ? { defaultImageModel: profile.defaultImageModel } : {}),
     imageModels: [...profile.imageModels],
     hasSecret: Boolean(profile.encryptedSecret),
@@ -592,29 +631,42 @@ function cloneDocument(document: ProviderSettingsDocument): ProviderSettingsDocu
     profiles: document.profiles.map((profile) => ({
       ...profile,
       customModels: [...profile.customModels],
+      toolModels: [...profile.toolModels],
+      visionModels: [...profile.visionModels],
       imageModels: [...profile.imageModels]
     }))
   }
 }
 
-function parseDocument(serialized: string): ProviderSettingsDocument {
+function parseDocument(serialized: string): ParsedProviderSettingsDocument {
   let value: unknown
   try {
     value = JSON.parse(serialized)
   } catch {
     throw new Error('Provider settings file contains invalid JSON')
   }
-  if (!isRecord(value) || value.version !== PROVIDER_SETTINGS_VERSION || !Array.isArray(value.profiles)) {
+  if (
+    !isRecord(value)
+    || (value.version !== LEGACY_PROVIDER_SETTINGS_VERSION && value.version !== PROVIDER_SETTINGS_VERSION)
+    || !Array.isArray(value.profiles)
+  ) {
     throw new Error('Provider settings file has an unsupported shape or version')
   }
-  const profiles = value.profiles.map(parseStoredProfile)
+  const sourceVersion = value.version
+  const profiles = value.profiles.map((profile) => parseStoredProfile(profile, sourceVersion))
   if (new Set(profiles.map((profile) => profile.id)).size !== profiles.length) {
     throw new Error('Provider settings file contains duplicate profile ids')
   }
-  return { version: PROVIDER_SETTINGS_VERSION, profiles }
+  return {
+    document: { version: PROVIDER_SETTINGS_VERSION, profiles },
+    requiresMigration: sourceVersion === LEGACY_PROVIDER_SETTINGS_VERSION
+  }
 }
 
-function parseStoredProfile(value: unknown): StoredProviderProfile {
+function parseStoredProfile(
+  value: unknown,
+  sourceVersion: typeof LEGACY_PROVIDER_SETTINGS_VERSION | typeof PROVIDER_SETTINGS_VERSION
+): StoredProviderProfile {
   if (!isRecord(value)) throw new Error('Provider settings file contains an invalid profile')
   const id = validateProviderId(requiredStoredString(value.id, 'id', 200))
   const name = requiredStoredString(value.name, 'name', 100)
@@ -630,6 +682,24 @@ function parseStoredProfile(value: unknown): StoredProviderProfile {
   }
   if (value.customModels.length > 200 || value.customModels.some((model) => model.length > 200)) {
     throw new Error(`Provider profile '${id}' has too many or oversized custom models`)
+  }
+  const rawToolModels = sourceVersion === LEGACY_PROVIDER_SETTINGS_VERSION && value.toolModels === undefined
+    ? []
+    : value.toolModels
+  if (!Array.isArray(rawToolModels) || rawToolModels.some((model) => typeof model !== 'string')) {
+    throw new Error(`Provider profile '${id}' has invalid tool models`)
+  }
+  if (rawToolModels.length > 200 || rawToolModels.some((model) => model.length > 200)) {
+    throw new Error(`Provider profile '${id}' has too many or oversized tool models`)
+  }
+  const rawVisionModels = sourceVersion === LEGACY_PROVIDER_SETTINGS_VERSION && value.visionModels === undefined
+    ? []
+    : value.visionModels
+  if (!Array.isArray(rawVisionModels) || rawVisionModels.some((model) => typeof model !== 'string')) {
+    throw new Error(`Provider profile '${id}' has invalid vision models`)
+  }
+  if (rawVisionModels.length > 200 || rawVisionModels.some((model) => model.length > 200)) {
+    throw new Error(`Provider profile '${id}' has too many or oversized vision models`)
   }
   const defaultImageModel = value.defaultImageModel === undefined
     ? (value.kind === 'openai' ? 'gpt-image-2' : undefined)
@@ -659,6 +729,8 @@ function parseStoredProfile(value: unknown): StoredProviderProfile {
     ...(baseUrl ? { baseUrl } : {}),
     defaultModel,
     customModels: [...new Set(value.customModels.map((model) => model.trim()).filter(Boolean))],
+    toolModels: [...new Set(rawToolModels.map((model) => model.trim()).filter(Boolean))],
+    visionModels: [...new Set(rawVisionModels.map((model) => model.trim()).filter(Boolean))],
     defaultImageModel: defaultImageModel ?? '',
     imageModels: [...new Set(rawImageModels.map((model) => model.trim()).filter(Boolean))],
     ...(encryptedSecret ? { encryptedSecret } : {}),

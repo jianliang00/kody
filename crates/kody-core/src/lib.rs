@@ -24,16 +24,17 @@ pub use event::{
 pub use image::{
     GenerateImageRequest, GenerateImageTool, ImageGenerationResult, ImageModelCapabilities,
     ImageModelDescriptor, ImageProvider, ImageProviderDescriptor, ImageProviderRegistry,
-    ImageRequest, ImageService, OpenAiImageConfig, OpenAiImageProvider,
+    ImageRequest, ImageService, OpenAiImageConfig, OpenAiImageProvider, UploadedImage,
+    ViewImageTool,
 };
 pub use process::{
     ProcessManager, ProcessManagerConfig, ProcessOutputChunk, ProcessOutputPage,
     StartProcessRequest,
 };
 pub use provider::{
-    AuthState, ModelDescriptor, ModelProvider, OpenAiResponsesConfig, OpenAiResponsesProvider,
-    ProviderCapabilities, ProviderDescriptor, ProviderErrorKind, ProviderFailure, ProviderHealth,
-    ProviderHealthStatus, ProviderRegistry,
+    AuthState, ImageDelivery, InputModality, ModelCapabilities, ModelDescriptor, ModelProvider,
+    OpenAiResponsesConfig, OpenAiResponsesProvider, ProviderCapabilities, ProviderDescriptor,
+    ProviderErrorKind, ProviderFailure, ProviderHealth, ProviderHealthStatus, ProviderRegistry,
 };
 pub use runtime::{
     AgentRuntime, AgentRuntimeConfig, ApprovalBroker, ExternalTurnBackend, PendingApproval,
