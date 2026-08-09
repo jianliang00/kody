@@ -60,6 +60,18 @@ describe('SidebarResizeHandle', () => {
     expect(handle.getAttribute('aria-valuenow')).toBe('272')
   })
 
+  it('accumulates rapid keyboard input before the parent commits a new value', () => {
+    const changes: number[] = []
+    render(<StaticHarness onChange={(value) => changes.push(value)} />)
+    const handle = screen.getByRole('separator', { name: 'Resize static sidebar' })
+
+    for (let step = 0; step < 6; step += 1) {
+      fireEvent.keyDown(handle, { key: 'ArrowRight' })
+    }
+
+    expect(changes).toEqual([280, 288, 296, 304, 312, 320])
+  })
+
   it('previews pointer movement without rerendering the parent on every step', () => {
     render(<Harness />)
     const handle = screen.getByRole('separator', { name: 'Resize left sidebar' })

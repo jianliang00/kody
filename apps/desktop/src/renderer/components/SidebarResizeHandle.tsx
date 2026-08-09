@@ -37,6 +37,8 @@ export function SidebarResizeHandle({
   onChange
 }: SidebarResizeHandleProps) {
   const dragRef = useRef<DragState | undefined>(undefined)
+  const keyboardValueRef = useRef(value)
+  keyboardValueRef.current = value
   const cssProperty = side === 'left' ? '--asset-rail-width' : '--right-rail-width'
 
   const preview = (nextValue: number, handle: HTMLElement): void => {
@@ -56,7 +58,10 @@ export function SidebarResizeHandle({
     dragRef.current = undefined
     handle.removeAttribute('data-resizing')
     document.documentElement.removeAttribute('data-sidebar-resizing')
-    if (drag.moved) onChange(drag.currentValue)
+    if (drag.moved) {
+      keyboardValueRef.current = drag.currentValue
+      onChange(drag.currentValue)
+    }
   }
 
   useEffect(() => () => {
@@ -97,11 +102,19 @@ export function SidebarResizeHandle({
     let nextValue: number | undefined
     if (event.key === 'Home') nextValue = min
     else if (event.key === 'End') nextValue = max
-    else if (event.key === 'ArrowLeft') nextValue = value + (side === 'left' ? -step : step)
-    else if (event.key === 'ArrowRight') nextValue = value + (side === 'left' ? step : -step)
+    else if (event.key === 'ArrowLeft') nextValue = keyboardValueRef.current + (side === 'left' ? -step : step)
+    else if (event.key === 'ArrowRight') nextValue = keyboardValueRef.current + (side === 'left' ? step : -step)
     if (nextValue === undefined) return
     event.preventDefault()
-    onChange(clampSidebarWidth(nextValue, min, max))
+    const clampedValue = clampSidebarWidth(nextValue, min, max)
+    keyboardValueRef.current = clampedValue
+    onChange(clampedValue)
+  }
+
+  const resetWidth = (): void => {
+    const resetValue = clampSidebarWidth(defaultValue, min, max)
+    keyboardValueRef.current = resetValue
+    onChange(resetValue)
   }
 
   return (
@@ -117,7 +130,7 @@ export function SidebarResizeHandle({
       aria-valuetext={`${value} pixels`}
       tabIndex={0}
       title="Drag to resize. Double-click to reset."
-      onDoubleClick={() => onChange(clampSidebarWidth(defaultValue, min, max))}
+      onDoubleClick={resetWidth}
       onKeyDown={handleKeyDown}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
