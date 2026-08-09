@@ -804,17 +804,25 @@ export function App() {
     if (!focusThreadSearchRef.current || projectShelfOpen) return
     if (railIsNarrow ? !railOpen : railCollapsed) return
     let focusFrame: number | undefined
+    let focusSettleTimer: number | undefined
+    const focusSearch = (): void => {
+      const search = document.querySelector<HTMLInputElement>('#asset-filter')
+      if (!search) return
+      search.focus({ preventScroll: true })
+      if (document.activeElement === search) focusThreadSearchRef.current = false
+    }
     const settleFrame = requestAnimationFrame(() => {
       focusFrame = requestAnimationFrame(() => {
-        const search = document.querySelector<HTMLInputElement>('#asset-filter')
-        if (!search) return
-        search.focus()
-        if (document.activeElement === search) focusThreadSearchRef.current = false
+        focusSearch()
+        // A closing modal may restore its previous focus on the next frame.
+        // Reconcile once more after those internal cleanup effects settle.
+        focusSettleTimer = window.setTimeout(focusSearch, 50)
       })
     })
     return () => {
       cancelAnimationFrame(settleFrame)
       if (focusFrame !== undefined) cancelAnimationFrame(focusFrame)
+      if (focusSettleTimer !== undefined) window.clearTimeout(focusSettleTimer)
     }
   }, [focusThreadSearchRequest, projectShelfOpen, railCollapsed, railIsNarrow, railOpen])
 
