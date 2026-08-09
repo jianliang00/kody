@@ -16,6 +16,7 @@ const RECENT_TERMINAL_PROCESS_LIMIT = 8
 interface BackgroundProcessesProps {
   processes: ManagedProcess[]
   projects: Project[]
+  showHeading?: boolean
   stoppingProcessIds: Set<string>
   liveOutputCursors: Record<string, number>
   onReadOutput: (processId: string, afterCursor: number, limit: number) => Promise<ProcessOutputPage>
@@ -47,6 +48,7 @@ const CLOSED_OUTPUT: OutputViewState = {
 export function BackgroundProcesses({
   processes,
   projects,
+  showHeading = true,
   stoppingProcessIds,
   liveOutputCursors,
   onReadOutput,
@@ -143,17 +145,19 @@ export function BackgroundProcesses({
   }
 
   return (
-    <section className="inspector-section process-section" aria-labelledby="background-processes-title">
-      <header className="section-heading">
-        <div>
-          <p className="eyebrow">Process manager</p>
-          <h3 id="background-processes-title">Background processes</h3>
-        </div>
-        <span className="process-section__counts">
-          {activeCount > 0 ? <span className="activity-count"><span aria-hidden="true" /> {activeCount} active</span> : null}
-          <span className="count-pill" title={`${processes.length} managed process records`}>{processes.length}</span>
-        </span>
-      </header>
+    <div className={`process-section${showHeading ? ' inspector-section' : ''}`}>
+      {showHeading ? (
+        <header className="section-heading">
+          <div>
+            <p className="eyebrow">Process manager</p>
+            <h3 id="background-processes-title">Background processes</h3>
+          </div>
+          <span className="process-section__counts">
+            {activeCount > 0 ? <span className="activity-count"><span aria-hidden="true" /> {activeCount} active</span> : null}
+            <span className="count-pill" title={`${processes.length} managed process records`}>{processes.length}</span>
+          </span>
+        </header>
+      ) : null}
 
       {orderedProcesses.length === 0 ? (
         <p className="inspector-empty process-section__empty">
@@ -286,7 +290,7 @@ export function BackgroundProcesses({
           Show recent processes only
         </button>
       ) : null}
-    </section>
+    </div>
   )
 }
 

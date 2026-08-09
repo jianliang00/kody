@@ -56,6 +56,13 @@ import { TitleBar } from './components/TitleBar'
 import { getKodyBridge } from './lib/mockBridge'
 import { referenceKey, upsertReference } from './lib/references'
 import { isProcessActive, shouldRefreshProcessSnapshot } from './lib/processes'
+import {
+  readStoredRightRailSections,
+  RIGHT_RAIL_SECTIONS_STORAGE_KEY,
+  serializeRightRailSections,
+  updateRightRailSection,
+  type RightRailSectionId
+} from './lib/rightRailSections'
 import { deriveThreadContext } from './lib/threadContext'
 import { ThreadProjectionLedger } from './lib/threadProjection'
 import {
@@ -228,8 +235,9 @@ export function App() {
     () => window.localStorage.getItem('kody.railCollapsed') === 'true'
   )
   const [inspectorOpen, setInspectorOpen] = useState(false)
-  const [inspectorCollapsed, setInspectorCollapsed] = useState(
-    () => window.localStorage.getItem('kody.inspectorCollapsed') !== 'false'
+  const [projectShelfOpen, setProjectShelfOpen] = useState(false)
+  const [rightRailSections, setRightRailSections] = useState(
+    () => readStoredRightRailSections(window.localStorage)
   )
   const [rightRailCollapsed, setRightRailCollapsed] = useState(
     () => window.localStorage.getItem('kody.rightRailCollapsed') === 'true'
@@ -621,8 +629,11 @@ export function App() {
   }, [railCollapsed])
 
   useEffect(() => {
-    window.localStorage.setItem('kody.inspectorCollapsed', String(inspectorCollapsed))
-  }, [inspectorCollapsed])
+    window.localStorage.setItem(
+      RIGHT_RAIL_SECTIONS_STORAGE_KEY,
+      serializeRightRailSections(rightRailSections)
+    )
+  }, [rightRailSections])
 
   useEffect(() => {
     window.localStorage.setItem('kody.rightRailCollapsed', String(rightRailCollapsed))
@@ -648,6 +659,10 @@ export function App() {
   }, [inspectorOpen, railOpen])
 
   useEffect(() => {
+    if (!inspectorIsNarrow) setProjectShelfOpen(false)
+  }, [inspectorIsNarrow])
+
+  useEffect(() => {
     const railIsDrawer = railOpen && railIsNarrow
     const inspectorIsDrawer = inspectorOpen && inspectorIsNarrow
     if (!railIsDrawer && !inspectorIsDrawer) return
@@ -655,9 +670,13 @@ export function App() {
     const drawer = document.querySelector<HTMLElement>(railIsDrawer ? '.asset-rail' : '.inspector')
     if (!drawer) return
     const focusableSelector = 'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], summary'
-    drawer.querySelector<HTMLElement>(focusableSelector)?.focus()
+    const visibleFocusables = (): HTMLElement[] => (
+      [...drawer.querySelectorAll<HTMLElement>(focusableSelector)]
+        .filter((element) => !element.closest('[hidden]'))
+    )
+    visibleFocusables()[0]?.focus()
     const trapFocus = (event: KeyboardEvent): void => {
-      const focusables = [...drawer.querySelectorAll<HTMLElement>(focusableSelector)]
+      const focusables = visibleFocusables()
       if (event.key !== 'Tab' || focusables.length === 0) return
       const first = focusables[0]
       const last = focusables.at(-1)
@@ -1408,14 +1427,17 @@ export function App() {
 
   useEffect(() => bridge.onCommand((command) => {
     if (command === 'new-thread') {
+      setProjectShelfOpen(false)
       beginDraft()
       return
     }
     if (command === 'import-project') {
+      setProjectShelfOpen(false)
       void handleImportProject()
       return
     }
     if (command === 'focus-assets') {
+      setProjectShelfOpen(false)
       setRailCollapsed(false)
       if (railIsNarrow) {
         setInspectorOpen(false)
@@ -1425,6 +1447,7 @@ export function App() {
       return
     }
     if (command === 'open-settings') {
+      setProjectShelfOpen(false)
       openProviderSettings()
       return
     }
@@ -1433,6 +1456,7 @@ export function App() {
       return
     }
     if (command === 'toggle-rail') {
+      setProjectShelfOpen(false)
       if (railIsNarrow) {
         setInspectorOpen(false)
         setRailOpen((current) => !current)
@@ -1442,12 +1466,11 @@ export function App() {
     }
     if (inspectorIsNarrow) {
       setRailOpen(false)
+      setProjectShelfOpen(false)
       setRightRailCollapsed(false)
-      setInspectorCollapsed(false)
       setInspectorOpen((current) => !current)
     } else {
-      setRightRailCollapsed(false)
-      setInspectorCollapsed((current) => !current)
+      setRightRailCollapsed((current) => !current)
     }
   }), [
     beginDraft,
@@ -1500,15 +1523,30 @@ export function App() {
     setAnnouncement(`Right sidebar width ${nextWidth} pixels`)
   }, [rightRailResizeMax])
 
-  const toggleInspectorDetails = (): void => {
-    setInspectorCollapsed((current) => !current)
-  }
+  const setRightRailSectionExpanded = useCallback((
+    id: RightRailSectionId,
+    expanded: boolean
+  ): void => {
+    setRightRailSections((current) => updateRightRailSection(current, id, expanded))
+  }, [])
+
+  const handleProjectShelfOpenChange = useCallback((open: boolean): void => {
+    setProjectShelfOpen(open)
+    if (!open) return
+    setInspectorOpen(false)
+    setRailOpen(false)
+  }, [])
+
   const toggleRightSidebar = (): void => {
     if (inspectorIsNarrow) {
       setRailOpen(false)
       setRightRailCollapsed(false)
-      setInspectorCollapsed(false)
-      setInspectorOpen((current) => !current)
+      if (projectShelfOpen) {
+        setProjectShelfOpen(false)
+        setInspectorOpen(false)
+      } else {
+        setInspectorOpen((current) => !current)
+      }
     } else {
       setRightRailCollapsed((current) => !current)
     }
@@ -1517,7 +1555,7 @@ export function App() {
   return (
     <div
       ref={appShellRef}
-      className={`app-shell${railCollapsed ? ' app-shell--rail-collapsed' : ''}${inspectorCollapsed ? ' app-shell--inspector-collapsed' : ''}${rightRailCollapsed && !inspectorIsNarrow ? ' app-shell--right-rail-collapsed' : ''}${bridge.platform === 'darwin' ? ' app-shell--darwin' : ''}`}
+      className={`app-shell${railCollapsed ? ' app-shell--rail-collapsed' : ''}${rightRailCollapsed && !inspectorIsNarrow ? ' app-shell--right-rail-collapsed' : ''}${bridge.platform === 'darwin' ? ' app-shell--darwin' : ''}`}
       style={appShellStyle}
     >
       <a className="skip-link" href="#main-content">Skip to conversation</a>
@@ -1539,13 +1577,20 @@ export function App() {
         onUpdateAction={handleUpdateAction}
       />
 
-      {((railOpen && railIsNarrow) || (inspectorOpen && inspectorIsNarrow)) ? (
+      {((railOpen && railIsNarrow)
+        || (inspectorOpen && inspectorIsNarrow)
+        || (projectShelfOpen && inspectorIsNarrow)) ? (
         <button
-          className={`drawer-scrim drawer-scrim--${railOpen && railIsNarrow ? 'asset' : 'inspector'}`}
+          className={`drawer-scrim drawer-scrim--${railOpen && railIsNarrow
+            ? 'asset'
+            : inspectorOpen
+              ? 'inspector'
+              : 'projects'}`}
           type="button"
           onClick={() => {
             setRailOpen(false)
             setInspectorOpen(false)
+            setProjectShelfOpen(false)
           }}
           aria-label="Close open drawer"
         />
@@ -1559,11 +1604,14 @@ export function App() {
           darkTheme={darkTheme}
           railCollapsed={railCollapsed}
           showRightSidebar={!inspectorIsNarrow || Boolean(snapshot)}
-          rightSidebarExpanded={inspectorIsNarrow ? inspectorOpen : !rightRailCollapsed}
+          rightSidebarExpanded={inspectorIsNarrow
+            ? inspectorOpen || projectShelfOpen
+            : !rightRailCollapsed}
           contextCount={contextCount}
           contextActive={contextActive}
           onOpenRail={() => {
             setInspectorOpen(false)
+            setProjectShelfOpen(false)
             setRailCollapsed(false)
             setRailOpen(true)
           }}
@@ -1732,7 +1780,9 @@ export function App() {
 
       <aside
         id="right-rail"
-        className={`right-rail${inspectorOpen && inspectorIsNarrow ? ' right-rail--inspector-open' : ''}`}
+        className={`right-rail${(inspectorOpen || projectShelfOpen) && inspectorIsNarrow
+          ? ' right-rail--modal-open'
+          : ''}`}
         aria-label="Thread context and projects"
       >
         {snapshot && threadContext ? (
@@ -1741,9 +1791,8 @@ export function App() {
             threads={threads}
             projects={projects}
             context={threadContext}
-            detailsOpen={!inspectorCollapsed}
-            onOpenDetails={toggleInspectorDetails}
-            onCopyText={copyText}
+            expanded={rightRailSections.context}
+            onExpandedChange={(expanded) => setRightRailSectionExpanded('context', expanded)}
           />
         ) : null}
         {snapshot ? (
@@ -1755,17 +1804,11 @@ export function App() {
             events={activeEvents}
             open={inspectorOpen}
             modal={inspectorIsNarrow}
+            sections={rightRailSections}
             stoppingProcessIds={stoppingProcessIds}
             processOutputCursors={processOutputCursors}
-            onClose={() => {
-              if (inspectorIsNarrow) setInspectorOpen(false)
-              else {
-                setInspectorCollapsed(true)
-                requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(
-                  '#thread-context-card button[aria-controls="thread-inspector"]'
-                )?.focus())
-              }
-            }}
+            onClose={() => setInspectorOpen(false)}
+            onSectionExpandedChange={setRightRailSectionExpanded}
             onCopyText={copyText}
             onReadProcessOutput={handleReadProcessOutput}
             onStopProcess={handleStopProcess}
@@ -1774,7 +1817,11 @@ export function App() {
         <ProjectShelf
           projects={projects}
           selectedProjectIds={selectedProjectIds}
+          open={projectShelfOpen}
+          expanded={rightRailSections.projects}
           unavailable={status.phase !== 'connected'}
+          onOpenChange={handleProjectShelfOpenChange}
+          onExpandedChange={(expanded) => setRightRailSectionExpanded('projects', expanded)}
           onImportProject={handleImportProject}
           onAddProject={addProjectContext}
         />

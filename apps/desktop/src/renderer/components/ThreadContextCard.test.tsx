@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { ThreadContextView } from '../lib/threadContext'
 import type { Project, Thread, ThreadSnapshot } from '@shared/protocol'
 import { ThreadContextCard } from './ThreadContextCard'
@@ -79,20 +79,26 @@ describe('ThreadContextCard', () => {
         reason: 'Needs permission'
       }]
     }
-    const onCopyText = vi.fn(async () => undefined)
+    const onExpandedChange = vi.fn()
 
-    render(
+    const { container } = render(
       <ThreadContextCard
         snapshot={snapshot}
         threads={threads}
         projects={projects}
         context={context}
-        detailsOpen={false}
-        onOpenDetails={vi.fn()}
-        onCopyText={onCopyText}
+        expanded
+        onExpandedChange={onExpandedChange}
       />
     )
 
+    const toggle = screen.getByRole('button', { name: 'Context' })
+    const panel = container.querySelector<HTMLElement>('#thread-context-card-panel')
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(toggle.getAttribute('aria-controls')).toBe('thread-context-card-panel')
+    expect(panel?.getAttribute('role')).toBe('region')
+    expect(panel?.getAttribute('aria-labelledby')).toBe('thread-context-card-title')
+    expect(panel?.hasAttribute('hidden')).toBe(false)
     expect(screen.getByLabelText('Referenced Threads').textContent).toContain('OAuth design')
     expect(screen.getByLabelText('Referenced Threads').textContent).toContain('Summary')
     expect(screen.getByLabelText('Referenced Projects').textContent).toContain('Web app')
@@ -104,60 +110,12 @@ describe('ThreadContextCard', () => {
     expect(screen.getAllByText('Background process active')).toHaveLength(2)
     expect(screen.getByText('+1 more managed processes')).toBeTruthy()
     expect(screen.getByTitle('Active managed background processes').parentElement?.textContent).toContain('3')
-    expect(screen.getByTitle('References pending for the next message').textContent).toBe('+1')
-    expect(screen.getByRole('button', { name: 'Expand Content & activity' }).getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(toggle)
+    expect(onExpandedChange).toHaveBeenCalledOnce()
+    expect(onExpandedChange).toHaveBeenCalledWith(false)
   })
 
-  it('reveals and copies the complete Workspace path', async () => {
-    const path = '/Users/jianliang/Library/Application Support/Kody/workspaces/thread-current'
-    const snapshot: ThreadSnapshot = {
-      thread: thread('thread-current', 'Inspect Workspace'),
-      workspace: {
-        id: 'workspace-current',
-        thread_id: 'thread-current',
-        root: path,
-        created_at: now
-      },
-      messages: [],
-      turns: [],
-      pending_approvals: [],
-      pending_user_inputs: [],
-      processes: [],
-      artifacts: []
-    }
-    const onCopyText = vi.fn(async () => undefined)
-
-    const { container } = render(
-      <ThreadContextCard
-        snapshot={snapshot}
-        threads={[]}
-        projects={[]}
-        context={{
-          threadReferences: [],
-          projectReferences: [],
-          pendingReferences: [],
-          activeTurns: [],
-          runningTools: [],
-          pendingApprovals: []
-        }}
-        detailsOpen={false}
-        onOpenDetails={vi.fn()}
-        onCopyText={onCopyText}
-      />
-    )
-
-    const disclosure = container.querySelector<HTMLDetailsElement>('.thread-context-card__workspace-path')
-    expect(disclosure?.open).toBe(false)
-    fireEvent.click(disclosure!.querySelector('summary')!)
-    expect(disclosure?.open).toBe(true)
-    expect(container.querySelector('.thread-context-card__workspace-full code')?.textContent).toBe(path)
-
-    fireEvent.click(screen.getByRole('button', { name: 'Copy Workspace path' }))
-    await waitFor(() => expect(onCopyText).toHaveBeenCalledWith(path))
-    expect(screen.getByRole('button', { name: 'Workspace path copied' })).toBeTruthy()
-  })
-
-  it('keeps collapse control ownership in the Context card', () => {
+  it('keeps collapsed content mounted inside a hidden labelled panel', () => {
     const snapshot: ThreadSnapshot = {
       thread: thread('thread-current', 'Inspect context'),
       workspace: {
@@ -174,7 +132,8 @@ describe('ThreadContextCard', () => {
       artifacts: []
     }
 
-    render(
+    const onExpandedChange = vi.fn()
+    const { container } = render(
       <ThreadContextCard
         snapshot={snapshot}
         threads={[]}
@@ -187,14 +146,25 @@ describe('ThreadContextCard', () => {
           runningTools: [],
           pendingApprovals: []
         }}
-        detailsOpen
-        onOpenDetails={vi.fn()}
-        onCopyText={vi.fn(async () => undefined)}
+        expanded={false}
+        onExpandedChange={onExpandedChange}
       />
     )
 
-    expect(screen.getByRole('button', { name: 'Collapse Content & activity' }).getAttribute('aria-expanded')).toBe('true')
-    expect(screen.queryByRole('button', { name: 'Expand Content & activity' })).toBeNull()
+    const toggle = screen.getByRole('button', { name: 'Context' })
+    const panel = container.querySelector<HTMLElement>('#thread-context-card-panel')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(toggle.getAttribute('aria-controls')).toBe(panel?.id)
+    expect(panel?.getAttribute('role')).toBe('region')
+    expect(panel?.getAttribute('aria-labelledby')).toBe('thread-context-card-title')
+    expect(panel?.hidden).toBe(true)
+    expect(screen.getByText('No referenced Threads')).toBeTruthy()
+    expect(screen.getByText('No referenced Projects')).toBeTruthy()
+    expect(screen.getByText('No active operations')).toBeTruthy()
+
+    fireEvent.click(toggle)
+    expect(onExpandedChange).toHaveBeenCalledOnce()
+    expect(onExpandedChange).toHaveBeenCalledWith(true)
   })
 })
 

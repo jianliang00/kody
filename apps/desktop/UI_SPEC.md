@@ -21,9 +21,9 @@ Desktop uses three regions:
 
 1. Asset rail (approximately 17rem): a dedicated macOS window-control gutter above the Kody identity, new-draft action, search, durable Thread list, settings, update state, and server status.
 2. Conversation workspace (fluid): Thread title/status, linear messages, live agent activity, composer.
-3. Context rail (approximately 20rem): a persistent Current Thread context card at the upper-right, the detailed Thread inspector below it, and a separate Project shelf anchored at the bottom-right.
+3. Context rail (approximately 20rem): one independently scrollable column of disclosure sections for Current Thread context, Workspace, active references, background processes, changed files, execution timeline, and Projects.
 
-The context card summarizes effective Thread/Project references using the same last-reference-wins semantics as the runtime. Runtime operations and pending approvals are shown separately from real Process Manager records; ordinary blocking shell tools must never be mislabeled as background processes. It shows at most two active managed processes while the inspector owns the complete lifecycle list. The context card and `Context & activity` header own the detailed inspector's expand/collapse controls; they never appear in the conversation title bar. The conversation title bar has a separate control for the entire right sidebar. At narrow widths, that control opens the inspector as a drawer. Only one responsive drawer may be open at a time, and its scrim must sit above the background but below the active drawer. The asset rail can collapse, and the conversation must remain usable at 320 CSS pixels.
+The context card summarizes effective Thread/Project references using the same last-reference-wins semantics as the runtime. Runtime operations and pending approvals are shown separately from real Process Manager records; ordinary blocking shell tools must never be mislabeled as background processes. It shows at most two active managed processes while the Process Manager section owns the complete lifecycle list. Every section expands independently through a native disclosure button, preserves its mounted content while hidden, and persists its state locally. The conversation title bar has a separate control for the entire right sidebar. At narrow widths, that control opens the inspector sections as a drawer. Only one responsive drawer may be open at a time, and its scrim must sit above the background but below the active drawer. The asset rail can collapse, and the conversation must remain usable at 320 CSS pixels.
 
 ## Visual direction
 
@@ -33,7 +33,7 @@ Typography uses one shared semantic scale across the conversation, asset rail, c
 
 All visible select controls use the shared Kody select primitive rather than a platform-native popup. Field, toolbar, permission, and reference-chip variants may change trigger density, but their popup surface, typography, selection indicator, focus treatment, disabled state, collision handling, and keyboard behavior remain consistent. Closed field selects match adjacent text inputs, while standalone compact selects use the same bordered control surface as neighboring actions; only selects nested inside an existing reference capsule remain visually unframed.
 
-The Current Thread card uses `body` consistently for every visible text element—including its eyebrow, metrics, group labels, empty states, metadata, runtime rows, and Workspace path—so the dense right rail does not look scaled down from the rest of the application. Card headings add hierarchy through weight rather than a different size. Settings and update state belong to the bottom of the asset rail rather than the Thread title bar. Updates use a compact, single-line capsule at the trailing edge of the local-server status row; availability and progress use restrained semantic color without changing the underlying update action. On macOS, the Kody brand row begins below the native traffic-light gutter instead of sharing its horizontal band.
+The Current Thread card and disclosure headers use `body` consistently for every visible text element—including eyebrows, metrics, group labels, empty states, metadata, and runtime rows—so the dense right rail does not look scaled down from the rest of the application. Section titles add hierarchy through weight rather than a different size. Settings and update state belong to the bottom of the asset rail rather than the Thread title bar. Updates use a compact, single-line capsule at the trailing edge of the local-server status row; availability and progress use restrained semantic color without changing the underlying update action. On macOS, the Kody brand row begins below the native traffic-light gutter instead of sharing its horizontal band.
 
 In the desktop three-column layout, both sidebar boundaries are adjustable. Their separators use a generous invisible pointer target, expose the ARIA separator value to assistive technology, support Left/Right arrows (Shift for a larger step), Home/End bounds, and double-click reset. Committed widths persist locally while responsive layouts continue to use the existing asset and inspector drawers. Width fitting always protects a usable conversation column instead of allowing saved sidebar sizes to squeeze it away.
 
@@ -43,7 +43,7 @@ The app shell is viewport-bound. Long Thread histories scroll only inside the co
 
 1. First launch shows a ready composer without creating any durable entity; disconnected state has a readable status and retry affordance.
 2. Optionally stage a working directory inside the draft composer, then create Thread/Workspace/Project/first Turn on the first Send.
-3. Import and reference reusable Projects from the independent bottom-right Project shelf.
+3. Import and reference reusable Projects from the independent Projects disclosure.
 4. Select a Thread and load its durable snapshot.
 5. Type `@` or press the context button to search Threads/Projects; add/remove/toggle reference modes.
 6. Start a Turn, stream events, stop a running Turn and refresh durable history at terminal event.
@@ -60,6 +60,7 @@ Process events use an independent stream because they may outlive their originat
 - Semantic landmarks and native buttons/inputs.
 - Visible labels (not placeholder-only), skip link and status live region.
 - Full keyboard operation for lists, dialogs and mention palette.
+- Right-rail disclosures use native buttons with stable `aria-expanded`/`aria-controls` relationships; collapsed panels stay mounted but are removed from focus navigation.
 - The inspector is modal only when rendered as a narrow drawer, with a dynamic focus trap and focus restoration. Process output uses a bounded `role="log"` region with live announcements disabled.
 - Minimum 44px primary touch targets; dense secondary rows may use a larger invisible hit area.
 - WCAG AA contrast in light/dark themes.

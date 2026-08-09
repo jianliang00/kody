@@ -1,11 +1,5 @@
-import { useState } from 'react'
 import {
   Activity,
-  Check,
-  ChevronDown,
-  ChevronUp,
-  Clipboard,
-  FolderCog,
   FolderGit2,
   MessagesSquare,
   ShieldAlert,
@@ -14,15 +8,15 @@ import {
 import type { Project, Thread, ThreadSnapshot } from '@shared/protocol'
 import type { ThreadContextView } from '../lib/threadContext'
 import { isProcessActive, sortManagedProcesses } from '../lib/processes'
+import { RightRailDisclosure } from './RightRailDisclosure'
 
 interface ThreadContextCardProps {
   snapshot: ThreadSnapshot
   threads: Thread[]
   projects: Project[]
   context: ThreadContextView
-  detailsOpen: boolean
-  onOpenDetails: () => void
-  onCopyText: (text: string) => Promise<void>
+  expanded: boolean
+  onExpandedChange: (expanded: boolean) => void
 }
 
 export function ThreadContextCard({
@@ -30,9 +24,8 @@ export function ThreadContextCard({
   threads,
   projects,
   context,
-  detailsOpen,
-  onOpenDetails,
-  onCopyText
+  expanded,
+  onExpandedChange
 }: ThreadContextCardProps) {
   const activeProcesses = sortManagedProcesses(snapshot.processes.filter(isProcessActive))
   const activeProcessOrigins = new Set(activeProcesses.map((process) => (
@@ -46,31 +39,14 @@ export function ThreadContextCard({
   const activeCount = foregroundActivityCount + activeProcesses.length
 
   return (
-    <aside
+    <RightRailDisclosure
       id="thread-context-card"
-      className={`thread-context-card${detailsOpen ? ' thread-context-card--details-open' : ''}`}
-      aria-labelledby="thread-context-card-title"
+      className="thread-context-card"
+      eyebrow="Current Thread"
+      title="Context"
+      expanded={expanded}
+      onExpandedChange={onExpandedChange}
     >
-      <header className="thread-context-card__header">
-        <div>
-          <p className="eyebrow">Current Thread</p>
-          <h2 id="thread-context-card-title">Context</h2>
-        </div>
-        <button
-          className="icon-button icon-button--small"
-          type="button"
-          onClick={onOpenDetails}
-          aria-label={detailsOpen ? 'Collapse Content & activity' : 'Expand Content & activity'}
-          aria-controls="thread-inspector"
-          aria-expanded={detailsOpen}
-          title={detailsOpen ? 'Collapse Content & activity' : 'Expand Content & activity'}
-        >
-          {detailsOpen
-            ? <ChevronUp aria-hidden="true" size={15} />
-            : <ChevronDown aria-hidden="true" size={15} />}
-        </button>
-      </header>
-
       <dl className="thread-context-card__metrics">
         <div className="thread-context-card__metric thread-context-card__metric--thread">
           <dt><MessagesSquare aria-hidden="true" size={14} /> Threads</dt>
@@ -86,7 +62,7 @@ export function ThreadContextCard({
         </div>
       </dl>
 
-      {!detailsOpen ? <div className="thread-context-card__body">
+      <div className="thread-context-card__body">
         <ContextGroup
           label="Referenced Threads"
           empty="No referenced Threads"
@@ -158,63 +134,8 @@ export function ThreadContextCard({
             </p>
           ) : null}
         </section>
-      </div> : null}
-
-      {!detailsOpen ? (
-        <WorkspacePath
-          path={snapshot.workspace.root}
-          pendingReferenceCount={context.pendingReferences.length}
-          onCopyText={onCopyText}
-        />
-      ) : null}
-    </aside>
-  )
-}
-
-function WorkspacePath({
-  path,
-  pendingReferenceCount,
-  onCopyText
-}: {
-  path: string
-  pendingReferenceCount: number
-  onCopyText: (text: string) => Promise<void>
-}) {
-  const [copied, setCopied] = useState(false)
-
-  return (
-    <footer className="thread-context-card__footer">
-      <details className="thread-context-card__workspace-path">
-        <summary title={path}>
-          <FolderCog aria-hidden="true" size={13} />
-          <code>{path}</code>
-          {pendingReferenceCount > 0 ? (
-            <span className="count-pill" title="References pending for the next message">+{pendingReferenceCount}</span>
-          ) : null}
-          <ChevronDown className="thread-context-card__workspace-chevron" aria-hidden="true" size={13} />
-        </summary>
-        <div className="thread-context-card__workspace-full">
-          <code>{path}</code>
-          <button
-            className="icon-button icon-button--small"
-            type="button"
-            aria-label={copied ? 'Workspace path copied' : 'Copy Workspace path'}
-            title={copied ? 'Copied' : 'Copy Workspace path'}
-            onClick={async () => {
-              try {
-                await onCopyText(path)
-                setCopied(true)
-                window.setTimeout(() => setCopied(false), 1_500)
-              } catch {
-                setCopied(false)
-              }
-            }}
-          >
-            {copied ? <Check aria-hidden="true" size={13} /> : <Clipboard aria-hidden="true" size={13} />}
-          </button>
-        </div>
-      </details>
-    </footer>
+      </div>
+    </RightRailDisclosure>
   )
 }
 

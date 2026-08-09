@@ -336,15 +336,17 @@ test('creates the first Thread through one idempotent draft request', async () =
 
     const projectShelf = page.locator('#project-shelf')
     await expect(projectShelf).toBeVisible()
-    await expect(projectShelf.getByRole('heading', { name: 'Projects 0' })).toBeVisible()
+    await expect(projectShelf.getByRole('button', { name: 'Projects', exact: true })).toBeVisible()
+    await expect(projectShelf.locator('.right-rail-disclosure__badge .count-pill')).toHaveText('0')
     await expect(projectShelf.getByText('No Projects yet.', { exact: true })).toBeVisible()
     const initialShelfBox = await projectShelf.boundingBox()
+    const initialRightRailBox = await rightRail.boundingBox()
     const viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
     expect(initialShelfBox).not.toBeNull()
+    expect(initialRightRailBox).not.toBeNull()
     expect(initialShelfBox?.x ?? 0).toBeGreaterThan(viewport.width / 2)
-    expect(initialShelfBox?.y ?? 0).toBeGreaterThan(viewport.height / 2)
-    expect(Math.abs((initialShelfBox?.y ?? 0) + (initialShelfBox?.height ?? 0) - viewport.height)).toBeLessThan(3)
-    expect(Math.abs((initialShelfBox?.x ?? 0) + (initialShelfBox?.width ?? 0) - viewport.width)).toBeLessThan(3)
+    expect(initialShelfBox?.x ?? 0).toBeGreaterThanOrEqual(initialRightRailBox?.x ?? 0)
+    expect(initialShelfBox?.width ?? Infinity).toBeLessThanOrEqual(initialRightRailBox?.width ?? 0)
 
     // Stub only the native picker. The renderer still traverses the real preload and IPC boundary.
     await application.evaluate(({ dialog }, directory) => {
@@ -479,7 +481,9 @@ test('creates the first Thread through one idempotent draft request', async () =
 
     const contextCard = page.locator('#thread-context-card')
     await expect(contextCard).toBeVisible()
-    await expect(contextCard.getByRole('heading', { name: 'Context', exact: true })).toBeVisible()
+    const contextToggle = contextCard.getByRole('button', { name: 'Context', exact: true })
+    await expect(contextToggle).toBeVisible()
+    await expect(contextToggle).toHaveAttribute('aria-expanded', 'true')
     await expect(contextCard.getByText('Threads', { exact: true })).toBeVisible()
     await expect(contextCard.getByText('Projects', { exact: true })).toBeVisible()
     await expect(contextCard.getByText('Managed procs', { exact: true })).toBeVisible()
@@ -493,8 +497,8 @@ test('creates the first Thread through one idempotent draft request', async () =
         return getComputedStyle(element).fontSize
       }
       return {
-        eyebrow: fontSize('.eyebrow'),
-        heading: fontSize('.thread-context-card__header h2'),
+        eyebrow: fontSize('.right-rail-disclosure__eyebrow'),
+        heading: fontSize('.right-rail-disclosure__title'),
         metricLabel: fontSize('.thread-context-card__metric dt'),
         metricValue: fontSize('.thread-context-card__metric dd'),
         groupLabel: fontSize('.thread-context-card__group-label'),
@@ -502,7 +506,6 @@ test('creates the first Thread through one idempotent draft request', async () =
         itemDetail: fontSize('.thread-context-card__group li > span:last-child'),
         emptyState: fontSize('.thread-context-card__empty'),
         processEmpty: fontSize('.thread-context-card__process-empty'),
-        workspacePath: fontSize('.thread-context-card__workspace-path > summary > code'),
         metricLabelsFit: Object.fromEntries(
           [...card.querySelectorAll<HTMLElement>('.thread-context-card__metric dt')]
             .map((element) => [element.textContent?.trim() ?? '', element.scrollWidth <= element.clientWidth])
@@ -519,38 +522,55 @@ test('creates the first Thread through one idempotent draft request', async () =
       itemDetail: '14px',
       emptyState: '14px',
       processEmpty: '14px',
-      workspacePath: '14px',
       metricLabelsFit: {
         Threads: true,
         Projects: true,
         'Managed procs': true
       }
     })
-    const workspacePathDisclosure = contextCard.locator('.thread-context-card__workspace-path')
-    await workspacePathDisclosure.locator('summary').click()
-    const completeWorkspacePath = workspacePathDisclosure.locator('.thread-context-card__workspace-full > code')
-    await expect(completeWorkspacePath).toBeVisible()
-    await expect(completeWorkspacePath).toHaveText(durable.snapshot.workspace.root)
     if (process.env.KODY_QA_CONTEXT_SCREENSHOT) {
       await page.screenshot({ path: process.env.KODY_QA_CONTEXT_SCREENSHOT, animations: 'disabled' })
     }
-    const expandContentActivity = contextCard.getByRole('button', { name: 'Expand Content & activity' })
-    await expect(expandContentActivity).toBeVisible()
-    await expect(page.locator('.titlebar').getByRole('button', { name: 'Expand Content & activity' })).toHaveCount(0)
-    await expandContentActivity.click()
     const inspector = page.getByLabel('Thread context and activity')
     await expect(inspector).toBeVisible()
-    await expect(inspector.getByRole('button', { name: 'Collapse Content & activity' })).toHaveCount(0)
-    await expect(page.getByRole('button', { name: 'Collapse Content & activity' })).toHaveCount(1)
-    await expect(page.getByRole('heading', { name: 'Context & activity', exact: true })).toBeVisible()
+    const workspaceToggle = inspector.getByRole('button', { name: 'Workspace', exact: true })
+    const referencesToggle = inspector.getByRole('button', { name: 'Active references', exact: true })
+    const changesToggle = inspector.getByRole('button', { name: 'Changed files', exact: true })
+    await expect(workspaceToggle).toHaveAttribute('aria-expanded', 'false')
+    await expect(referencesToggle).toHaveAttribute('aria-expanded', 'false')
+
+    await workspaceToggle.focus()
+    await page.keyboard.press('Enter')
+    await expect(workspaceToggle).toHaveAttribute('aria-expanded', 'true')
+    await expect(referencesToggle).toHaveAttribute('aria-expanded', 'false')
+    const completeWorkspacePath = inspector.locator('.workspace-card .path-copy code')
+    await expect(completeWorkspacePath).toBeVisible()
+    await expect(completeWorkspacePath).toHaveText(durable.snapshot.workspace.root)
+
+    await referencesToggle.focus()
+    await page.keyboard.press('Space')
+    await expect(referencesToggle).toHaveAttribute('aria-expanded', 'true')
+    await expect(workspaceToggle).toHaveAttribute('aria-expanded', 'true')
+    await changesToggle.click()
+    await expect(changesToggle).toHaveAttribute('aria-expanded', 'true')
+    await expect.poll(() => page.evaluate(() => JSON.parse(
+      window.localStorage.getItem('kody.rightRailSections.v1') ?? '{}'
+    ))).toMatchObject({ context: true, workspace: true, references: true, changes: true, projects: true })
+
+    await page.reload()
+    await expect(page.getByLabel('Kody assets').getByText('Local server connected', { exact: true })).toBeVisible({ timeout: 30_000 })
+    await expect(contextToggle).toHaveAttribute('aria-expanded', 'true')
+    await expect(workspaceToggle).toHaveAttribute('aria-expanded', 'true')
+    await expect(referencesToggle).toHaveAttribute('aria-expanded', 'true')
+    await expect(changesToggle).toHaveAttribute('aria-expanded', 'true')
+
     const rightRailHeadingOffsets = await page.locator('#right-rail').evaluate((rail) => {
       const railLeft = rail.getBoundingClientRect().left
       const selectors = [
-        '.thread-context-card__header .eyebrow',
-        '.inspector__header .eyebrow',
-        '.workspace-card > header .eyebrow',
-        '.context-constellation > header .eyebrow',
-        '.project-shelf__header .eyebrow'
+        '#thread-context-card .right-rail-disclosure__eyebrow',
+        '#right-rail-workspace .right-rail-disclosure__eyebrow',
+        '#right-rail-references .right-rail-disclosure__eyebrow',
+        '#right-rail-projects .right-rail-disclosure__eyebrow'
       ]
       return selectors.map((selector) => {
         const element = rail.querySelector(selector)
@@ -559,8 +579,8 @@ test('creates the first Thread through one idempotent draft request', async () =
       })
     })
     expect(Math.max(...rightRailHeadingOffsets) - Math.min(...rightRailHeadingOffsets)).toBeLessThanOrEqual(1.1)
-    const changedFilesEmptyOffset = await inspector.locator('.disclosure').evaluate((disclosure) => {
-      const summary = disclosure.querySelector('summary > span:first-child')
+    const changedFilesEmptyOffset = await inspector.locator('#right-rail-changes').evaluate((disclosure) => {
+      const summary = disclosure.querySelector('.right-rail-disclosure__title')
       const empty = disclosure.querySelector('.inspector-empty')
       if (!(summary instanceof HTMLElement) || !(empty instanceof HTMLElement)) {
         throw new Error('Missing Changed files alignment fixture')
@@ -568,7 +588,6 @@ test('creates the first Thread through one idempotent draft request', async () =
       return Math.abs(summary.getBoundingClientRect().left - empty.getBoundingClientRect().left)
     })
     expect(changedFilesEmptyOffset).toBeLessThanOrEqual(1.1)
-    await expect(inspector.locator('.workspace-card .path-copy code')).toHaveText(durable.snapshot.workspace.root)
     if (process.env.KODY_QA_INSPECTOR_SCREENSHOT) {
       await page.screenshot({ path: process.env.KODY_QA_INSPECTOR_SCREENSHOT, animations: 'disabled' })
     }
@@ -584,13 +603,13 @@ test('creates the first Thread through one idempotent draft request', async () =
           '.titlebar__identity h1',
           '.message--assistant .markdown',
           '.composer textarea',
-          '.workspace-card h3',
+          '.workspace-card .right-rail-disclosure__title',
           '.project-shelf__copy strong'
         ].map(fontSize),
         caption: [
           '.asset-row__body span',
           '.message > header',
-          '.workspace-card > p',
+          '.workspace-card > .right-rail-disclosure__panel > p',
           '.project-shelf__copy span'
         ].map(fontSize),
         brandHeading: fontSize('.brand-lockup strong')
@@ -611,9 +630,12 @@ test('creates the first Thread through one idempotent draft request', async () =
       await page.getByRole('button', { name: 'Use light theme' }).click()
       await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
     }
-    await contextCard.getByRole('button', { name: 'Collapse Content & activity' }).click()
-    await expect(inspector).toBeHidden()
-    await expect(contextCard.getByRole('button', { name: 'Expand Content & activity' })).toBeFocused()
+    await workspaceToggle.click()
+    await expect(workspaceToggle).toHaveAttribute('aria-expanded', 'false')
+    await expect(workspaceToggle).toBeFocused()
+    await expect(referencesToggle).toHaveAttribute('aria-expanded', 'true')
+    await expect(completeWorkspacePath).toBeHidden()
+    await expect(contextToggle).toHaveAttribute('aria-expanded', 'true')
 
     const hideRightSidebar = page.getByRole('button', { name: 'Hide right sidebar' })
     await expect(hideRightSidebar).toHaveAttribute('aria-controls', 'right-rail')
@@ -694,16 +716,16 @@ test('creates the first Thread through one idempotent draft request', async () =
     expect(contextCardBox?.x ?? 0).toBeGreaterThan(viewport.width / 2)
     expect(contextCardBox?.y ?? viewport.height).toBeLessThan(viewport.height / 2)
 
-    await expect(projectShelf.getByRole('heading', { name: 'Projects 1' })).toBeVisible()
+    await projectShelf.scrollIntoViewIfNeeded()
+    await expect(projectShelf.getByRole('button', { name: 'Projects', exact: true })).toBeVisible()
+    await expect(projectShelf.locator('.right-rail-disclosure__badge .count-pill')).toHaveText('1')
     await expect(projectShelf.getByText(durable.projects[0]?.name ?? '', { exact: true })).toBeVisible()
     await expect(projectShelf.getByTitle(canonicalProjectRoot)).toBeVisible()
     await expect(projectShelf.getByText('Added', { exact: true })).toBeVisible()
     const populatedShelfBox = await projectShelf.boundingBox()
     expect(populatedShelfBox).not.toBeNull()
     expect(populatedShelfBox?.x ?? 0).toBeGreaterThan(viewport.width / 2)
-    expect(populatedShelfBox?.y ?? 0).toBeGreaterThan(viewport.height / 2)
-    expect(Math.abs((populatedShelfBox?.y ?? 0) + (populatedShelfBox?.height ?? 0) - viewport.height)).toBeLessThan(3)
-    expect((contextCardBox?.y ?? 0) + (contextCardBox?.height ?? 0)).toBeLessThan(populatedShelfBox?.y ?? 0)
+    expect(populatedShelfBox?.width ?? Infinity).toBeLessThanOrEqual(initialRightRailBox?.width ?? 0)
 
     const threadNavigation = page.getByRole('navigation', { name: 'Threads' })
     const durableThreadRow = threadNavigation.getByRole('button', { name: new RegExp(prompt) })
@@ -767,6 +789,21 @@ test('creates the first Thread through one idempotent draft request', async () =
       await page.screenshot({ path: process.env.KODY_QA_LINEBREAK_SCREENSHOT, animations: 'disabled' })
     }
 
+    // Menu commands that redirect focus must dismiss the narrow Projects modal first.
+    await application.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0]?.setSize(900, 700)
+    })
+    const projectLauncher = page.locator('.project-shelf-launcher')
+    await expect(projectLauncher).toBeVisible()
+    await projectLauncher.click()
+    await expect(projectShelf).toHaveAttribute('aria-modal', 'true')
+    await application.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0]?.webContents.send('kody:menu-command', 'focus-assets')
+    })
+    await expect(projectShelf).toBeHidden()
+    await expect(page.locator('#asset-filter')).toBeFocused()
+    await expect(page.locator('[aria-modal="true"]')).toHaveCount(0)
+
     // Keep a compact responsive smoke for both independent drawers.
     await application.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.setSize(700, 700)
@@ -786,6 +823,16 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expect(assetRail).toBeHidden()
     await expect(openAssetDrawer).toBeFocused()
 
+    await expect(projectLauncher).toBeVisible()
+    await projectLauncher.click()
+    await expect(projectShelf).toBeVisible()
+    await expect(projectShelf).toHaveAttribute('role', 'dialog')
+    await expect(projectShelf).toHaveAttribute('aria-modal', 'true')
+    await expect(page.locator('[aria-modal="true"]')).toHaveCount(1)
+    await page.keyboard.press('Escape')
+    await expect(projectShelf).toBeHidden()
+    await expect(projectLauncher).toBeFocused()
+
     const openInspector = page.getByRole('button', { name: 'Show right sidebar' })
     await expect(contextCard).toBeHidden()
     await expect(inspector).toBeHidden()
@@ -796,10 +843,14 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expect(inspector).toBeVisible()
     await expect(inspector).toHaveAttribute('role', 'dialog')
     await expect(inspector).toHaveAttribute('aria-modal', 'true')
+    await expect(page.locator('[aria-modal="true"]')).toHaveCount(1)
     const closeInspector = page.getByRole('button', { name: 'Hide right sidebar' })
     await expect(closeInspector).toHaveAttribute('aria-expanded', 'true')
-    await expect(page.getByRole('heading', { name: 'Workspace', exact: true })).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Background processes', exact: true })).toBeVisible()
+    await expect(inspector.getByRole('button', { name: 'Workspace', exact: true })).toBeVisible()
+    const processDisclosure = inspector.getByRole('button', { name: 'Background processes', exact: true })
+    await expect(processDisclosure).toBeVisible()
+    await processDisclosure.click()
+    await expect(processDisclosure).toHaveAttribute('aria-expanded', 'true')
     await expect(inspector.getByText('No managed background processes.', { exact: true })).toBeVisible()
     const inspectorDrawerLayers = await page.evaluate(() => ({
       rail: getComputedStyle(document.querySelector('.right-rail')!).zIndex,

@@ -1,6 +1,5 @@
 import {
   Check,
-  ChevronDown,
   CircleDot,
   Clipboard,
   Code2,
@@ -20,7 +19,10 @@ import type {
 } from '@shared/protocol'
 import { BackgroundProcesses } from './BackgroundProcesses'
 import { ReferenceChips } from './ReferenceChips'
+import { RightRailDisclosure } from './RightRailDisclosure'
+import { isProcessActive } from '../lib/processes'
 import { referenceKey } from '../lib/references'
+import type { RightRailSectionId, RightRailSectionsState } from '../lib/rightRailSections'
 import { collectEffectiveReferences } from '../lib/threadContext'
 
 interface InspectorProps {
@@ -31,9 +33,11 @@ interface InspectorProps {
   events: EventEnvelope[]
   open: boolean
   modal: boolean
+  sections: RightRailSectionsState
   stoppingProcessIds: Set<string>
   processOutputCursors: Record<string, number>
   onClose: () => void
+  onSectionExpandedChange: (id: RightRailSectionId, expanded: boolean) => void
   onCopyText: (text: string) => Promise<void>
   onReadProcessOutput: (processId: string, afterCursor: number, limit: number) => Promise<ProcessOutputPage>
   onStopProcess: (processId: string) => Promise<void>
@@ -113,9 +117,11 @@ export function Inspector({
   events,
   open,
   modal,
+  sections,
   stoppingProcessIds,
   processOutputCursors,
   onClose,
+  onSectionExpandedChange,
   onCopyText,
   onReadProcessOutput,
   onStopProcess
@@ -148,21 +154,23 @@ export function Inspector({
     [events]
   )
   const effectiveReferences = useMemo(() => collectEffectiveReferences(snapshot), [snapshot])
+  const effectiveReferenceCount = effectiveReferences.threads.length + effectiveReferences.projects.length
+  const activeProcessCount = snapshot.processes.filter(isProcessActive).length
 
   return (
-    <aside
+    <section
       id="thread-inspector"
       className={`inspector${open ? ' inspector--open' : ''}`}
       role={open && modal ? 'dialog' : undefined}
       aria-modal={open && modal ? true : undefined}
       aria-label="Thread context and activity"
     >
-      <header className="inspector__header">
-        <div>
-          <p className="eyebrow">Thread lens</p>
-          <h2>Context &amp; activity</h2>
-        </div>
-        {modal ? (
+      {modal ? (
+        <header className="inspector__header">
+          <div>
+            <p className="eyebrow">Thread lens</p>
+            <h2>Context &amp; activity</h2>
+          </div>
           <button
             className="icon-button"
             type="button"
@@ -172,17 +180,18 @@ export function Inspector({
           >
             <X aria-hidden="true" size={17} />
           </button>
-        ) : null}
-      </header>
+        </header>
+      ) : null}
 
       <div className="inspector__scroll">
-        <section className="inspector-section workspace-card" aria-labelledby="workspace-title">
-          <header className="section-heading">
-            <div>
-              <p className="eyebrow">Ephemeral runtime</p>
-              <h3 id="workspace-title">Workspace</h3>
-            </div>
-          </header>
+        <RightRailDisclosure
+          id="right-rail-workspace"
+          className="workspace-card"
+          eyebrow="Ephemeral runtime"
+          title="Workspace"
+          expanded={sections.workspace}
+          onExpandedChange={(expanded) => onSectionExpandedChange('workspace', expanded)}
+        >
           <div className="path-copy">
             <code title={snapshot.workspace.root}>{snapshot.workspace.root}</code>
             <button
@@ -203,18 +212,17 @@ export function Inspector({
             </button>
           </div>
           <p>Temporary files and generated artifacts for this Thread live here.</p>
-        </section>
+        </RightRailDisclosure>
 
-        <section className="inspector-section context-constellation" aria-labelledby="constellation-title">
-          <header className="section-heading">
-            <div>
-              <p className="eyebrow">Context constellation</p>
-              <h3 id="constellation-title">Active references</h3>
-            </div>
-            <span className="count-pill">
-              {effectiveReferences.threads.length + effectiveReferences.projects.length}
-            </span>
-          </header>
+        <RightRailDisclosure
+          id="right-rail-references"
+          className="context-constellation"
+          eyebrow="Context constellation"
+          title="Active references"
+          badge={<span className="count-pill">{effectiveReferenceCount}</span>}
+          expanded={sections.references}
+          onExpandedChange={(expanded) => onSectionExpandedChange('references', expanded)}
+        >
           <div className="constellation-graphic" aria-hidden="true">
             <span className="constellation-orbit" />
             <span className="constellation-core">C</span>
@@ -271,22 +279,44 @@ export function Inspector({
               </p>
             ) : null}
           </div>
-        </section>
+        </RightRailDisclosure>
 
-        <BackgroundProcesses
-          processes={snapshot.processes}
-          projects={projects}
-          stoppingProcessIds={stoppingProcessIds}
-          liveOutputCursors={processOutputCursors}
-          onReadOutput={onReadProcessOutput}
-          onStop={onStopProcess}
-        />
+        <RightRailDisclosure
+          id="right-rail-processes"
+          eyebrow="Process manager"
+          title="Background processes"
+          badge={(
+            <span className="process-section__counts">
+              {activeProcessCount > 0 ? (
+                <span className="activity-count"><span aria-hidden="true" /> {activeProcessCount} active</span>
+              ) : null}
+              <span className="count-pill" title={`${snapshot.processes.length} managed process records`}>
+                {snapshot.processes.length}
+              </span>
+            </span>
+          )}
+          expanded={sections.processes}
+          onExpandedChange={(expanded) => onSectionExpandedChange('processes', expanded)}
+        >
+          <BackgroundProcesses
+            processes={snapshot.processes}
+            projects={projects}
+            showHeading={false}
+            stoppingProcessIds={stoppingProcessIds}
+            liveOutputCursors={processOutputCursors}
+            onReadOutput={onReadProcessOutput}
+            onStop={onStopProcess}
+          />
+        </RightRailDisclosure>
 
-        <details className="inspector-section disclosure" open>
-          <summary>
-            <span>Changed files</span>
-            <span className="summary-tail"><span className="count-pill">{changedFiles.length}</span><ChevronDown aria-hidden="true" size={14} /></span>
-          </summary>
+        <RightRailDisclosure
+          id="right-rail-changes"
+          eyebrow="Current app session"
+          title="Changed files"
+          badge={<span className="count-pill">{changedFiles.length}</span>}
+          expanded={sections.changes}
+          onExpandedChange={(expanded) => onSectionExpandedChange('changes', expanded)}
+        >
           {changedFiles.length === 0 ? (
             <p className="inspector-empty">No file changes observed in this app session.</p>
           ) : (
@@ -302,16 +332,16 @@ export function Inspector({
               })}
             </ul>
           )}
-        </details>
+        </RightRailDisclosure>
 
-        <section className="inspector-section" aria-labelledby="timeline-title">
-          <header className="section-heading">
-            <div>
-              <p className="eyebrow">Current app session</p>
-              <h3 id="timeline-title">Execution timeline</h3>
-            </div>
-            <span className="count-pill">{timeline.length}</span>
-          </header>
+        <RightRailDisclosure
+          id="right-rail-timeline"
+          eyebrow="Current app session"
+          title="Execution timeline"
+          badge={<span className="count-pill">{timeline.length}</span>}
+          expanded={sections.timeline}
+          onExpandedChange={(expanded) => onSectionExpandedChange('timeline', expanded)}
+        >
           {timeline.length === 0 ? (
             <p className="inspector-empty">Activity from the next turn will appear here.</p>
           ) : (
@@ -328,8 +358,8 @@ export function Inspector({
               ))}
             </ol>
           )}
-        </section>
+        </RightRailDisclosure>
       </div>
-    </aside>
+    </section>
   )
 }
