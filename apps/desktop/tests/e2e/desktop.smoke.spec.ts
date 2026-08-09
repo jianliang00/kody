@@ -171,33 +171,39 @@ test('creates the first Thread through one idempotent draft request', async () =
     // separator's accessible keyboard contract here so the Electron integration
     // remains deterministic under GitHub Actions' virtual display server.
     await assetResizeHandle.focus()
+    const assetResizeMaximum = Number(await assetResizeHandle.getAttribute('aria-valuemax'))
+    const resizedAssetWidth = Math.min(320, assetResizeMaximum)
     for (let step = 0; step < 6; step += 1) {
       await page.keyboard.press('ArrowRight')
     }
-    await expect.poll(async () => Math.round((await assetRail.boundingBox())?.width ?? 0)).toBe(320)
-    await expect.poll(() => page.evaluate(() => window.localStorage.getItem('kody.assetRailWidth'))).toBe('320')
+    await expect.poll(async () => Math.round((await assetRail.boundingBox())?.width ?? 0)).toBe(resizedAssetWidth)
+    await expect.poll(() => page.evaluate(() => window.localStorage.getItem('kody.assetRailWidth'))).toBe(String(resizedAssetWidth))
     await page.keyboard.press('ArrowLeft')
-    await expect.poll(async () => Math.round((await assetRail.boundingBox())?.width ?? 0)).toBe(312)
+    const persistedAssetWidth = resizedAssetWidth - 8
+    await expect.poll(async () => Math.round((await assetRail.boundingBox())?.width ?? 0)).toBe(persistedAssetWidth)
 
     await rightResizeHandle.focus()
+    const rightResizeMaximum = Number(await rightResizeHandle.getAttribute('aria-valuemax'))
+    const resizedRightWidth = Math.min(368, rightResizeMaximum)
     for (let step = 0; step < 6; step += 1) {
       await page.keyboard.press('ArrowLeft')
     }
-    await expect.poll(async () => Math.round((await rightRail.boundingBox())?.width ?? 0)).toBe(368)
+    await expect.poll(async () => Math.round((await rightRail.boundingBox())?.width ?? 0)).toBe(resizedRightWidth)
     await page.keyboard.press('ArrowRight')
-    await expect.poll(async () => Math.round((await rightRail.boundingBox())?.width ?? 0)).toBe(360)
+    const persistedRightWidth = resizedRightWidth - 8
+    await expect.poll(async () => Math.round((await rightRail.boundingBox())?.width ?? 0)).toBe(persistedRightWidth)
     await expect.poll(() => page.evaluate(() => ({
       left: window.localStorage.getItem('kody.assetRailWidth'),
       right: window.localStorage.getItem('kody.rightRailWidth')
-    }))).toEqual({ left: '312', right: '360' })
+    }))).toEqual({ left: String(persistedAssetWidth), right: String(persistedRightWidth) })
     if (process.env.KODY_QA_RESIZE_SCREENSHOT) {
       await page.screenshot({ path: process.env.KODY_QA_RESIZE_SCREENSHOT, animations: 'disabled' })
     }
 
     await page.reload()
     await expect(workbenchRail.getByText('Local server connected', { exact: true })).toBeVisible({ timeout: 30_000 })
-    await expect.poll(async () => Math.round((await assetRail.boundingBox())?.width ?? 0)).toBe(312)
-    await expect.poll(async () => Math.round((await rightRail.boundingBox())?.width ?? 0)).toBe(360)
+    await expect.poll(async () => Math.round((await assetRail.boundingBox())?.width ?? 0)).toBe(persistedAssetWidth)
+    await expect.poll(async () => Math.round((await rightRail.boundingBox())?.width ?? 0)).toBe(persistedRightWidth)
     if (process.env.KODY_QA_UPDATES_SCREENSHOT) {
       await page.screenshot({ path: process.env.KODY_QA_UPDATES_SCREENSHOT, animations: 'disabled' })
     }
