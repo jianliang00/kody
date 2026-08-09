@@ -171,18 +171,18 @@ test('creates the first Thread through one idempotent draft request', async () =
     // separator's accessible keyboard contract here so the Electron integration
     // remains deterministic under GitHub Actions' virtual display server.
     await assetResizeHandle.focus()
-    await page.keyboard.press('Shift+ArrowRight')
-    await page.keyboard.press('Shift+ArrowRight')
-    await page.keyboard.press('Shift+ArrowRight')
+    for (let step = 0; step < 6; step += 1) {
+      await page.keyboard.press('ArrowRight')
+    }
     await expect.poll(async () => Math.round((await assetRail.boundingBox())?.width ?? 0)).toBe(320)
     await expect.poll(() => page.evaluate(() => window.localStorage.getItem('kody.assetRailWidth'))).toBe('320')
     await page.keyboard.press('ArrowLeft')
     await expect.poll(async () => Math.round((await assetRail.boundingBox())?.width ?? 0)).toBe(312)
 
     await rightResizeHandle.focus()
-    await page.keyboard.press('Shift+ArrowLeft')
-    await page.keyboard.press('Shift+ArrowLeft')
-    await page.keyboard.press('Shift+ArrowLeft')
+    for (let step = 0; step < 6; step += 1) {
+      await page.keyboard.press('ArrowLeft')
+    }
     await expect.poll(async () => Math.round((await rightRail.boundingBox())?.width ?? 0)).toBe(368)
     await page.keyboard.press('ArrowRight')
     await expect.poll(async () => Math.round((await rightRail.boundingBox())?.width ?? 0)).toBe(360)
