@@ -5,6 +5,7 @@ import type {
   Thread,
   ThreadReferenceMode
 } from '@shared/protocol'
+import { threadWorkflowBucket, threadWorkflowBucketLabel } from './workbench'
 
 export const THREAD_REFERENCE_MODES: ThreadReferenceMode[] = [
   'summary',
@@ -105,9 +106,7 @@ export function createCandidates(
       key: `thread:${thread.id}`,
       kind: 'thread',
       name: thread.title,
-      detail: thread.status === 'archived'
-        ? `Archived · ${thread.summary || 'Durable conversation'}`
-        : thread.summary || 'Durable conversation',
+      detail: `${threadWorkflowBucketLabel(threadWorkflowBucket(thread))} · ${thread.summary || 'Durable conversation'}`,
       reference: { kind: 'thread', thread_id: thread.id, mode: 'summary' }
     }))
 

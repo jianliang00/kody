@@ -2,6 +2,27 @@ import { describe, expect, it } from 'vitest'
 import { validateRpcInvocation } from './security'
 
 describe('renderer RPC allowlist', () => {
+  it('accepts only the strict Thread workflow update schema', () => {
+    for (const workflowState of ['new_progress', 'deferred', 'handled']) {
+      expect(() => validateRpcInvocation('thread/workflow/update', {
+        thread_id: 'thread-1',
+        workflow_state: workflowState
+      })).not.toThrow()
+    }
+    expect(() => validateRpcInvocation('thread/workflow/update', {
+      thread_id: 'thread-1',
+      workflow_state: 'running'
+    })).toThrow(/workflow_state/)
+    expect(() => validateRpcInvocation('thread/workflow/update', {
+      thread_id: 'thread-1'
+    })).toThrow(/missing/)
+    expect(() => validateRpcInvocation('thread/workflow/update', {
+      thread_id: 'thread-1',
+      workflow_state: 'handled',
+      title: 'Unexpected mutation'
+    })).toThrow(/unsupported/)
+  })
+
   it('accepts bounded Process Manager methods', () => {
     expect(() => validateRpcInvocation('process/list', { thread_id: 'thread-1' })).not.toThrow()
     expect(() => validateRpcInvocation('process/get', {

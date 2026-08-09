@@ -96,8 +96,8 @@ function installApplicationMenu(): void {
     {
       label: 'View',
       submenu: [
-        { label: 'Filter Assets', accelerator: 'CmdOrCtrl+F', click: () => sendCommand('focus-assets') },
-        { label: 'Toggle Asset Rail', accelerator: isMac ? 'Cmd+Ctrl+S' : 'Ctrl+Shift+S', click: () => sendCommand('toggle-rail') },
+        { label: 'Search Threads', accelerator: 'CmdOrCtrl+F', click: () => sendCommand('focus-assets') },
+        { label: 'Toggle Thread List', accelerator: isMac ? 'Cmd+Ctrl+S' : 'Ctrl+Shift+S', click: () => sendCommand('toggle-rail') },
         { label: 'Toggle Context Inspector', accelerator: 'CmdOrCtrl+Alt+I', click: () => sendCommand('toggle-inspector') },
         { type: 'separator' },
         ...(app.isPackaged ? [] : [{ role: 'reload' as const }, { role: 'toggleDevTools' as const }]),

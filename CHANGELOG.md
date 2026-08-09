@@ -4,6 +4,26 @@ All notable changes to Kody are documented in this file. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.1.18] - 2026-08-09
+
+### Added
+
+- Added multimodal image input with model-capability checks, secure local image handling, and composer previews.
+- Added a macOS-style Workbench with New Progress, Continue Later, In Progress, Processed, All Threads, and Project views.
+- Added durable Thread to-do workflow states with list shortcuts, contextual actions, title-bar controls, RPC validation, and legacy-state migration.
+
+### Changed
+
+- Reworked the desktop into a four-column macOS layout with independently collapsible Workbench, Thread list, and Inspector regions.
+- Extended the unified title bar across the Inspector and aligned sidebar typography, spacing, controls, and dark-mode contrast with native macOS conventions.
+- Made Inspector sections independently collapsible while preserving active context and managed-process visibility.
+
+## [0.1.17] - 2026-07-18
+
+### Changed
+
+- Removed the redundant connected-state label from the title bar and refined the update controls.
+
 ## [0.1.16] - 2026-07-18
 
 ### Added
@@ -64,7 +84,9 @@ All notable changes to Kody are documented in this file. The format follows [Kee
 
 - Signed in-app updates backed by public GitHub Release artifacts.
 
-[Unreleased]: https://github.com/jianliang00/kody/compare/v0.1.16...HEAD
+[Unreleased]: https://github.com/jianliang00/kody/compare/v0.1.18...HEAD
+[0.1.18]: https://github.com/jianliang00/kody/compare/v0.1.17...v0.1.18
+[0.1.17]: https://github.com/jianliang00/kody/compare/v0.1.16...v0.1.17
 [0.1.16]: https://github.com/jianliang00/kody/compare/v0.1.15...v0.1.16
 [0.1.7]: https://github.com/jianliang00/kody/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/jianliang00/kody/compare/v0.1.5...v0.1.6

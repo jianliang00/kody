@@ -303,7 +303,7 @@ export function Composer({
 
   return (
     <form
-      className="composer"
+      className="composer composer--message"
       aria-label="Message composer"
       aria-busy={submitting || cancellingRef.current}
       onSubmit={(event) => {
@@ -328,35 +328,7 @@ export function Composer({
         />
       ) : null}
 
-      <div className="composer__topline">
-        <label htmlFor="composer-message">Message</label>
-        <div className="composer__provider">
-          <label htmlFor="composer-provider">Provider</label>
-          <KodySelect
-            id="composer-provider"
-            value={providerId}
-            variant="toolbar"
-            placeholder={providers.length === 0 ? 'Unavailable' : 'No configured provider'}
-            options={providers.map((item) => ({
-              value: item.id,
-              label: `${item.display_name}${item.auth === 'missing' ? ' · setup required' : ''}`,
-              disabled: item.auth === 'missing'
-            }))}
-            onValueChange={onProviderChange}
-            disabled={running || unavailable || providers.length === 0}
-          />
-          <label htmlFor="composer-model">Model</label>
-          <KodySelect
-            id="composer-model"
-            value={model}
-            variant="toolbar"
-            placeholder={modelsLoading ? 'Loading models…' : 'Unavailable'}
-            options={modelOptions.map((item) => ({ value: item.id, label: item.display_name }))}
-            onValueChange={onModelChange}
-            disabled={running || unavailable || !providerId || modelOptions.length === 0}
-          />
-        </div>
-      </div>
+      <label className="sr-only" htmlFor="composer-message">Message</label>
 
       {references.length > 0 ? (
         <div className="composer__references">
@@ -419,18 +391,45 @@ export function Composer({
 
       <footer className="composer__footer">
         <div className="composer__context-controls">
+          <div className="composer__provider">
+            <label className="sr-only" htmlFor="composer-provider">Provider</label>
+            <KodySelect
+              id="composer-provider"
+              value={providerId}
+              variant="toolbar"
+              placeholder={providers.length === 0 ? 'Unavailable' : 'No configured provider'}
+              options={providers.map((item) => ({
+                value: item.id,
+                label: `${item.display_name}${item.auth === 'missing' ? ' · setup required' : ''}`,
+                disabled: item.auth === 'missing'
+              }))}
+              onValueChange={onProviderChange}
+              disabled={running || unavailable || providers.length === 0}
+            />
+            <label className="sr-only" htmlFor="composer-model">Model</label>
+            <KodySelect
+              id="composer-model"
+              value={model}
+              variant="toolbar"
+              placeholder={modelsLoading ? 'Loading models…' : 'Unavailable'}
+              options={modelOptions.map((item) => ({ value: item.id, label: item.display_name }))}
+              onValueChange={onModelChange}
+              disabled={running || unavailable || !providerId || modelOptions.length === 0}
+            />
+          </div>
           <button
             ref={contextButtonRef}
             className="context-button"
             type="button"
             disabled={unavailable || running}
             onClick={openManualPalette}
+            aria-label="Add context"
             aria-expanded={paletteOpen && manualPalette}
             aria-haspopup="listbox"
             aria-controls={paletteOpen ? 'context-reference-options' : undefined}
           >
             <AtSign aria-hidden="true" size={16} />
-            <span>Add context</span>
+            <span className="context-button__label">Add context</span>
           </button>
           <input
             ref={imageInputRef}
@@ -446,22 +445,24 @@ export function Composer({
             type="button"
             disabled={unavailable || running || !imageInputAvailable || images.length >= 4}
             onClick={() => imageInputRef.current?.click()}
+            aria-label="Attach image"
             title={imageInputAvailable
               ? 'Attach images for this model'
               : 'Configure this model as vision-capable first'}
           >
             <ImagePlus aria-hidden="true" size={16} />
-            <span>Attach image</span>
+            <span className="context-button__label">Attach image</span>
           </button>
           <button
             className="context-button"
             type="button"
             disabled={unavailable || running || !imageGenerationAvailable}
             onClick={onOpenImageGenerator}
+            aria-label="Generate image"
             title={imageGenerationAvailable ? 'Generate an image' : 'Configure an image provider first'}
           >
             <ImageIcon aria-hidden="true" size={16} />
-            <span>Image</span>
+            <span className="context-button__label">Image</span>
           </button>
           <div
             className={`permission-mode-control permission-mode-control--${permissionMode}`}
@@ -507,9 +508,10 @@ export function Composer({
               type="button"
               disabled={unavailable || running}
               onClick={() => void onPickWorkingDirectory?.()}
+              aria-label="Working directory"
             >
               <FolderOpen aria-hidden="true" size={16} />
-              <span>Working directory</span>
+              <span className="context-button__label">Working directory</span>
             </button>
           ) : null}
           <span id="composer-hint" className="composer__hint">

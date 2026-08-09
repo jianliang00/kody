@@ -7,7 +7,8 @@ use kody_core::{
         OpenAiResponsesProvider,
     },
     ApprovalId, ContextReference, GenerateImageRequest, InteractionId, KodyEngine, KodyError,
-    ProcessId, ProjectId, StartTurn, ThreadId, TurnId, UserInputAnswers, DEFAULT_THREAD_TITLE,
+    ProcessId, ProjectId, StartTurn, ThreadId, ThreadWorkflowState, TurnId, UserInputAnswers,
+    DEFAULT_THREAD_TITLE,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -573,6 +574,16 @@ impl RpcDispatcher {
                     "artifacts": artifacts,
                 }))
             }
+            "thread/workflow/update" | "thread.workflow.update" => {
+                let params: UpdateThreadWorkflowParams = parse_params(params)?;
+                let thread = self
+                    .state
+                    .engine
+                    .set_thread_workflow_state(params.thread_id, params.workflow_state)
+                    .await
+                    .map_err(RpcError::from)?;
+                serde_json::to_value(thread).map_err(RpcError::invalid_params)
+            }
             "thread/reference/add" | "thread.reference.add" => {
                 let params: AddReferenceParams = parse_params(params)?;
                 let thread = self
@@ -876,6 +887,7 @@ fn initialize_result() -> Value {
             "project_references": true,
             "thread_create_and_start": true,
             "thread_auto_titles": true,
+            "thread_workflow": true,
             "turn_cancellation": true,
             "turn_permission_modes": ["read_only", "ask", "full_access"],
             "tool_approvals": true,
@@ -980,6 +992,12 @@ fn default_thread_title() -> String {
 #[derive(Debug, Deserialize)]
 struct ThreadGetParams {
     thread_id: ThreadId,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateThreadWorkflowParams {
+    thread_id: ThreadId,
+    workflow_state: ThreadWorkflowState,
 }
 
 #[derive(Debug, Deserialize)]

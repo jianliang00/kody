@@ -174,6 +174,7 @@ function thread(id: string, title: string): Thread {
     title,
     workspace_id: `workspace-${id}`,
     status: 'idle',
+    workflow_state: 'deferred',
     default_references: [],
     created_at: now,
     updated_at: now

@@ -6,8 +6,8 @@ use futures_util::{SinkExt, StreamExt};
 use kody_app_server::{app, AppState};
 use kody_core::{
     process::StartProcessRequest, provider::EchoProvider, Artifact, ArtifactId, ArtifactKind,
-    EngineConfig, InteractionId, KodyEngine, PendingUserInput, ProcessOrigin, StartTurn, TurnId,
-    UserInputQuestion,
+    EngineConfig, InteractionId, KodyEngine, PendingUserInput, ProcessOrigin, StartTurn,
+    ThreadStatus, ThreadWorkflowState, TurnId, UserInputQuestion,
 };
 use reqwest::{header, StatusCode};
 use serde_json::{json, Value};
@@ -143,6 +143,138 @@ async fn http_rpc_requires_authentication_and_json_content_type() -> Result<()> 
         "kody-app-server"
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_workflow_rpc_is_idempotent_and_rejects_active_threads() -> Result<()> {
+    let server = TestServer::start().await?;
+    let client = reqwest::Client::builder().no_proxy().build()?;
+
+    let initialized = client
+        .post(server.rpc_url())
+        .bearer_auth(TOKEN)
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": "workflow-capability",
+            "method": "initialize",
+            "params": {}
+        }))
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
+    assert_eq!(
+        initialized["result"]["capabilities"]["thread_workflow"],
+        true
+    );
+
+    let created = client
+        .post(server.rpc_url())
+        .bearer_auth(TOKEN)
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": "workflow-create",
+            "method": "thread/create",
+            "params": { "title": "Workflow test" }
+        }))
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
+    let thread_id = created["result"]["thread"]["id"]
+        .as_str()
+        .context("thread/create response did not contain a thread id")?
+        .to_owned();
+    assert_eq!(created["result"]["thread"]["workflow_state"], "deferred");
+
+    let handled = client
+        .post(server.rpc_url())
+        .bearer_auth(TOKEN)
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": "workflow-handled",
+            "method": "thread/workflow/update",
+            "params": {
+                "thread_id": thread_id,
+                "workflow_state": "handled"
+            }
+        }))
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
+    assert_eq!(handled["result"]["workflow_state"], "handled");
+    assert_eq!(handled["result"]["status"], "idle");
+    let handled_updated_at = handled["result"]["updated_at"].clone();
+
+    let retried = client
+        .post(server.rpc_url())
+        .bearer_auth(TOKEN)
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": "workflow-idempotent-retry",
+            "method": "thread.workflow.update",
+            "params": {
+                "thread_id": thread_id,
+                "workflow_state": "handled"
+            }
+        }))
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
+    assert_eq!(retried["result"]["workflow_state"], "handled");
+    assert_eq!(retried["result"]["updated_at"], handled_updated_at);
+
+    let thread_id = thread_id.parse()?;
+    server
+        .engine
+        .store()
+        .transition_thread_status(thread_id, ThreadStatus::Idle, ThreadStatus::Running)
+        .await?;
+    let blocked = client
+        .post(server.rpc_url())
+        .bearer_auth(TOKEN)
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": "workflow-blocked",
+            "method": "thread/workflow/update",
+            "params": {
+                "thread_id": thread_id,
+                "workflow_state": "deferred"
+            }
+        }))
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
+    assert_eq!(blocked["error"]["code"], -32009);
+
+    let released = server
+        .engine
+        .store()
+        .transition_thread_status(thread_id, ThreadStatus::Running, ThreadStatus::Idle)
+        .await?;
+    assert_eq!(released.workflow_state, ThreadWorkflowState::NewProgress);
+
+    let snapshot = client
+        .post(server.rpc_url())
+        .bearer_auth(TOKEN)
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": "workflow-snapshot",
+            "method": "thread/get",
+            "params": { "thread_id": thread_id }
+        }))
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
+    assert_eq!(
+        snapshot["result"]["thread"]["workflow_state"],
+        "new_progress"
+    );
     Ok(())
 }
 

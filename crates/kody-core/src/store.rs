@@ -15,7 +15,7 @@ use crate::{
     domain::{
         Artifact, ArtifactId, ArtifactKind, ContextReference, ManagedProcess, Message, MessageId,
         MessagePart, ProcessId, ProcessOrigin, ProcessStatus, Project, ProjectId, Thread, ThreadId,
-        ThreadStatus, Turn, TurnId, TurnStatus, Workspace, WorkspaceId,
+        ThreadStatus, ThreadWorkflowState, Turn, TurnId, TurnStatus, Workspace, WorkspaceId,
     },
     error::{KodyError, Result},
 };
@@ -54,6 +54,14 @@ pub trait StateStore: Send + Sync {
         id: ThreadId,
         expected: ThreadStatus,
         next: ThreadStatus,
+    ) -> Result<Thread>;
+    /// Atomically changes only the user-managed workflow state. The expected
+    /// value prevents stale clients from overwriting a newer classification.
+    async fn transition_thread_workflow_state(
+        &self,
+        id: ThreadId,
+        expected: ThreadWorkflowState,
+        next: ThreadWorkflowState,
     ) -> Result<Thread>;
     async fn delete_thread(&self, id: ThreadId) -> Result<()>;
 
@@ -145,7 +153,7 @@ pub struct JsonFileStore {
     persistence: Arc<Mutex<()>>,
 }
 
-const JSON_SNAPSHOT_VERSION: u32 = 4;
+const JSON_SNAPSHOT_VERSION: u32 = 5;
 const OLDEST_SUPPORTED_JSON_SNAPSHOT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -356,6 +364,7 @@ impl InMemoryStore {
                 "version 1 snapshots cannot contain managed processes",
             ));
         }
+        let snapshot_version = snapshot.version;
         let mut state = StoreState::default();
         for project in snapshot.projects {
             if state.projects.insert(project.id, project.clone()).is_some() {
@@ -365,7 +374,15 @@ impl InMemoryStore {
                 )));
             }
         }
-        for thread in snapshot.threads {
+        for mut thread in snapshot.threads {
+            if snapshot_version < 5 {
+                if thread.status == ThreadStatus::Archived {
+                    thread.status = ThreadStatus::Idle;
+                    thread.workflow_state = ThreadWorkflowState::Handled;
+                } else {
+                    thread.workflow_state = ThreadWorkflowState::Deferred;
+                }
+            }
             if state.threads.insert(thread.id, thread.clone()).is_some() {
                 return Err(invalid_snapshot(format!(
                     "duplicate thread id {}",
@@ -841,6 +858,12 @@ impl StateStore for InMemoryStore {
                 current.status, thread.status
             )));
         }
+        if current.workflow_state != thread.workflow_state {
+            return Err(KodyError::InvalidInput(format!(
+                "thread workflow state changes must use transition_thread_workflow_state (current={:?}, requested={:?})",
+                current.workflow_state, thread.workflow_state
+            )));
+        }
 
         validate_references(&state, thread.id, &thread.default_references)?;
         validate_thread_workspace(&state, &thread)?;
@@ -892,6 +915,39 @@ impl StateStore for InMemoryStore {
         }
 
         thread.status = next;
+        if expected == ThreadStatus::Running && next == ThreadStatus::Idle {
+            thread.workflow_state = ThreadWorkflowState::NewProgress;
+        }
+        thread.updated_at = chrono::Utc::now();
+        Ok(thread.clone())
+    }
+
+    async fn transition_thread_workflow_state(
+        &self,
+        id: ThreadId,
+        expected: ThreadWorkflowState,
+        next: ThreadWorkflowState,
+    ) -> Result<Thread> {
+        let mut state = self.inner.write().await;
+        let thread = state
+            .threads
+            .get_mut(&id)
+            .ok_or(KodyError::ThreadNotFound(id))?;
+        if thread.status == ThreadStatus::Running {
+            return Err(conflict(format!(
+                "cannot change workflow state while thread {id} has an active turn"
+            )));
+        }
+        if thread.workflow_state != expected {
+            return Err(stale_status(
+                "thread workflow",
+                id,
+                expected,
+                thread.workflow_state,
+            ));
+        }
+
+        thread.workflow_state = next;
         thread.updated_at = chrono::Utc::now();
         Ok(thread.clone())
     }
@@ -1679,6 +1735,21 @@ impl StateStore for JsonFileStore {
         )
     }
 
+    async fn transition_thread_workflow_state(
+        &self,
+        id: ThreadId,
+        expected: ThreadWorkflowState,
+        next: ThreadWorkflowState,
+    ) -> Result<Thread> {
+        persistent_mutation!(
+            self,
+            candidate,
+            candidate
+                .transition_thread_workflow_state(id, expected, next)
+                .await
+        )
+    }
+
     async fn delete_thread(&self, id: ThreadId) -> Result<()> {
         persistent_mutation!(self, candidate, candidate.delete_thread(id).await)
     }
@@ -2387,6 +2458,7 @@ mod tests {
                 title: format!("thread-{thread_id}"),
                 workspace_id,
                 status: ThreadStatus::Idle,
+                workflow_state: ThreadWorkflowState::Deferred,
                 default_references: Vec::new(),
                 summary: None,
                 external_thread_ids: Default::default(),
@@ -2674,6 +2746,63 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(archived.status, ThreadStatus::Archived);
+    }
+
+    #[tokio::test]
+    async fn thread_workflow_transition_is_cas_protected_and_tracks_new_progress() {
+        let store = InMemoryStore::new();
+        let (thread, _) = seed_thread(&store, 1, 2, 1).await;
+
+        let mut stale_snapshot = thread.clone();
+        stale_snapshot.workflow_state = ThreadWorkflowState::Handled;
+        assert!(matches!(
+            store.update_thread(stale_snapshot).await.unwrap_err(),
+            KodyError::InvalidInput(_)
+        ));
+
+        let handled = store
+            .transition_thread_workflow_state(
+                thread.id,
+                ThreadWorkflowState::Deferred,
+                ThreadWorkflowState::Handled,
+            )
+            .await
+            .unwrap();
+        assert_eq!(handled.workflow_state, ThreadWorkflowState::Handled);
+
+        assert!(matches!(
+            store
+                .transition_thread_workflow_state(
+                    thread.id,
+                    ThreadWorkflowState::Deferred,
+                    ThreadWorkflowState::NewProgress,
+                )
+                .await
+                .unwrap_err(),
+            KodyError::Conflict(_)
+        ));
+
+        store
+            .transition_thread_status(thread.id, ThreadStatus::Idle, ThreadStatus::Running)
+            .await
+            .unwrap();
+        assert!(matches!(
+            store
+                .transition_thread_workflow_state(
+                    thread.id,
+                    ThreadWorkflowState::Handled,
+                    ThreadWorkflowState::Deferred,
+                )
+                .await
+                .unwrap_err(),
+            KodyError::Conflict(_)
+        ));
+
+        let completed = store
+            .transition_thread_status(thread.id, ThreadStatus::Running, ThreadStatus::Idle)
+            .await
+            .unwrap();
+        assert_eq!(completed.workflow_state, ThreadWorkflowState::NewProgress);
     }
 
     #[tokio::test]
@@ -3050,12 +3179,12 @@ mod tests {
 
         let raw: serde_json::Value =
             serde_json::from_slice(&tokio::fs::read(path).await.unwrap()).unwrap();
-        assert_eq!(raw["version"], 4);
+        assert_eq!(raw["version"], JSON_SNAPSHOT_VERSION);
         assert_eq!(raw["processes"].as_array().unwrap().len(), 1);
     }
 
     #[tokio::test]
-    async fn json_store_migrates_v1_through_v3_snapshots_to_v4_on_open() {
+    async fn json_store_migrates_v1_through_v4_snapshots_to_v5_on_open() {
         let directory = tempfile::tempdir().unwrap();
         for version in 1..JSON_SNAPSHOT_VERSION {
             let path = directory.path().join(format!("state-v{version}.json"));
@@ -3074,6 +3203,9 @@ mod tests {
             }
             if version < 3 {
                 snapshot.as_object_mut().unwrap().remove("artifacts");
+            }
+            for thread in snapshot["threads"].as_array_mut().unwrap() {
+                thread.as_object_mut().unwrap().remove("workflow_state");
             }
             tokio::fs::write(&path, serde_json::to_vec_pretty(&snapshot).unwrap())
                 .await
@@ -3094,6 +3226,7 @@ mod tests {
             assert_eq!(migrated["version"], JSON_SNAPSHOT_VERSION);
             assert!(migrated["processes"].is_array());
             assert!(migrated["artifacts"].is_array());
+            assert_eq!(migrated["threads"][0]["workflow_state"], "deferred");
             assert!(std::fs::read_dir(directory.path())
                 .unwrap()
                 .all(|entry| !entry
@@ -3102,6 +3235,42 @@ mod tests {
                     .to_string_lossy()
                     .ends_with(".tmp")));
         }
+    }
+
+    #[tokio::test]
+    async fn json_store_migrates_legacy_archived_threads_to_handled_idle() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.json");
+        let store = JsonFileStore::open(&path).await.unwrap();
+        let (thread, _) = seed_thread(&store, 1, 2, 1).await;
+        store
+            .transition_thread_status(thread.id, ThreadStatus::Idle, ThreadStatus::Archived)
+            .await
+            .unwrap();
+        drop(store);
+
+        let mut snapshot: serde_json::Value =
+            serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
+        snapshot["version"] = serde_json::json!(4);
+        snapshot["threads"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("workflow_state");
+        tokio::fs::write(&path, serde_json::to_vec_pretty(&snapshot).unwrap())
+            .await
+            .unwrap();
+
+        let reopened = JsonFileStore::open(&path).await.unwrap();
+        let migrated = reopened.get_thread(thread.id).await.unwrap();
+        assert_eq!(migrated.status, ThreadStatus::Idle);
+        assert_eq!(migrated.workflow_state, ThreadWorkflowState::Handled);
+        drop(reopened);
+
+        let migrated_snapshot: serde_json::Value =
+            serde_json::from_slice(&tokio::fs::read(path).await.unwrap()).unwrap();
+        assert_eq!(migrated_snapshot["version"], JSON_SNAPSHOT_VERSION);
+        assert_eq!(migrated_snapshot["threads"][0]["status"], "idle");
+        assert_eq!(migrated_snapshot["threads"][0]["workflow_state"], "handled");
     }
 
     #[tokio::test]

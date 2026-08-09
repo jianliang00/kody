@@ -21,6 +21,7 @@ export const RIGHT_RAIL_LIMITS: SidebarLimits = {
   maxWidth: 480
 }
 
+export const WORKBENCH_RAIL_WIDTH = 216
 export const MINIMUM_CONVERSATION_WIDTH = 448
 
 export function clampSidebarWidth(value: number, minWidth: number, maxWidth: number): number {
@@ -47,7 +48,8 @@ export function fitSidebarWidths(
   desiredLeft: number,
   desiredRight: number,
   leftVisible: boolean,
-  rightVisible: boolean
+  rightVisible: boolean,
+  fixedLeadingWidth = 0
 ): FittedSidebarWidths {
   let left = clampSidebarWidth(
     desiredLeft,
@@ -59,7 +61,12 @@ export function fitSidebarWidths(
     RIGHT_RAIL_LIMITS.minWidth,
     RIGHT_RAIL_LIMITS.maxWidth
   )
-  const available = Math.max(0, viewportWidth - MINIMUM_CONVERSATION_WIDTH)
+  const available = Math.max(
+    0,
+    viewportWidth
+      - MINIMUM_CONVERSATION_WIDTH
+      - Math.max(0, fixedLeadingWidth)
+  )
   let overflow = (leftVisible ? left : 0) + (rightVisible ? right : 0) - available
 
   if (overflow <= 0) return { left, right }

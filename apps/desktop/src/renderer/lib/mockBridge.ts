@@ -55,6 +55,7 @@ const seedThreads: Thread[] = [
     title: 'Shape the Electron workspace',
     workspace_id: 'workspace-electron',
     status: 'idle',
+    workflow_state: 'new_progress',
     default_references: [
       { kind: 'project', project_id: 'project-kody', access: 'read_write' }
     ],
@@ -67,6 +68,7 @@ const seedThreads: Thread[] = [
     title: 'Design the agent loop',
     workspace_id: 'workspace-loop',
     status: 'idle',
+    workflow_state: 'deferred',
     default_references: [],
     summary: 'Provider-neutral model turns, tool execution, approvals, and terminal states.',
     created_at: iso(-4_200),
@@ -77,6 +79,7 @@ const seedThreads: Thread[] = [
     title: 'Context reference semantics',
     workspace_id: 'workspace-context',
     status: 'idle',
+    workflow_state: 'handled',
     default_references: [],
     summary: 'Thread and Project mentions remain independent, explicit, and composable.',
     created_at: iso(-3_800),
@@ -230,6 +233,7 @@ function createMockStore() {
     turn.status = 'completed'
     turn.completed_at = new Date().toISOString()
     snapshot.thread.status = 'idle'
+    snapshot.thread.workflow_state = 'new_progress'
     snapshot.thread.updated_at = turn.completed_at
     let generatedTitle: string | undefined
     if (snapshot.thread.title === 'New thread') {
@@ -521,6 +525,7 @@ function createMockStore() {
           title: input.title.trim() || 'Untitled thread',
           workspace_id: id('workspace'),
           status: 'idle',
+          workflow_state: 'deferred',
           default_references: defaultReferences,
           created_at: createdAt,
           updated_at: createdAt
@@ -574,6 +579,27 @@ function createMockStore() {
         const snapshot = snapshots.get(input.thread_id)
         if (!snapshot) throw new Error(`Thread ${input.thread_id} was not found`)
         return clone(snapshot) as RpcMethodMap[M]['result']
+      }
+      case 'thread/workflow/update': {
+        const input = params as RpcMethodMap['thread/workflow/update']['params']
+        const snapshot = snapshots.get(input.thread_id)
+        if (!snapshot) throw new Error(`Thread ${input.thread_id} was not found`)
+        if (snapshot.thread.status === 'running') {
+          throw new Error('A running Thread cannot change workflow state')
+        }
+        if (snapshot.thread.workflow_state === input.workflow_state) {
+          return clone(snapshot.thread) as RpcMethodMap[M]['result']
+        }
+
+        const updatedAt = new Date().toISOString()
+        snapshot.thread.workflow_state = input.workflow_state
+        snapshot.thread.updated_at = updatedAt
+        const listedThread = threads.find((thread) => thread.id === input.thread_id)
+        if (listedThread && listedThread !== snapshot.thread) {
+          listedThread.workflow_state = input.workflow_state
+          listedThread.updated_at = updatedAt
+        }
+        return clone(snapshot.thread) as RpcMethodMap[M]['result']
       }
       case 'thread/reference/add': {
         const input = params as RpcMethodMap['thread/reference/add']['params']

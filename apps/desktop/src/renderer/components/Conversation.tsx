@@ -24,6 +24,7 @@ import type {
 import { ArtifactGallery } from './ArtifactCard'
 import { ReferenceChips } from './ReferenceChips'
 import { ToolActivityList, type ToolActivityItem } from './ToolActivity'
+import { threadWorkflowBucket, threadWorkflowBucketLabel } from '../lib/workbench'
 
 interface ConversationProps {
   snapshot: ThreadSnapshot
@@ -56,6 +57,16 @@ const markdownComponents: Components = {
 
 function formatTime(value: string): string {
   return new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit'
+  }).format(new Date(value))
+}
+
+function formatThreadDate(value: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
     hour: 'numeric',
     minute: '2-digit'
   }).format(new Date(value))
@@ -455,6 +466,14 @@ export function Conversation({
     ...pendingApprovals.map((approval) => `approval:${approval.approval_id}`),
     ...pendingUserInputs.map((request) => `input:${request.interaction_id}`)
   ].join('|')
+  const primaryProjectReference = snapshot.thread.default_references.find(
+    (reference) => reference.kind === 'project'
+  )
+  const primaryProject = primaryProjectReference?.kind === 'project'
+    ? projects.find((project) => project.id === primaryProjectReference.project_id)
+    : undefined
+  const messageCountLabel = `${snapshot.messages.length} ${snapshot.messages.length === 1 ? 'message' : 'messages'}`
+  const workflowBucket = threadWorkflowBucket(snapshot.thread)
 
   useEffect(() => {
     const lastMessage = snapshot.messages.at(-1)
@@ -483,6 +502,21 @@ export function Conversation({
       }}
     >
       <div className="conversation-column">
+        <header className="conversation-document-header">
+          <span className={`conversation-document-header__status conversation-document-header__status--${workflowBucket}`}>
+            <span aria-hidden="true" />
+            {threadWorkflowBucketLabel(workflowBucket)}
+          </span>
+          <h2>{snapshot.thread.title}</h2>
+          <p>
+            <span>{primaryProject?.name ?? 'No Project'}</span>
+            <span aria-hidden="true">·</span>
+            <time dateTime={snapshot.thread.updated_at}>{formatThreadDate(snapshot.thread.updated_at)}</time>
+            <span aria-hidden="true">·</span>
+            <span>{messageCountLabel}</span>
+          </p>
+        </header>
+
         {snapshot.messages.length === 0 ? (
           <section className="thread-welcome">
             <span className="thread-welcome__mark" aria-hidden="true"><Sparkles size={22} /></span>
@@ -519,7 +553,7 @@ export function Conversation({
             <article className="message message--assistant" key={message.id}>
               <header>
                 <span className="assistant-identity">
-                  <span className="assistant-identity__mark" aria-hidden="true"><MessageCircle size={13} /></span>
+                  <span className="assistant-identity__mark" aria-hidden="true"><Sparkles size={13} /></span>
                   Kody
                 </span>
                 <time dateTime={message.created_at}>{formatTime(message.created_at)}</time>

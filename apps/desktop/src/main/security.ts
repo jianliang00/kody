@@ -1,7 +1,12 @@
 import type { Session, WebContents } from 'electron'
 import { shell } from 'electron'
 
-import type { ContextReference, PermissionMode, RpcMethod } from '../shared/protocol'
+import type {
+  ContextReference,
+  PermissionMode,
+  RpcMethod,
+  ThreadWorkflowState
+} from '../shared/protocol'
 
 const RPC_METHODS = new Set<RpcMethod>([
   'initialize',
@@ -16,6 +21,7 @@ const RPC_METHODS = new Set<RpcMethod>([
   'thread/create',
   'thread/create-and-start',
   'thread/get',
+  'thread/workflow/update',
   'thread/reference/add',
   'turn/start',
   'turn/cancel',
@@ -106,6 +112,11 @@ export function validateRpcInvocation(method: unknown, params: unknown): asserts
       requireKeys(params, ['thread_id'])
       requireId(params.thread_id, 'thread_id')
       break
+    case 'thread/workflow/update':
+      requireKeys(params, ['thread_id', 'workflow_state'])
+      requireId(params.thread_id, 'thread_id')
+      requireThreadWorkflowState(params.workflow_state)
+      break
     case 'thread/reference/add':
       requireKeys(params, ['thread_id', 'reference'])
       requireId(params.thread_id, 'thread_id')
@@ -192,6 +203,12 @@ export function validateRpcInvocation(method: unknown, params: unknown): asserts
 function requirePermissionMode(value: unknown): asserts value is PermissionMode {
   if (value !== 'read_only' && value !== 'ask' && value !== 'full_access') {
     throw new Error("'permission_mode' must be read_only, ask, or full_access")
+  }
+}
+
+function requireThreadWorkflowState(value: unknown): asserts value is ThreadWorkflowState {
+  if (value !== 'new_progress' && value !== 'deferred' && value !== 'handled') {
+    throw new Error("'workflow_state' must be new_progress, deferred, or handled")
   }
 }
 

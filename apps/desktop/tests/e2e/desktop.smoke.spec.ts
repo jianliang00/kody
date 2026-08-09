@@ -9,8 +9,9 @@ const desktopRoot = resolve(testDirectory, '../..')
 const workspaceRoot = resolve(desktopRoot, '../..')
 
 interface PersistedState {
+  version: number
   projects: Array<{ id: string; name: string; root: string }>
-  threads: Array<{ id: string; title: string; workspace_id: string }>
+  threads: Array<{ id: string; title: string; workspace_id: string; workflow_state: string }>
   workspaces: Array<{ id: string; thread_id: string; root: string }>
   messages: Array<{ id: string; thread_id: string; role: string }>
   turns: Array<{ id: string; thread_id: string; status: string; permission_mode: string }>
@@ -71,13 +72,14 @@ test('creates the first Thread through one idempotent draft request', async () =
     expect(page.url()).toMatch(/^file:/)
     expect(await page.title()).toBe('Kody')
     await expect(page.locator('vite-error-overlay')).toHaveCount(0)
-    await expect(page.getByLabel('Kody assets').getByText('Local server connected', { exact: true })).toBeVisible({ timeout: 30_000 })
-    const assetRail = page.getByLabel('Kody assets')
+    const workbenchRail = page.getByRole('complementary', { name: 'Workbench' })
+    const assetRail = page.getByRole('complementary', { name: 'Threads' })
+    await expect(workbenchRail.getByText('Local server connected', { exact: true })).toBeVisible({ timeout: 30_000 })
     const rightRail = page.locator('#right-rail')
-    const applicationControls = assetRail.getByLabel('Application controls')
-    const openModelSettings = applicationControls.getByRole('button', { name: 'Open model settings' })
-    const connectionStatus = assetRail.locator('.asset-rail__connection')
-    const updateCapsule = assetRail.getByRole('button', { name: 'Kody updates unavailable' })
+    const conversationWorkspace = page.locator('.conversation-workspace')
+    const openModelSettings = workbenchRail.getByRole('button', { name: 'Open model settings' })
+    const connectionStatus = workbenchRail.locator('.workbench-connection')
+    const updateCapsule = workbenchRail.getByRole('button', { name: 'Kody updates unavailable' })
     await expect(openModelSettings).toBeVisible()
     await expect(updateCapsule).toBeVisible()
     const [updateCapsuleBox, connectionStatusBox] = await Promise.all([
@@ -105,23 +107,65 @@ test('creates the first Thread through one idempotent draft request', async () =
     expect(updateCapsuleStyle).toEqual({
       borderRadius: '999px',
       copyWhiteSpace: 'nowrap',
-      fontSize: connectionStatusStyle.fontSize,
-      fontWeight: connectionStatusStyle.fontWeight
+      fontSize: '13px',
+      fontWeight: '400'
     })
+    expect(connectionStatusStyle).toEqual({ fontSize: '11px', fontWeight: '400' })
     await expect(updateCapsule).toHaveText('Unavailable')
     await expect(updateCapsule.locator('.update-status__chevron')).toHaveCount(0)
     await expect(page.locator('.titlebar').getByRole('button', { name: 'Open model settings' })).toHaveCount(0)
 
-    const assetResizeHandle = page.getByRole('separator', { name: 'Resize asset sidebar' })
+    const assetResizeHandle = page.getByRole('separator', { name: 'Resize Thread list' })
     const rightResizeHandle = page.getByRole('separator', { name: 'Resize right sidebar' })
     await expect(assetResizeHandle).toBeVisible()
     await expect(rightResizeHandle).toBeVisible()
     await expect(assetResizeHandle).toHaveAttribute('aria-controls', 'asset-rail')
     await expect(rightResizeHandle).toHaveAttribute('aria-controls', 'right-rail')
-    const initialAssetRailWidth = Math.round((await assetRail.boundingBox())?.width ?? 0)
-    const initialRightRailWidth = Math.round((await rightRail.boundingBox())?.width ?? 0)
+    const [initialWorkbenchBox, initialAssetRailBox, initialTitlebarBox, initialConversationBox, initialLayoutRightRailBox] = await Promise.all([
+      workbenchRail.boundingBox(),
+      assetRail.boundingBox(),
+      page.locator('.titlebar').boundingBox(),
+      conversationWorkspace.boundingBox(),
+      rightRail.boundingBox()
+    ])
+    expect(initialWorkbenchBox).not.toBeNull()
+    expect(initialAssetRailBox).not.toBeNull()
+    expect(initialTitlebarBox).not.toBeNull()
+    expect(initialConversationBox).not.toBeNull()
+    expect(initialLayoutRightRailBox).not.toBeNull()
+    expect(Math.round(initialWorkbenchBox?.width ?? 0)).toBe(216)
+    expect(initialWorkbenchBox?.x ?? Infinity).toBeLessThan(initialAssetRailBox?.x ?? 0)
+    expect(initialAssetRailBox?.x ?? Infinity).toBeLessThan(initialConversationBox?.x ?? 0)
+    expect(initialConversationBox?.x ?? Infinity).toBeLessThan(initialLayoutRightRailBox?.x ?? 0)
+    expect((initialWorkbenchBox?.x ?? 0) + (initialWorkbenchBox?.width ?? 0)).toBeLessThanOrEqual((initialAssetRailBox?.x ?? 0) + 1)
+    expect((initialAssetRailBox?.x ?? 0) + (initialAssetRailBox?.width ?? 0)).toBeLessThanOrEqual((initialConversationBox?.x ?? 0) + 1)
+    expect((initialConversationBox?.x ?? 0) + (initialConversationBox?.width ?? 0)).toBeLessThanOrEqual((initialLayoutRightRailBox?.x ?? 0) + 1)
+    expect(Math.abs((initialTitlebarBox?.x ?? 0) - (initialConversationBox?.x ?? 0))).toBeLessThanOrEqual(1)
+    expect(Math.abs(
+      (initialTitlebarBox?.x ?? 0) + (initialTitlebarBox?.width ?? 0)
+      - ((initialLayoutRightRailBox?.x ?? 0) + (initialLayoutRightRailBox?.width ?? 0))
+    )).toBeLessThanOrEqual(1)
+    expect(Math.abs(
+      (initialTitlebarBox?.y ?? 0) + (initialTitlebarBox?.height ?? 0)
+      - (initialLayoutRightRailBox?.y ?? 0)
+    )).toBeLessThanOrEqual(1)
+    expect(Math.abs((initialConversationBox?.y ?? 0) - (initialLayoutRightRailBox?.y ?? 0))).toBeLessThanOrEqual(1)
+    const initialAssetRailWidth = Math.round(initialAssetRailBox?.width ?? 0)
+    const initialRightRailWidth = Math.round(initialLayoutRightRailBox?.width ?? 0)
     expect(initialAssetRailWidth).toBe(272)
     expect(initialRightRailWidth).toBe(320)
+
+    const collapseWorkbench = workbenchRail.getByRole('button', { name: 'Collapse workbench sidebar' })
+    await collapseWorkbench.click()
+    await expect(workbenchRail).toBeHidden()
+    await expect(assetRail).toBeVisible()
+    await expect.poll(() => page.evaluate(() => window.localStorage.getItem('kody.workbenchCollapsed'))).toBe('true')
+    const expandWorkbench = page.locator('.titlebar').getByRole('button', { name: 'Expand workbench sidebar' })
+    await expect(expandWorkbench).toBeFocused()
+    await expandWorkbench.click()
+    await expect(workbenchRail).toBeVisible()
+    await expect.poll(async () => Math.round((await workbenchRail.boundingBox())?.width ?? 0)).toBe(216)
+    await expect.poll(() => page.evaluate(() => window.localStorage.getItem('kody.workbenchCollapsed'))).toBe('false')
 
     // Pointer drag behavior is covered by the focused component tests. Use the
     // separator's accessible keyboard contract here so the Electron integration
@@ -151,7 +195,7 @@ test('creates the first Thread through one idempotent draft request', async () =
     }
 
     await page.reload()
-    await expect(page.getByLabel('Kody assets').getByText('Local server connected', { exact: true })).toBeVisible({ timeout: 30_000 })
+    await expect(workbenchRail.getByText('Local server connected', { exact: true })).toBeVisible({ timeout: 30_000 })
     await expect.poll(async () => Math.round((await assetRail.boundingBox())?.width ?? 0)).toBe(312)
     await expect.poll(async () => Math.round((await rightRail.boundingBox())?.width ?? 0)).toBe(360)
     if (process.env.KODY_QA_UPDATES_SCREENSHOT) {
@@ -286,13 +330,13 @@ test('creates the first Thread through one idempotent draft request', async () =
     expect(bridgeProbe?.hasProcessEvents).toBe(true)
 
     if (bridgeProbe?.platform === 'darwin') {
-      const [windowDragBox, brandBox] = await Promise.all([
-        assetRail.locator('.asset-rail__window-drag').boundingBox(),
-        assetRail.locator('.asset-rail__brand').boundingBox()
+      const [windowDragBox, primaryActionsBox] = await Promise.all([
+        workbenchRail.locator('.workbench-rail__window-drag').boundingBox(),
+        workbenchRail.locator('.workbench-rail__primary-actions').boundingBox()
       ])
       expect(windowDragBox).not.toBeNull()
-      expect(brandBox).not.toBeNull()
-      expect(brandBox?.y ?? 0).toBeGreaterThanOrEqual((windowDragBox?.y ?? 0) + (windowDragBox?.height ?? 0) - 1)
+      expect(primaryActionsBox).not.toBeNull()
+      expect(primaryActionsBox?.y ?? 0).toBeGreaterThanOrEqual((windowDragBox?.y ?? 0) + (windowDragBox?.height ?? 0) - 1)
     }
 
     await expect(page.getByRole('heading', { level: 1, name: 'New conversation' })).toBeVisible()
@@ -320,7 +364,7 @@ test('creates the first Thread through one idempotent draft request', async () =
     await selectKodyOption(page, 'Permission mode', 'Read only')
     await expect(permissionMode).toHaveAttribute('data-value', 'read_only')
     await expect(page.getByRole('dialog')).toHaveCount(0)
-    await expect(page.getByText('No Threads yet', { exact: true })).toBeVisible()
+    await expect(page.getByText('No Threads in New Progress', { exact: true })).toBeVisible()
 
     const emptyBackend = await page.evaluate(async () => {
       if (!window.kody) throw new Error('preload bridge is unavailable')
@@ -416,8 +460,13 @@ test('creates the first Thread through one idempotent draft request', async () =
       }
       return { provider: surface(provider), context: surface(context), permission: surface(permission) }
     })
-    expect(compactControlSurfaces.provider).toEqual(compactControlSurfaces.context)
-    expect(compactControlSurfaces.permission).toEqual(compactControlSurfaces.context)
+    expect(compactControlSurfaces.permission).toEqual(compactControlSurfaces.provider)
+    expect(compactControlSurfaces.context).toEqual({
+      backgroundColor: 'rgba(0, 0, 0, 0)',
+      borderRadius: '6px',
+      borderWidth: '1px',
+      height: 32
+    })
     const hoverSurface = async (control: typeof providerTrigger) => {
       await control.hover()
       await expect(control).toHaveCSS('background-color', 'rgb(236, 236, 239)')
@@ -467,6 +516,7 @@ test('creates the first Thread through one idempotent draft request', async () =
     expect(durable.processResult.processes).toEqual([])
     expect(durable.snapshot.messages.map((message) => message.role)).toEqual(['user', 'assistant'])
     expect(durable.snapshot.thread.title).toBe(prompt)
+    expect(durable.snapshot.thread.workflow_state).toBe('new_progress')
     expect(durable.snapshot.workspace.thread_id).toBe(durable.snapshot.thread.id)
     expect(durable.snapshot.workspace.root).toContain(join(actualUserDataRoot, 'engine', 'workspaces'))
     expect(durable.projects[0]?.root).toBe(canonicalProjectRoot)
@@ -478,6 +528,30 @@ test('creates the first Thread through one idempotent draft request', async () =
     expect(await readdir(join(actualUserDataRoot, 'engine', 'workspaces'))).toEqual([
       durable.snapshot.thread.id
     ])
+
+    const workflowAction = page.locator('.titlebar').getByRole('button', { name: 'Mark as Processed' })
+    await expect(workflowAction).toBeVisible()
+    await workflowAction.click()
+    await expect(page.locator('.titlebar').getByRole('button', { name: 'Restore to New Progress' })).toBeVisible()
+    await expect(page.getByText('No Threads in New Progress', { exact: true })).toBeVisible()
+    await expect.poll(() => page.evaluate(async (threadId) => {
+      if (!window.kody) throw new Error('preload bridge is unavailable')
+      return (await window.kody.rpc('thread/get', { thread_id: threadId })).thread.workflow_state
+    }, durable.snapshot.thread.id)).toBe('handled')
+
+    await workbenchRail.getByRole('button', { name: /Processed\s*1/ }).click()
+    const processedThreadRow = page.getByRole('navigation', { name: 'Thread list' })
+      .locator('.asset-row__open')
+      .filter({ hasText: prompt })
+    await expect(processedThreadRow).toBeVisible()
+    await page.locator('.titlebar').getByRole('button', { name: 'Restore to New Progress' }).click()
+    await expect(page.getByText('No Threads in Processed', { exact: true })).toBeVisible()
+    await workbenchRail.getByRole('button', { name: /New Progress\s*1/ }).click()
+    await expect(processedThreadRow).toBeVisible()
+    await expect.poll(() => page.evaluate(async (threadId) => {
+      if (!window.kody) throw new Error('preload bridge is unavailable')
+      return (await window.kody.rpc('thread/get', { thread_id: threadId })).thread.workflow_state
+    }, durable.snapshot.thread.id)).toBe('new_progress')
 
     const contextCard = page.locator('#thread-context-card')
     await expect(contextCard).toBeVisible()
@@ -514,14 +588,14 @@ test('creates the first Thread through one idempotent draft request', async () =
     })
     expect(contextTypography).toEqual({
       eyebrow: '14px',
-      heading: '14px',
-      metricLabel: '14px',
-      metricValue: '14px',
-      groupLabel: '14px',
-      itemName: '14px',
-      itemDetail: '14px',
-      emptyState: '14px',
-      processEmpty: '14px',
+      heading: '13px',
+      metricLabel: '13px',
+      metricValue: '13px',
+      groupLabel: '13px',
+      itemName: '13px',
+      itemDetail: '12px',
+      emptyState: '13px',
+      processEmpty: '13px',
       metricLabelsFit: {
         Threads: true,
         Projects: true,
@@ -558,7 +632,7 @@ test('creates the first Thread through one idempotent draft request', async () =
     ))).toMatchObject({ context: true, workspace: true, references: true, changes: true, projects: true })
 
     await page.reload()
-    await expect(page.getByLabel('Kody assets').getByText('Local server connected', { exact: true })).toBeVisible({ timeout: 30_000 })
+    await expect(workbenchRail.getByText('Local server connected', { exact: true })).toBeVisible({ timeout: 30_000 })
     await expect(contextToggle).toHaveAttribute('aria-expanded', 'true')
     await expect(workspaceToggle).toHaveAttribute('aria-expanded', 'true')
     await expect(referencesToggle).toHaveAttribute('aria-expanded', 'true')
@@ -597,28 +671,52 @@ test('creates the first Thread through one idempotent draft request', async () =
         if (!(element instanceof HTMLElement)) throw new Error(`Missing typography fixture: ${selector}`)
         return getComputedStyle(element).fontSize
       }
+      const fontWeight = (selector: string) => {
+        const element = document.querySelector(selector)
+        if (!(element instanceof HTMLElement)) throw new Error(`Missing typography fixture: ${selector}`)
+        return getComputedStyle(element).fontWeight
+      }
       return {
         body: [
-          '.asset-row__body strong',
-          '.titlebar__identity h1',
+          '.asset-row__topline strong',
           '.message--assistant .markdown',
           '.composer textarea',
           '.workspace-card .right-rail-disclosure__title',
           '.project-shelf__copy strong'
         ].map(fontSize),
         caption: [
-          '.asset-row__body span',
+          '.asset-row__project',
           '.message > header',
           '.workspace-card > .right-rail-disclosure__panel > p',
           '.project-shelf__copy span'
         ].map(fontSize),
-        brandHeading: fontSize('.brand-lockup strong')
+        windowTitle: fontSize('.titlebar__identity h1'),
+        workbenchAction: fontSize('.workbench-new-thread span'),
+        sidebarWeights: {
+          workbenchSection: fontWeight('.workbench-section > h2'),
+          workbenchItem: fontWeight('.workbench-row > span:nth-child(2)'),
+          threadHeading: fontWeight('.asset-rail__heading h2'),
+          threadItem: fontWeight('.asset-row__topline strong'),
+          inspectorDisclosure: fontWeight('.right-rail-disclosure__title'),
+          inspectorSubheading: fontWeight('.thread-context-card__group-label'),
+          projectItem: fontWeight('.project-shelf__copy strong')
+        }
       }
     })
     expect(applicationTypography).toEqual({
-      body: Array(6).fill('14px'),
-      caption: Array(4).fill('13px'),
-      brandHeading: '17px'
+      body: ['13px', '14px', '14px', '13px', '13px'],
+      caption: ['12px', '13px', '12px', '12px'],
+      windowTitle: '13px',
+      workbenchAction: '13px',
+      sidebarWeights: {
+        workbenchSection: '500',
+        workbenchItem: '400',
+        threadHeading: '500',
+        threadItem: '600',
+        inspectorDisclosure: '500',
+        inspectorSubheading: '500',
+        projectItem: '500'
+      }
     })
     if (process.env.KODY_QA_SCREENSHOT) {
       await page.screenshot({ path: process.env.KODY_QA_SCREENSHOT, animations: 'disabled' })
@@ -673,16 +771,19 @@ test('creates the first Thread through one idempotent draft request', async () =
       return {
         shellHeight: shell.getBoundingClientRect().height,
         workspaceHeight: workspace.getBoundingClientRect().height,
+        workspaceTop: workspace.getBoundingClientRect().top,
         scrollClientHeight: scroll.clientHeight,
         scrollHeight: scroll.scrollHeight,
         titlebarTop: titlebar.getBoundingClientRect().top,
+        titlebarHeight: titlebar.getBoundingClientRect().height,
         composerBottom: composerDock.getBoundingClientRect().bottom,
         windowScrollY: scrollY,
         documentScrollTop: document.scrollingElement?.scrollTop ?? -1
       }
     })
     expect(longConversationBefore.shellHeight).toBe(viewport.height)
-    expect(longConversationBefore.workspaceHeight).toBe(viewport.height)
+    expect(Math.round(longConversationBefore.workspaceHeight + longConversationBefore.titlebarHeight)).toBe(viewport.height)
+    expect(Math.abs(longConversationBefore.workspaceTop - longConversationBefore.titlebarHeight)).toBeLessThanOrEqual(1)
     expect(longConversationBefore.scrollHeight).toBeGreaterThan(longConversationBefore.scrollClientHeight)
     expect(longConversationBefore.titlebarTop).toBe(0)
     expect(longConversationBefore.composerBottom).toBe(viewport.height)
@@ -727,24 +828,26 @@ test('creates the first Thread through one idempotent draft request', async () =
     expect(populatedShelfBox?.x ?? 0).toBeGreaterThan(viewport.width / 2)
     expect(populatedShelfBox?.width ?? Infinity).toBeLessThanOrEqual(initialRightRailBox?.width ?? 0)
 
-    const threadNavigation = page.getByRole('navigation', { name: 'Threads' })
-    const durableThreadRow = threadNavigation.getByRole('button', { name: new RegExp(prompt) })
+    const threadNavigation = page.getByRole('navigation', { name: 'Thread list' })
+    const durableThreadRow = threadNavigation.locator('.asset-row__open').filter({ hasText: prompt })
     await expect(durableThreadRow).toBeVisible()
     const persisted = JSON.parse(
       await readFile(join(actualUserDataRoot, 'engine', 'state.json'), 'utf8')
     ) as PersistedState
     expect(persisted.projects).toHaveLength(1)
+    expect(persisted.version).toBe(5)
     expect(persisted.threads).toHaveLength(1)
     expect(persisted.workspaces).toHaveLength(1)
     expect(persisted.turns).toHaveLength(1)
     expect(persisted.turns[0]?.permission_mode).toBe('read_only')
     expect(persisted.messages).toHaveLength(2)
     expect(persisted.threads[0]?.title).toBe(prompt)
+    expect(persisted.threads[0]?.workflow_state).toBe('new_progress')
     expect(persisted.threads[0]?.id).toBe(durable.snapshot.thread.id)
     expect(persisted.workspaces[0]?.thread_id).toBe(durable.snapshot.thread.id)
 
     // Opening and abandoning another draft must not leave an empty Thread or Workspace.
-    await page.getByRole('button', { name: 'New Thread', exact: true }).click()
+    await workbenchRail.getByRole('button', { name: 'New Thread', exact: true }).click()
     await expect(page.getByRole('heading', { level: 1, name: 'New conversation' })).toBeVisible()
     await page.getByRole('combobox', { name: 'Message' }).fill('This draft must not be persisted')
     await durableThreadRow.click()
@@ -789,6 +892,18 @@ test('creates the first Thread through one idempotent draft request', async () =
       await page.screenshot({ path: process.env.KODY_QA_LINEBREAK_SCREENSHOT, animations: 'disabled' })
     }
 
+    // Repeated focus commands must work even when every desktop sidebar state is already settled.
+    await composer.focus()
+    await application.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0]?.webContents.send('kody:menu-command', 'focus-assets')
+    })
+    await expect(page.locator('#asset-filter')).toBeFocused()
+    await composer.focus()
+    await application.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0]?.webContents.send('kody:menu-command', 'focus-assets')
+    })
+    await expect(page.locator('#asset-filter')).toBeFocused()
+
     // Menu commands that redirect focus must dismiss the narrow Projects modal first.
     await application.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.setSize(900, 700)
@@ -802,20 +917,33 @@ test('creates the first Thread through one idempotent draft request', async () =
     })
     await expect(projectShelf).toBeHidden()
     await expect(page.locator('#asset-filter')).toBeFocused()
+    const navigationRails = page.locator('#navigation-rails')
+    await expect(navigationRails).toBeVisible()
+    await expect(navigationRails).toHaveAttribute('role', 'dialog')
+    await expect(navigationRails).toHaveAttribute('aria-modal', 'true')
+    await expect(page.locator('[aria-modal="true"]')).toHaveCount(1)
+    await assetRail.getByRole('button', { name: 'Close navigation drawer' }).click()
+    await expect(navigationRails).toBeHidden()
     await expect(page.locator('[aria-modal="true"]')).toHaveCount(0)
 
     // Keep a compact responsive smoke for both independent drawers.
     await application.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.setSize(700, 700)
     })
-    await expect(page.getByRole('separator', { name: 'Resize asset sidebar' })).toHaveCount(0)
+    await expect(page.getByRole('separator', { name: 'Resize Thread list' })).toHaveCount(0)
     await expect(page.getByRole('separator', { name: 'Resize right sidebar' })).toHaveCount(0)
-    const openAssetDrawer = page.getByRole('button', { name: 'Open asset drawer' })
+    const openAssetDrawer = page.getByRole('button', { name: 'Open navigation drawer' })
     await expect(assetRail).toBeHidden()
+    await expect(workbenchRail).toBeHidden()
     await openAssetDrawer.click()
     await expect(assetRail).toBeVisible()
+    await expect(workbenchRail).toBeVisible()
+    await expect(assetRail.getByRole('button', { name: 'Close navigation drawer' })).toBeVisible()
+    await expect(navigationRails).toHaveAttribute('role', 'dialog')
+    await expect(navigationRails).toHaveAttribute('aria-modal', 'true')
+    await expect(page.locator('[aria-modal="true"]')).toHaveCount(1)
     const assetDrawerLayers = await page.evaluate(() => ({
-      drawer: getComputedStyle(document.querySelector('.asset-rail')!).zIndex,
+      drawer: getComputedStyle(document.querySelector('.navigation-rails')!).zIndex,
       scrim: getComputedStyle(document.querySelector('.drawer-scrim')!).zIndex
     }))
     expect(assetDrawerLayers).toEqual({ drawer: '41', scrim: '40' })

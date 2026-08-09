@@ -71,7 +71,13 @@ export function ProjectShelf({
     window.addEventListener('keydown', onKeyDown)
     return () => {
       window.removeEventListener('keydown', onKeyDown)
-      previousFocus?.focus()
+      if (panel?.contains(document.activeElement)) {
+        previousFocus?.focus()
+      } else if (document.activeElement === document.body) {
+        requestAnimationFrame(() => {
+          if (document.activeElement === document.body) previousFocus?.focus()
+        })
+      }
     }
   }, [onOpenChange, open])
 

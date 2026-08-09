@@ -10,7 +10,7 @@ use crate::{
     context::DefaultContextBuilder,
     domain::{
         ContextReference, GitMetadata, Project, ProjectId, ProjectKind, Thread, ThreadId,
-        ThreadStatus, Workspace, WorkspaceId,
+        ThreadStatus, ThreadWorkflowState, Workspace, WorkspaceId,
     },
     error::{KodyError, Result},
     event::EventHub,
@@ -351,6 +351,7 @@ impl KodyEngine {
             title,
             workspace_id,
             status: ThreadStatus::Idle,
+            workflow_state: ThreadWorkflowState::Deferred,
             default_references: imported_project
                 .iter()
                 .map(|project| ContextReference::Project {
@@ -380,6 +381,50 @@ impl KodyEngine {
         }
 
         Ok((thread, workspace, imported_project))
+    }
+
+    /// Sets the user-managed to-do state for a Thread.
+    ///
+    /// Repeating the current value is a no-op so clients can safely retry the
+    /// same request. Active Threads reject workflow changes until their Turn
+    /// releases the execution lease.
+    pub async fn set_thread_workflow_state(
+        &self,
+        thread_id: ThreadId,
+        workflow_state: ThreadWorkflowState,
+    ) -> Result<Thread> {
+        let current = self.store.get_thread(thread_id).await?;
+        if current.status == ThreadStatus::Running {
+            return Err(KodyError::Conflict(format!(
+                "cannot change workflow state while thread {thread_id} has an active turn"
+            )));
+        }
+        if current.workflow_state == workflow_state {
+            return Ok(current);
+        }
+
+        match self
+            .store
+            .transition_thread_workflow_state(thread_id, current.workflow_state, workflow_state)
+            .await
+        {
+            Ok(thread) => Ok(thread),
+            Err(KodyError::Conflict(_)) => {
+                // A concurrent identical request is still an idempotent
+                // success. A different concurrent update remains a stale CAS
+                // conflict so callers cannot silently overwrite it.
+                let latest = self.store.get_thread(thread_id).await?;
+                if latest.status != ThreadStatus::Running && latest.workflow_state == workflow_state
+                {
+                    Ok(latest)
+                } else {
+                    Err(KodyError::Conflict(format!(
+                        "thread {thread_id} workflow state changed concurrently"
+                    )))
+                }
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn add_default_reference(

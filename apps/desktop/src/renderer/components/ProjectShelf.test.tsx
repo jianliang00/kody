@@ -81,4 +81,33 @@ describe('ProjectShelf', () => {
     expect(onExpandedChange).not.toHaveBeenCalled()
     expect(onOpenChange).toHaveBeenCalledWith(true)
   })
+
+  it('does not steal focus back when another surface takes focus while closing', () => {
+    const props = {
+      projects: [project],
+      selectedProjectIds: new Set<string>(),
+      expanded: true,
+      onOpenChange: vi.fn(),
+      onExpandedChange: vi.fn(),
+      onImportProject: async () => undefined,
+      onAddProject: vi.fn()
+    }
+    const { rerender } = render(
+      <>
+        <button type="button">Thread search</button>
+        <ProjectShelf {...props} open />
+      </>
+    )
+    const externalTarget = screen.getByRole('button', { name: 'Thread search' })
+    externalTarget.focus()
+
+    rerender(
+      <>
+        <button type="button">Thread search</button>
+        <ProjectShelf {...props} open={false} />
+      </>
+    )
+
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Thread search' }))
+  })
 })

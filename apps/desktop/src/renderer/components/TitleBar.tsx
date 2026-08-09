@@ -1,4 +1,6 @@
 import {
+  CheckCircle2,
+  LoaderCircle,
   Maximize2,
   Menu,
   Minus,
@@ -7,10 +9,11 @@ import {
   PanelRightClose,
   PanelRightOpen,
   RefreshCcw,
+  RotateCcw,
   Sun,
   X
 } from 'lucide-react'
-import type { ServerStatus, Thread } from '@shared/protocol'
+import type { ServerStatus, Thread, ThreadWorkflowState } from '@shared/protocol'
 
 interface TitleBarProps {
   thread?: Thread
@@ -18,14 +21,19 @@ interface TitleBarProps {
   platform: NodeJS.Platform
   darkTheme: boolean
   railCollapsed: boolean
+  workbenchCollapsed: boolean
+  navigationDrawerOpen: boolean
   showRightSidebar: boolean
   rightSidebarExpanded: boolean
   contextCount: number
   contextActive: boolean
+  workflowPending: boolean
   onOpenRail: () => void
+  onExpandWorkbench: () => void
   onToggleRightSidebar: () => void
   onRetry: () => void
   onToggleTheme: () => void
+  onWorkflowChange: (workflowState: ThreadWorkflowState) => void
   onWindowAction: (action: 'minimize' | 'maximize' | 'close') => void
 }
 
@@ -35,24 +43,62 @@ export function TitleBar({
   platform,
   darkTheme,
   railCollapsed,
+  workbenchCollapsed,
+  navigationDrawerOpen,
   showRightSidebar,
   rightSidebarExpanded,
   contextCount,
   contextActive,
+  workflowPending,
   onOpenRail,
+  onExpandWorkbench,
   onToggleRightSidebar,
   onRetry,
   onToggleTheme,
+  onWorkflowChange,
   onWindowAction
 }: TitleBarProps) {
+  const processed = thread?.status === 'archived' || thread?.workflow_state === 'handled'
+  const workflowLabel = thread?.status === 'running'
+    ? 'In Progress'
+    : processed
+      ? 'Restore to New Progress'
+      : 'Mark as Processed'
+
   return (
     <header className="titlebar">
       <div className="titlebar__leading no-drag">
-        <button className="icon-button rail-mobile-trigger" type="button" onClick={onOpenRail} aria-label="Open asset drawer">
+        <button
+          className="icon-button rail-mobile-trigger"
+          type="button"
+          onClick={onOpenRail}
+          aria-label="Open navigation drawer"
+          aria-controls="navigation-rails"
+          aria-expanded={navigationDrawerOpen}
+        >
           <Menu aria-hidden="true" size={18} />
         </button>
-        {railCollapsed ? (
-          <button className="icon-button rail-desktop-trigger" type="button" onClick={onOpenRail} aria-label="Expand asset rail">
+        {workbenchCollapsed ? (
+          <button
+            className="icon-button rail-desktop-trigger"
+            id="expand-workbench-titlebar"
+            type="button"
+            onClick={onExpandWorkbench}
+            aria-label="Expand workbench sidebar"
+            aria-controls="workbench-rail"
+          >
+            <PanelLeftOpen aria-hidden="true" size={17} />
+          </button>
+        ) : null}
+        {railCollapsed && workbenchCollapsed ? (
+          <button
+            className="icon-button rail-desktop-trigger"
+            id="expand-thread-list-titlebar"
+            type="button"
+            onClick={onOpenRail}
+            aria-label="Expand Thread list"
+            aria-controls="asset-rail"
+          >
             <PanelLeftOpen aria-hidden="true" size={17} />
           </button>
         ) : null}
@@ -60,14 +106,9 @@ export function TitleBar({
 
       <div className="titlebar__identity">
         <h1>{thread?.title || 'New conversation'}</h1>
-        {thread ? (
-          <span className={`thread-badge thread-badge--${thread.status}`}>
-            <span aria-hidden="true" />
-            {thread.status === 'running' ? 'Working' : thread.status}
-          </span>
-        ) : (
+        {!thread ? (
           <span>Thread begins with your first message</span>
-        )}
+        ) : null}
       </div>
 
       <div className="titlebar__actions no-drag">
@@ -81,6 +122,22 @@ export function TitleBar({
             <span aria-hidden="true" />
             <span>{status.phase}</span>
             <RefreshCcw aria-hidden="true" size={12} />
+          </button>
+        ) : null}
+        {thread ? (
+          <button
+            className="titlebar__workflow-action"
+            type="button"
+            aria-label={workflowLabel}
+            disabled={thread.status === 'running' || workflowPending || status.phase !== 'connected'}
+            onClick={() => onWorkflowChange(processed ? 'new_progress' : 'handled')}
+          >
+            {workflowPending
+              ? <LoaderCircle className="spin" aria-hidden="true" size={14} />
+              : processed
+                ? <RotateCcw aria-hidden="true" size={14} />
+                : <CheckCircle2 aria-hidden="true" size={14} />}
+            <span>{workflowLabel}</span>
           </button>
         ) : null}
         <button className="icon-button" type="button" onClick={onToggleTheme} aria-label={`Use ${darkTheme ? 'light' : 'dark'} theme`}>

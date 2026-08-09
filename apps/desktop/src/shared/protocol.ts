@@ -1,6 +1,7 @@
 export type EntityId = string
 
 export type ThreadStatus = 'idle' | 'running' | 'archived'
+export type ThreadWorkflowState = 'new_progress' | 'deferred' | 'handled'
 export type TurnStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 export type PermissionMode = 'read_only' | 'ask' | 'full_access'
 export type ProjectAccess = 'read_only' | 'read_write'
@@ -107,6 +108,7 @@ export interface Thread {
   title: string
   workspace_id: EntityId
   status: ThreadStatus
+  workflow_state: ThreadWorkflowState
   default_references: ContextReference[]
   summary?: string
   external_thread_ids?: Record<string, string>
@@ -427,6 +429,10 @@ export interface RpcMethodMap {
     result: StartedThread
   }
   'thread/get': { params: { thread_id: EntityId }; result: ThreadSnapshot }
+  'thread/workflow/update': {
+    params: { thread_id: EntityId; workflow_state: ThreadWorkflowState }
+    result: Thread
+  }
   'thread/reference/add': {
     params: { thread_id: EntityId; reference: ContextReference }
     result: Thread

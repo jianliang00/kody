@@ -4,7 +4,8 @@ import {
   ASSET_RAIL_LIMITS,
   fitSidebarWidths,
   readStoredSidebarWidth,
-  RIGHT_RAIL_LIMITS
+  RIGHT_RAIL_LIMITS,
+  WORKBENCH_RAIL_WIDTH
 } from './sidebarSizing'
 
 describe('sidebar sizing', () => {
@@ -27,5 +28,21 @@ describe('sidebar sizing', () => {
 
   it('does not reserve space for a sidebar rendered as a drawer', () => {
     expect(fitSidebarWidths(1_000, 400, 480, true, false)).toEqual({ left: 400, right: 480 })
+  })
+
+  it('reserves the fixed Workbench column while fitting the resizable sidebars', () => {
+    const fitted = fitSidebarWidths(
+      1_440,
+      400,
+      480,
+      true,
+      true,
+      WORKBENCH_RAIL_WIDTH
+    )
+
+    expect(WORKBENCH_RAIL_WIDTH + fitted.left + fitted.right)
+      .toBeLessThanOrEqual(1_440 - 448)
+    expect(fitted.left).toBeGreaterThanOrEqual(ASSET_RAIL_LIMITS.minWidth)
+    expect(fitted.right).toBeGreaterThanOrEqual(RIGHT_RAIL_LIMITS.minWidth)
   })
 })

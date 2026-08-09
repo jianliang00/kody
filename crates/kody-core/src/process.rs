@@ -2319,6 +2319,7 @@ mod tests {
                         title: "process test".into(),
                         workspace_id,
                         status: ThreadStatus::Idle,
+                        workflow_state: crate::domain::ThreadWorkflowState::Deferred,
                         default_references: Vec::new(),
                         summary: None,
                         external_thread_ids: Default::default(),

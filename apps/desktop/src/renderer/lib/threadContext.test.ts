@@ -41,6 +41,7 @@ function snapshot(overrides: Partial<ThreadSnapshot> = {}): ThreadSnapshot {
       title: 'Current',
       workspace_id: 'workspace-current',
       status: 'running',
+      workflow_state: 'deferred',
       default_references: [],
       created_at: now,
       updated_at: now

@@ -1,29 +1,36 @@
 import {
-  ChevronRight,
-  FileText,
+  CheckCircle2,
+  Circle,
+  LoaderCircle,
   PanelLeftClose,
+  PanelLeftOpen,
   Search,
-  Settings2,
-  SquarePen,
   X
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import type { DesktopUpdateStatus } from '@shared/bridge'
-import type { ServerStatus, Thread } from '@shared/protocol'
-import { UpdateIndicator } from './UpdateIndicator'
+import type { Project, Thread, ThreadWorkflowState } from '@shared/protocol'
+import {
+  filterWorkbenchThreads,
+  threadWorkflowBucket,
+  threadWorkflowBucketLabel,
+  workbenchSelectionLabel,
+  type WorkbenchSelection
+} from '../lib/workbench'
+import { ThreadWorkflowMenu } from './ThreadWorkflowMenu'
 
 interface AssetRailProps {
   threads: Thread[]
+  projects: Project[]
   activeThreadId?: string
-  status: ServerStatus
-  updateStatus: DesktopUpdateStatus
+  selection: WorkbenchSelection
   open: boolean
+  workbenchCollapsed: boolean
   onClose: () => void
   onCollapse: () => void
-  onNewThread: () => void
+  onExpandWorkbench: () => void
   onSelectThread: (threadId: string) => void
-  onOpenSettings: () => void
-  onUpdateAction: () => void
+  onWorkflowChange: (threadId: string, workflowState: ThreadWorkflowState) => void
+  workflowPendingIds: ReadonlySet<string>
 }
 
 function relativeTime(value: string): string {
@@ -35,136 +42,229 @@ function relativeTime(value: string): string {
   return formatter.format(Math.round(deltaHours / 24), 'day')
 }
 
+function threadProject(thread: Thread, projects: Project[]): Project | undefined {
+  const projectReference = thread.default_references.find((reference) => reference.kind === 'project')
+  return projectReference?.kind === 'project'
+    ? projects.find((project) => project.id === projectReference.project_id)
+    : undefined
+}
+
+interface ThreadListRowProps {
+  thread: Thread
+  project?: Project
+  active: boolean
+  pending: boolean
+  onOpen: () => void
+  onWorkflowChange: (workflowState: ThreadWorkflowState) => void
+}
+
+function ThreadListRow({
+  thread,
+  project,
+  active,
+  pending,
+  onOpen,
+  onWorkflowChange
+}: ThreadListRowProps) {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const bucket = threadWorkflowBucket(thread)
+  const toggleTarget: ThreadWorkflowState = bucket === 'handled' ? 'new_progress' : 'handled'
+  const toggleLabel = thread.status === 'running'
+    ? `In Progress: ${thread.title}`
+    : bucket === 'handled'
+      ? `Restore ${thread.title} to New Progress`
+      : `Mark ${thread.title} as Processed`
+
+  return (
+    <li
+      className={`asset-row asset-row--thread asset-row--workflow-${bucket}${active ? ' asset-row--active' : ''}`}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        if (thread.status !== 'running' && !pending) setMenuOpen(true)
+      }}
+    >
+      <button
+        className="asset-row__status-action"
+        type="button"
+        aria-label={toggleLabel}
+        disabled={thread.status === 'running' || pending}
+        onClick={() => onWorkflowChange(toggleTarget)}
+      >
+        <span className={`asset-row__status asset-row__status--${bucket}`}>
+          {pending
+            ? <LoaderCircle className="spin" aria-hidden="true" size={16} />
+            : bucket === 'handled'
+              ? <CheckCircle2 aria-hidden="true" size={17} />
+              : <Circle aria-hidden="true" size={17} />}
+        </span>
+      </button>
+      <button
+        className="asset-row__open"
+        type="button"
+        aria-current={active ? 'page' : undefined}
+        onClick={onOpen}
+        onKeyDown={(event) => {
+          if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') {
+            event.preventDefault()
+            if (thread.status !== 'running' && !pending) setMenuOpen(true)
+          }
+        }}
+      >
+        <span className="asset-row__content">
+          <span className="asset-row__topline">
+            <strong>{thread.title}</strong>
+            <time dateTime={thread.updated_at}>{relativeTime(thread.updated_at)}</time>
+          </span>
+          <span className="asset-row__meta">
+            <span className="asset-row__project">{project?.name ?? 'No Project'}</span>
+            <span className={`asset-row__badge asset-row__badge--${bucket}`}>
+              {threadWorkflowBucketLabel(bucket)}
+            </span>
+          </span>
+          <span className="asset-row__summary">
+            {thread.summary || (thread.status === 'running' ? 'Agent is working…' : 'No summary yet')}
+          </span>
+        </span>
+      </button>
+      <ThreadWorkflowMenu
+        thread={thread}
+        open={menuOpen}
+        pending={pending}
+        onOpenChange={setMenuOpen}
+        onWorkflowChange={onWorkflowChange}
+      />
+    </li>
+  )
+}
+
 export function AssetRail({
   threads,
+  projects,
   activeThreadId,
-  status,
-  updateStatus,
+  selection,
   open,
+  workbenchCollapsed,
   onClose,
   onCollapse,
-  onNewThread,
+  onExpandWorkbench,
   onSelectThread,
-  onOpenSettings,
-  onUpdateAction
+  onWorkflowChange,
+  workflowPendingIds
 }: AssetRailProps) {
   const [query, setQuery] = useState('')
   const normalizedQuery = query.trim().toLocaleLowerCase()
-  const visibleThreads = useMemo(
-    () => threads.filter((thread) => thread.title.toLocaleLowerCase().includes(normalizedQuery)),
-    [threads, normalizedQuery]
+  const selectionThreads = useMemo(
+    () => filterWorkbenchThreads(threads, selection),
+    [selection, threads]
   )
+  const visibleThreads = useMemo(
+    () => selectionThreads.filter((thread) => (
+      `${thread.title} ${thread.summary ?? ''}`.toLocaleLowerCase().includes(normalizedQuery)
+    )),
+    [normalizedQuery, selectionThreads]
+  )
+  const selectionLabel = workbenchSelectionLabel(selection, projects)
 
   return (
-    <aside id="asset-rail" className={`asset-rail${open ? ' asset-rail--open' : ''}`} aria-label="Kody assets">
+    <aside
+      id="asset-rail"
+      className={`asset-rail${open ? ' asset-rail--open' : ''}`}
+      aria-label="Threads"
+    >
       <div className="asset-rail__window-drag" aria-hidden="true" />
-      <header className="asset-rail__brand">
-        <div className="brand-lockup">
-          <span className="brand-mark" aria-hidden="true"><span /><span /><span /></span>
-          <div>
-            <strong>Kody</strong>
-            <span>Agent workspace</span>
-          </div>
+      <header className="asset-rail__header">
+        <div className="asset-rail__heading">
+          <span>Threads</span>
+          <h2>{selectionLabel}</h2>
         </div>
-        <button className="icon-button rail-mobile-close" type="button" onClick={onClose} aria-label="Close asset drawer">
-          <X aria-hidden="true" size={17} />
-        </button>
-        <button className="icon-button rail-desktop-collapse" type="button" onClick={onCollapse} aria-label="Collapse asset rail">
-          <PanelLeftClose aria-hidden="true" size={17} />
-        </button>
+        <div className="asset-rail__header-actions">
+          <button
+            className="icon-button"
+            type="button"
+            onClick={() => document.querySelector<HTMLInputElement>('#asset-filter')?.focus()}
+            aria-label="Search Threads"
+            aria-controls="asset-filter"
+          >
+            <Search aria-hidden="true" size={15} />
+          </button>
+          {workbenchCollapsed ? (
+            <button
+              className="icon-button workbench-mobile-expand"
+              id="expand-workbench"
+              type="button"
+              onClick={onExpandWorkbench}
+              aria-label="Expand workbench sidebar"
+              aria-controls="workbench-rail"
+            >
+              <PanelLeftOpen aria-hidden="true" size={16} />
+            </button>
+          ) : null}
+          <button
+            className="icon-button rail-desktop-collapse"
+            type="button"
+            onClick={onCollapse}
+            aria-label="Collapse Thread list"
+            aria-controls="asset-rail"
+          >
+            <PanelLeftClose aria-hidden="true" size={16} />
+          </button>
+          <button
+            className="icon-button rail-mobile-close"
+            type="button"
+            onClick={onClose}
+            aria-label="Close navigation drawer"
+          >
+            <X aria-hidden="true" size={17} />
+          </button>
+        </div>
       </header>
 
-      <div className="asset-actions">
-        <button className="primary-action" type="button" onClick={onNewThread}>
-          <SquarePen aria-hidden="true" size={16} />
-          <span>New Thread</span>
-        </button>
-      </div>
-
-      <label className="asset-search">
-        <span>Filter assets</span>
+      <label className={`asset-search${query ? ' asset-search--active' : ''}`}>
+        <span>Search Threads</span>
         <span className="asset-search__control">
-          <Search aria-hidden="true" size={15} />
+          <Search aria-hidden="true" size={14} />
           <input
             id="asset-filter"
             type="search"
+            tabIndex={query ? 0 : -1}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Threads"
+            placeholder="Search Threads"
           />
         </span>
       </label>
 
-      <nav className="asset-navigation" aria-label="Threads">
-        <section className="asset-section" aria-labelledby="thread-list-title">
-          <header className="asset-section__header">
-            <h2 id="thread-list-title">Threads</h2>
-            <span>{visibleThreads.length}</span>
-          </header>
-          {visibleThreads.length === 0 ? (
-            <p className="asset-list-empty">{query ? 'No matching Threads' : 'No Threads yet'}</p>
-          ) : (
-            <ul className="asset-list">
-              {visibleThreads.map((thread) => (
-                <li key={thread.id}>
-                  <button
-                    className="asset-row asset-row--thread"
-                    type="button"
-                    aria-current={activeThreadId === thread.id ? 'page' : undefined}
-                    onClick={() => {
-                      onSelectThread(thread.id)
-                      onClose()
-                    }}
-                  >
-                    <span className="asset-row__icon asset-row__icon--thread">
-                      <FileText aria-hidden="true" size={15} />
-                    </span>
-                    <span className="asset-row__body">
-                      <strong>{thread.title}</strong>
-                      <span>
-                        {thread.status === 'running'
-                          ? 'Working now'
-                          : thread.status === 'archived'
-                            ? `Archived · ${relativeTime(thread.updated_at)}`
-                            : relativeTime(thread.updated_at)}
-                      </span>
-                    </span>
-                    <span className={`thread-state thread-state--${thread.status}`} aria-label={thread.status} />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+      <nav className="asset-navigation" aria-label="Thread list">
+        <div className="asset-list-meta">
+          <span>{visibleThreads.length} {visibleThreads.length === 1 ? 'Thread' : 'Threads'}</span>
+          {query ? <span>Filtered</span> : null}
+        </div>
+        {visibleThreads.length === 0 ? (
+          <p className="asset-list-empty">
+            {query ? 'No matching Threads' : `No Threads in ${selectionLabel}`}
+          </p>
+        ) : (
+          <ul className="asset-list">
+            {visibleThreads.map((thread) => {
+              const project = threadProject(thread, projects)
+              return (
+                <ThreadListRow
+                  key={thread.id}
+                  thread={thread}
+                  project={project}
+                  active={activeThreadId === thread.id}
+                  pending={workflowPendingIds.has(thread.id)}
+                  onOpen={() => {
+                    onSelectThread(thread.id)
+                    onClose()
+                  }}
+                  onWorkflowChange={(workflowState) => onWorkflowChange(thread.id, workflowState)}
+                />
+              )
+            })}
+          </ul>
+        )}
       </nav>
-
-      <footer className="asset-rail__footer">
-        <div className="asset-rail__utilities" role="group" aria-label="Application controls">
-          <button
-            className="sidebar-utility"
-            type="button"
-            onClick={() => {
-              onOpenSettings()
-              onClose()
-            }}
-            aria-label="Open model settings"
-          >
-            <span className="sidebar-utility__icon" aria-hidden="true"><Settings2 size={15} /></span>
-            <span className="sidebar-utility__copy">
-              <strong>Settings</strong>
-              <span>Models, providers & account</span>
-            </span>
-            <ChevronRight className="sidebar-utility__chevron" aria-hidden="true" size={14} />
-          </button>
-        </div>
-        <div className="asset-rail__status-row">
-          <div className="asset-rail__connection" role="status">
-            <span className={`connection-dot connection-dot--${status.phase}`} aria-hidden="true" />
-            <span>{status.phase === 'connected' ? 'Local server connected' : status.phase}</span>
-          </div>
-          <UpdateIndicator status={updateStatus} onAction={onUpdateAction} />
-        </div>
-      </footer>
     </aside>
   )
 }

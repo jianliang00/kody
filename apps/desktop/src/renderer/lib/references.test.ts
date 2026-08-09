@@ -30,6 +30,7 @@ const threads: Thread[] = [
     title: 'Current work',
     workspace_id: 'workspace-current',
     status: 'running',
+    workflow_state: 'deferred',
     default_references: [],
     created_at: '2026-07-12T08:00:00Z',
     updated_at: '2026-07-12T08:00:00Z'
@@ -39,6 +40,7 @@ const threads: Thread[] = [
     title: 'OAuth design',
     workspace_id: 'workspace-design',
     status: 'idle',
+    workflow_state: 'new_progress',
     default_references: [],
     summary: 'Token flow and security decisions',
     created_at: '2026-07-11T08:00:00Z',
@@ -49,6 +51,7 @@ const threads: Thread[] = [
     title: 'Legacy notes',
     workspace_id: 'workspace-archive',
     status: 'archived',
+    workflow_state: 'handled',
     default_references: [],
     created_at: '2026-07-10T08:00:00Z',
     updated_at: '2026-07-10T08:00:00Z'
@@ -144,7 +147,7 @@ describe('composer mention parsing', () => {
 })
 
 describe('mention candidates', () => {
-  it('omits the current thread, keeps archived threads, and defaults projects to read-only', () => {
+  it('omits the current thread, keeps processed threads, and defaults projects to read-only', () => {
     const candidates = createCandidates(threads, projects, 'thread-current')
 
     expect(candidates.map((candidate) => candidate.key)).toEqual([
@@ -152,7 +155,8 @@ describe('mention candidates', () => {
       'thread:thread-archive',
       'project:project-web'
     ])
-    expect(candidates[1]?.detail).toBe('Archived · Durable conversation')
+    expect(candidates[0]?.detail).toBe('New Progress · Token flow and security decisions')
+    expect(candidates[1]?.detail).toBe('Processed · Durable conversation')
     expect(candidates[2]?.reference).toEqual(projectReference('project-web'))
   })
 

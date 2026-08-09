@@ -52,6 +52,7 @@ const snapshot: ThreadSnapshot = {
     title: 'Input test',
     workspace_id: 'workspace-1',
     status: 'running',
+    workflow_state: 'deferred',
     default_references: [],
     created_at: '2026-07-13T00:00:00Z',
     updated_at: '2026-07-13T00:00:00Z'
@@ -89,6 +90,17 @@ function renderConversation(onUserInput = vi.fn(async () => undefined)) {
   )
   return onUserInput
 }
+
+describe('conversation document header', () => {
+  it('separates Thread identity and metadata from the window toolbar', () => {
+    renderConversation()
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Input test' })).toBeTruthy()
+    expect(screen.getByText('In Progress')).toBeTruthy()
+    expect(screen.getByText('No Project')).toBeTruthy()
+    expect(screen.getByText('0 messages')).toBeTruthy()
+  })
+})
 
 describe('structured user input', () => {
   it('renders labelled choices, Other text, and a protected secret field', async () => {

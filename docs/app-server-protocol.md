@@ -29,6 +29,7 @@ HTTP requires `Authorization: Bearer <token>` and `Content-Type: application/jso
 | `thread/create` | Create a Thread and its Workspace; optional `working_directory` auto-imports a Project |
 | `thread/create-and-start` | Idempotently create a Thread/Workspace and prepare its first Turn from one draft request |
 | `thread/get`, `thread/list`, `thread/messages` | Read Thread state/history; `thread/get` also returns pending approvals, pending structured user input, managed processes, and artifact metadata |
+| `thread/workflow/update` | Idempotently move an idle Thread between to-do workflow states |
 | `thread/reference/add` | Add a persistent default Thread or Project reference |
 | `turn/start`, `turn/get`, `turn/cancel` | Run and control an Agent Turn, including its permission mode |
 | `approval/respond` | Resolve a pending command-execution approval |
@@ -216,6 +217,32 @@ Desktop clients should keep a new conversation entirely local until the first me
 ```
 
 The result contains `thread`, `workspace`, optional `imported_project`, and `turn`. Concurrent retries with the same request ID and payload return the same entities in their latest durable state and do not execute another Turn; reusing the ID with another payload is rejected. If Turn preparation fails, entities created by this request are compensated before the error is returned. The process-local idempotency record is intentionally not a cross-restart transaction log. The placeholder title is replaced after the first completed Turn; `thread_updated` announces the generated title.
+
+## Thread to-do workflow
+
+Every Thread includes a durable `workflow_state`, independent from its execution `status`. The workflow values are:
+
+- `new_progress`: the latest Turn finished and has progress for the user to review.
+- `deferred`: the Thread remains on the to-do list for later; this is the default for a newly created Thread.
+- `handled`: the user considers the Thread dealt with.
+
+Set the value with `thread/workflow/update` (or `thread.workflow.update`):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "defer-thread",
+  "method": "thread/workflow/update",
+  "params": {
+    "thread_id": "THREAD_UUID",
+    "workflow_state": "deferred"
+  }
+}
+```
+
+The result is the updated Thread object. Repeating its current value is an idempotent no-op. A Thread with `status: "running"` rejects user workflow changes with a conflict; when its status returns from `running` to `idle`, the server atomically sets `workflow_state` to `new_progress`. `initialize.capabilities.thread_workflow` advertises this behavior.
+
+Version 5 state snapshots persist the new field. When versions 1–4 are opened, legacy idle/running Threads become `deferred`, while legacy archived Threads become idle `handled` Threads.
 
 ## References
 

@@ -8,6 +8,7 @@ function thread(title: string): Thread {
     workspace_id: '019f59e3-8ecd-79c1-bc26-0b18f6650539',
     title,
     status: 'idle',
+    workflow_state: 'deferred',
     default_references: [],
     created_at: '2026-07-13T00:00:00Z',
     updated_at: '2026-07-13T00:00:00Z'

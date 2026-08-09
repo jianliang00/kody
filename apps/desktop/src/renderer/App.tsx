@@ -35,6 +35,7 @@ import type {
   ServerStatus,
   Thread,
   ThreadSnapshot,
+  ThreadWorkflowState,
   Turn,
   UploadedImage,
   UserInputAnswers
@@ -53,6 +54,7 @@ import {
 import { SidebarResizeHandle } from './components/SidebarResizeHandle'
 import { ThreadContextCard } from './components/ThreadContextCard'
 import { TitleBar } from './components/TitleBar'
+import { WorkbenchRail } from './components/WorkbenchRail'
 import { getKodyBridge } from './lib/mockBridge'
 import { referenceKey, upsertReference } from './lib/references'
 import { isProcessActive, shouldRefreshProcessSnapshot } from './lib/processes'
@@ -71,14 +73,22 @@ import {
   fitSidebarWidths,
   MINIMUM_CONVERSATION_WIDTH,
   readStoredSidebarWidth,
-  RIGHT_RAIL_LIMITS
+  RIGHT_RAIL_LIMITS,
+  WORKBENCH_RAIL_WIDTH
 } from './lib/sidebarSizing'
+import {
+  readStoredWorkbenchSelection,
+  validateWorkbenchSelection,
+  WORKBENCH_SELECTION_STORAGE_KEY,
+  type WorkbenchSelection
+} from './lib/workbench'
 
 type ExtendedBridge = KodyDesktopBridge & { copyText?: (text: string) => Promise<void> }
 
 const TERMINAL_EVENTS = new Set(['turn_completed', 'turn_failed', 'turn_cancelled'])
 const ASSET_RAIL_WIDTH_KEY = 'kody.assetRailWidth'
 const RIGHT_RAIL_WIDTH_KEY = 'kody.rightRailWidth'
+const WORKBENCH_COLLAPSED_KEY = 'kody.workbenchCollapsed'
 
 function appendLiveEvent(history: EventEnvelope[], envelope: EventEnvelope): EventEnvelope[] {
   const last = history.at(-1)
@@ -220,6 +230,7 @@ export function App() {
   const [composerDrafts, setComposerDrafts] = useState<Record<string, ComposerDraftState>>({})
   const [eventsByThread, setEventsByThread] = useState<Record<string, EventEnvelope[]>>({})
   const [runningTurns, setRunningTurns] = useState<Record<string, string>>({})
+  const [workflowPendingIds, setWorkflowPendingIds] = useState<Set<string>>(new Set())
   const [resolvingApprovals, setResolvingApprovals] = useState<Set<string>>(new Set())
   const [resolvingUserInputs, setResolvingUserInputs] = useState<Set<string>>(new Set())
   const [stoppingProcessIds, setStoppingProcessIds] = useState<Set<string>>(new Set())
@@ -234,8 +245,16 @@ export function App() {
   const [railCollapsed, setRailCollapsed] = useState(
     () => window.localStorage.getItem('kody.railCollapsed') === 'true'
   )
+  const [workbenchCollapsed, setWorkbenchCollapsed] = useState(
+    () => window.localStorage.getItem(WORKBENCH_COLLAPSED_KEY) === 'true'
+  )
+  const [workbenchSelection, setWorkbenchSelection] = useState<WorkbenchSelection>(
+    () => readStoredWorkbenchSelection(window.localStorage)
+  )
+  const [projectsHydrated, setProjectsHydrated] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [projectShelfOpen, setProjectShelfOpen] = useState(false)
+  const [focusThreadSearchRequest, setFocusThreadSearchRequest] = useState(0)
   const [rightRailSections, setRightRailSections] = useState(
     () => readStoredRightRailSections(window.localStorage)
   )
@@ -252,8 +271,8 @@ export function App() {
   const [darkThemeOverride, setDarkThemeOverride] = useState(initialThemeOverride)
   const darkTheme = darkThemeOverride ?? systemDarkTheme
   const [composerDockHeight, setComposerDockHeight] = useState(0)
-  const inspectorIsNarrow = useMediaQuery('(max-width: 72rem)')
-  const railIsNarrow = useMediaQuery('(max-width: 48rem)')
+  const inspectorIsNarrow = useMediaQuery('(max-width: 78rem)')
+  const railIsNarrow = useMediaQuery('(max-width: 64rem)')
   const viewportWidth = useViewportWidth()
 
   const appShellRef = useRef<HTMLDivElement>(null)
@@ -268,25 +287,30 @@ export function App() {
   const processRefreshRequestRef = useRef(new Map<string, number>())
   const startTurnRef = useRef(false)
   const cancelTurnRef = useRef(false)
+  const workflowUpdateRef = useRef(new Set<string>())
   const approvalRef = useRef(new Set<string>())
   const userInputRef = useRef(new Set<string>())
   const processStopRef = useRef(new Set<string>())
   const modelLoadRef = useRef(new Set<string>())
+  const focusThreadSearchRef = useRef(false)
   const statusRef = useRef<ServerStatus['phase']>('starting')
   const hasHydratedRef = useRef(false)
   const preferDraftRef = useRef(false)
   const desktopAssetRailVisible = !railIsNarrow && !railCollapsed
+  const desktopWorkbenchVisible = !railIsNarrow && !workbenchCollapsed
   const desktopRightRailVisible = !inspectorIsNarrow && !rightRailCollapsed
   const fittedSidebarWidths = useMemo(() => fitSidebarWidths(
     viewportWidth,
     assetRailWidth,
     rightRailWidth,
     desktopAssetRailVisible,
-    desktopRightRailVisible
+    desktopRightRailVisible,
+    desktopWorkbenchVisible ? WORKBENCH_RAIL_WIDTH : 0
   ), [
     assetRailWidth,
     desktopAssetRailVisible,
     desktopRightRailVisible,
+    desktopWorkbenchVisible,
     rightRailWidth,
     viewportWidth
   ])
@@ -296,6 +320,7 @@ export function App() {
       ASSET_RAIL_LIMITS.maxWidth,
       viewportWidth
         - MINIMUM_CONVERSATION_WIDTH
+        - (desktopWorkbenchVisible ? WORKBENCH_RAIL_WIDTH : 0)
         - (desktopRightRailVisible ? fittedSidebarWidths.right : 0)
     )
   )
@@ -305,12 +330,16 @@ export function App() {
       RIGHT_RAIL_LIMITS.maxWidth,
       viewportWidth
         - MINIMUM_CONVERSATION_WIDTH
+        - (desktopWorkbenchVisible ? WORKBENCH_RAIL_WIDTH : 0)
         - (desktopAssetRailVisible ? fittedSidebarWidths.left : 0)
     )
   )
   const appShellStyle = {
-    '--asset-rail-width': `${fittedSidebarWidths.left}px`,
-    '--right-rail-width': `${fittedSidebarWidths.right}px`
+    '--workbench-rail-width': `${workbenchCollapsed ? 0 : WORKBENCH_RAIL_WIDTH}px`,
+    '--asset-rail-width': `${railCollapsed ? 0 : fittedSidebarWidths.left}px`,
+    '--right-rail-width': `${rightRailCollapsed && !inspectorIsNarrow
+      ? 0
+      : fittedSidebarWidths.right}px`
   } as CSSProperties
 
   const applySnapshot = useCallback((nextSnapshot: ThreadSnapshot): void => {
@@ -413,6 +442,55 @@ export function App() {
     }
   }, [applySnapshot, bridge])
 
+  const handleThreadWorkflowChange = useCallback(async (
+    threadId: string,
+    workflowState: ThreadWorkflowState
+  ): Promise<void> => {
+    if (workflowUpdateRef.current.has(threadId)) return
+    const currentThread = threads.find((thread) => thread.id === threadId)
+      ?? (snapshot?.thread.id === threadId ? snapshot.thread : undefined)
+    if (!currentThread || currentThread.status === 'running') return
+    if (currentThread.workflow_state === workflowState) return
+
+    workflowUpdateRef.current.add(threadId)
+    threadRefreshRequestRef.current.set(
+      threadId,
+      (threadRefreshRequestRef.current.get(threadId) ?? 0) + 1
+    )
+    processRefreshRequestRef.current.set(
+      threadId,
+      (processRefreshRequestRef.current.get(threadId) ?? 0) + 1
+    )
+    setWorkflowPendingIds((current) => new Set(current).add(threadId))
+    setAppError('')
+    try {
+      const updated = threadProjectionRef.current.reconcile(await bridge.rpc(
+        'thread/workflow/update',
+        { thread_id: threadId, workflow_state: workflowState }
+      ))
+      setThreads((current) => current.map((thread) => thread.id === threadId ? updated : thread))
+      setSnapshot((current) => current?.thread.id === threadId
+        ? { ...current, thread: updated }
+        : current)
+      setAnnouncement(
+        workflowState === 'handled'
+          ? `Marked ${updated.title} as Processed`
+          : workflowState === 'deferred'
+            ? `Moved ${updated.title} to Continue Later`
+            : `Moved ${updated.title} to New Progress`
+      )
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : 'Could not update the Thread workflow.')
+    } finally {
+      workflowUpdateRef.current.delete(threadId)
+      setWorkflowPendingIds((current) => {
+        const next = new Set(current)
+        next.delete(threadId)
+        return next
+      })
+    }
+  }, [bridge, snapshot, threads])
+
   const refreshImageCatalog = useCallback(async (): Promise<void> => {
     const result = await bridge.rpc('image/provider/list', {})
     setImageProviders(result.providers)
@@ -447,6 +525,7 @@ export function App() {
       ])
       setThreads(threadProjectionRef.current.reconcileAll(threadResult.threads))
       setProjects(projectResult.projects)
+      setProjectsHydrated(true)
       setProviders(providerResult.providers)
       await refreshImageCatalog()
 
@@ -629,6 +708,19 @@ export function App() {
   }, [railCollapsed])
 
   useEffect(() => {
+    window.localStorage.setItem(WORKBENCH_COLLAPSED_KEY, String(workbenchCollapsed))
+  }, [workbenchCollapsed])
+
+  useEffect(() => {
+    window.localStorage.setItem(WORKBENCH_SELECTION_STORAGE_KEY, workbenchSelection)
+  }, [workbenchSelection])
+
+  useEffect(() => {
+    if (!projectsHydrated) return
+    setWorkbenchSelection((current) => validateWorkbenchSelection(current, projects))
+  }, [projects, projectsHydrated])
+
+  useEffect(() => {
     window.localStorage.setItem(
       RIGHT_RAIL_SECTIONS_STORAGE_KEY,
       serializeRightRailSections(rightRailSections)
@@ -667,12 +759,25 @@ export function App() {
     const inspectorIsDrawer = inspectorOpen && inspectorIsNarrow
     if (!railIsDrawer && !inspectorIsDrawer) return
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
-    const drawer = document.querySelector<HTMLElement>(railIsDrawer ? '.asset-rail' : '.inspector')
+    const drawer = document.querySelector<HTMLElement>(railIsDrawer ? '.navigation-rails' : '.inspector')
     if (!drawer) return
     const focusableSelector = 'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], summary'
     const visibleFocusables = (): HTMLElement[] => (
       [...drawer.querySelectorAll<HTMLElement>(focusableSelector)]
-        .filter((element) => !element.closest('[hidden]'))
+        .filter((element) => {
+          let current: HTMLElement | null = element
+          while (current && drawer.contains(current)) {
+            const style = window.getComputedStyle(current)
+            if (
+              current.hidden
+              || current.hasAttribute('inert')
+              || style.display === 'none'
+              || style.visibility === 'hidden'
+            ) return false
+            current = current.parentElement
+          }
+          return true
+        })
     )
     visibleFocusables()[0]?.focus()
     const trapFocus = (event: KeyboardEvent): void => {
@@ -694,6 +799,24 @@ export function App() {
       previousFocus?.focus()
     }
   }, [inspectorIsNarrow, inspectorOpen, railIsNarrow, railOpen])
+
+  useEffect(() => {
+    if (!focusThreadSearchRef.current || projectShelfOpen) return
+    if (railIsNarrow ? !railOpen : railCollapsed) return
+    let focusFrame: number | undefined
+    const settleFrame = requestAnimationFrame(() => {
+      focusFrame = requestAnimationFrame(() => {
+        const search = document.querySelector<HTMLInputElement>('#asset-filter')
+        if (!search) return
+        search.focus()
+        if (document.activeElement === search) focusThreadSearchRef.current = false
+      })
+    })
+    return () => {
+      cancelAnimationFrame(settleFrame)
+      if (focusFrame !== undefined) cancelAnimationFrame(focusFrame)
+    }
+  }, [focusThreadSearchRequest, projectShelfOpen, railCollapsed, railIsNarrow, railOpen])
 
   useEffect(() => {
     const removeEventListener = bridge.onEvent((envelope) => {
@@ -1428,6 +1551,7 @@ export function App() {
   useEffect(() => bridge.onCommand((command) => {
     if (command === 'new-thread') {
       setProjectShelfOpen(false)
+      setWorkbenchSelection('new_progress')
       beginDraft()
       return
     }
@@ -1437,13 +1561,14 @@ export function App() {
       return
     }
     if (command === 'focus-assets') {
+      focusThreadSearchRef.current = true
+      setFocusThreadSearchRequest((current) => current + 1)
       setProjectShelfOpen(false)
       setRailCollapsed(false)
       if (railIsNarrow) {
         setInspectorOpen(false)
         setRailOpen(true)
       }
-      requestAnimationFrame(() => document.querySelector<HTMLInputElement>('#asset-filter')?.focus())
       return
     }
     if (command === 'open-settings') {
@@ -1459,6 +1584,7 @@ export function App() {
       setProjectShelfOpen(false)
       if (railIsNarrow) {
         setInspectorOpen(false)
+        setRailCollapsed(false)
         setRailOpen((current) => !current)
       }
       else setRailCollapsed((current) => !current)
@@ -1510,7 +1636,7 @@ export function App() {
       assetRailResizeMax
     )
     setAssetRailWidth(nextWidth)
-    setAnnouncement(`Asset sidebar width ${nextWidth} pixels`)
+    setAnnouncement(`Thread list width ${nextWidth} pixels`)
   }, [assetRailResizeMax])
 
   const resizeRightRail = useCallback((width: number): void => {
@@ -1555,7 +1681,7 @@ export function App() {
   return (
     <div
       ref={appShellRef}
-      className={`app-shell${railCollapsed ? ' app-shell--rail-collapsed' : ''}${rightRailCollapsed && !inspectorIsNarrow ? ' app-shell--right-rail-collapsed' : ''}${bridge.platform === 'darwin' ? ' app-shell--darwin' : ''}`}
+      className={`app-shell${railCollapsed ? ' app-shell--rail-collapsed' : ''}${workbenchCollapsed ? ' app-shell--workbench-collapsed' : ''}${rightRailCollapsed && !inspectorIsNarrow ? ' app-shell--right-rail-collapsed' : ''}${bridge.platform === 'darwin' ? ' app-shell--darwin' : ''}`}
       style={appShellStyle}
     >
       <a className="skip-link" href="#main-content">Skip to conversation</a>
@@ -1563,19 +1689,67 @@ export function App() {
         {announcement}
       </div>
 
-      <AssetRail
-        threads={threads}
-        activeThreadId={activeThreadId}
-        status={status}
-        updateStatus={updateStatus}
-        open={railOpen}
-        onClose={() => setRailOpen(false)}
-        onCollapse={() => setRailCollapsed(true)}
-        onNewThread={() => beginDraft()}
-        onSelectThread={(threadId) => void selectThread(threadId)}
-        onOpenSettings={openProviderSettings}
-        onUpdateAction={handleUpdateAction}
-      />
+      <div
+        id="navigation-rails"
+        className={`navigation-rails${railOpen ? ' navigation-rails--open' : ''}`}
+        role={railOpen && railIsNarrow ? 'dialog' : undefined}
+        aria-modal={railOpen && railIsNarrow ? true : undefined}
+        aria-label={railOpen && railIsNarrow ? 'Navigation' : undefined}
+      >
+        <WorkbenchRail
+          threads={threads}
+          projects={projects}
+          selection={workbenchSelection}
+          status={status}
+          updateStatus={updateStatus}
+          threadListCollapsed={railCollapsed}
+          onSelectionChange={setWorkbenchSelection}
+          onNewThread={() => {
+            setWorkbenchSelection('new_progress')
+            beginDraft()
+          }}
+          onImportProject={handleImportProject}
+          onOpenSettings={() => {
+            openProviderSettings()
+            setRailOpen(false)
+          }}
+          onUpdateAction={handleUpdateAction}
+          onCollapse={() => {
+            setWorkbenchCollapsed(true)
+            requestAnimationFrame(() => {
+              const target = railIsNarrow
+                ? document.querySelector<HTMLButtonElement>('#expand-workbench')
+                : document.querySelector<HTMLButtonElement>('#expand-workbench-titlebar')
+              target?.focus()
+            })
+          }}
+          onExpandThreadList={() => setRailCollapsed(false)}
+        />
+        <AssetRail
+          threads={threads}
+          projects={projects}
+          activeThreadId={activeThreadId}
+          selection={workbenchSelection}
+          open={railOpen}
+          workbenchCollapsed={workbenchCollapsed}
+          onClose={() => setRailOpen(false)}
+          onCollapse={() => {
+            setRailCollapsed(true)
+            requestAnimationFrame(() => {
+              const target = workbenchCollapsed
+                ? document.querySelector<HTMLButtonElement>('#expand-thread-list-titlebar')
+                : document.querySelector<HTMLButtonElement>('#expand-thread-list-workbench')
+              target?.focus()
+            })
+          }}
+          onExpandWorkbench={() => setWorkbenchCollapsed(false)}
+          onSelectThread={(threadId) => void selectThread(threadId)}
+          onWorkflowChange={(threadId, workflowState) => {
+            void handleThreadWorkflowChange(threadId, workflowState)
+          }}
+          workflowPendingIds={workflowPendingIds}
+        />
+      </div>
 
       {((railOpen && railIsNarrow)
         || (inspectorOpen && inspectorIsNarrow)
@@ -1596,31 +1770,38 @@ export function App() {
         />
       ) : null}
 
-      <section className="conversation-workspace">
-        <TitleBar
-          thread={snapshot?.thread}
-          status={status}
-          platform={bridge.platform}
-          darkTheme={darkTheme}
-          railCollapsed={railCollapsed}
-          showRightSidebar={!inspectorIsNarrow || Boolean(snapshot)}
-          rightSidebarExpanded={inspectorIsNarrow
-            ? inspectorOpen || projectShelfOpen
-            : !rightRailCollapsed}
-          contextCount={contextCount}
-          contextActive={contextActive}
-          onOpenRail={() => {
-            setInspectorOpen(false)
-            setProjectShelfOpen(false)
-            setRailCollapsed(false)
-            setRailOpen(true)
-          }}
-          onToggleRightSidebar={toggleRightSidebar}
-          onRetry={() => void bootstrap()}
-          onToggleTheme={() => setDarkThemeOverride(!darkTheme)}
-          onWindowAction={(action) => void bridge.windowAction(action)}
-        />
+      <TitleBar
+        thread={snapshot?.thread}
+        status={status}
+        platform={bridge.platform}
+        darkTheme={darkTheme}
+        railCollapsed={railCollapsed}
+        workbenchCollapsed={workbenchCollapsed}
+        navigationDrawerOpen={railOpen && railIsNarrow}
+        showRightSidebar={!inspectorIsNarrow || Boolean(snapshot)}
+        rightSidebarExpanded={inspectorIsNarrow
+          ? inspectorOpen || projectShelfOpen
+          : !rightRailCollapsed}
+        contextCount={contextCount}
+        contextActive={contextActive}
+        workflowPending={snapshot ? workflowPendingIds.has(snapshot.thread.id) : false}
+        onOpenRail={() => {
+          setInspectorOpen(false)
+          setProjectShelfOpen(false)
+          setRailCollapsed(false)
+          setRailOpen(true)
+        }}
+        onExpandWorkbench={() => setWorkbenchCollapsed(false)}
+        onToggleRightSidebar={toggleRightSidebar}
+        onRetry={() => void bootstrap()}
+        onToggleTheme={() => setDarkThemeOverride(!darkTheme)}
+        onWorkflowChange={(workflowState) => {
+          if (snapshot) void handleThreadWorkflowChange(snapshot.thread.id, workflowState)
+        }}
+        onWindowAction={(action) => void bridge.windowAction(action)}
+      />
 
+      <section className="conversation-workspace">
         {status.phase !== 'connected' && snapshot ? (
           <div className="connection-banner" role="status">
             <WifiOff aria-hidden="true" size={15} />
@@ -1830,7 +2011,7 @@ export function App() {
       {desktopAssetRailVisible ? (
         <SidebarResizeHandle
           side="left"
-          label="Resize asset sidebar"
+          label="Resize Thread list"
           controls="asset-rail"
           value={fittedSidebarWidths.left}
           min={ASSET_RAIL_LIMITS.minWidth}

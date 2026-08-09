@@ -96,6 +96,19 @@ pub enum ThreadStatus {
     Archived,
 }
 
+/// User-managed workflow state for organizing Threads like a to-do list.
+///
+/// This is deliberately independent from [`ThreadStatus`], which describes
+/// whether the runtime currently owns the Thread for an active Turn.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadWorkflowState {
+    NewProgress,
+    #[default]
+    Deferred,
+    Handled,
+}
+
 /// A durable, linear conversation. It always owns one workspace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Thread {
@@ -103,6 +116,8 @@ pub struct Thread {
     pub title: String,
     pub workspace_id: WorkspaceId,
     pub status: ThreadStatus,
+    #[serde(default)]
+    pub workflow_state: ThreadWorkflowState,
     /// References that are always available to the conversation. A project
     /// imported from `thread/create.working_directory` is recorded here.
     #[serde(default)]

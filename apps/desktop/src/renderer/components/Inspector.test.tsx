@@ -86,6 +86,7 @@ function snapshot(): ThreadSnapshot {
       title: 'Current Thread',
       workspace_id: 'workspace-current',
       status: 'idle',
+      workflow_state: 'deferred',
       default_references: [],
       created_at: now,
       updated_at: now
