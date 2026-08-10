@@ -1452,6 +1452,10 @@ test('creates the first Thread through one idempotent draft request', async () =
     await application.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.setSize(900, 700)
     })
+    await expect.poll(async () => page.evaluate(() => window.innerWidth))
+      .toBeLessThanOrEqual(1_024)
+    const openAssetDrawer = page.getByRole('button', { name: 'Open navigation drawer' })
+    await expect(openAssetDrawer).toBeVisible()
     await application.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.webContents.send('kody:menu-command', 'focus-assets')
     })
@@ -1469,9 +1473,10 @@ test('creates the first Thread through one idempotent draft request', async () =
     await application.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.setSize(700, 700)
     })
+    await expect.poll(async () => page.evaluate(() => window.innerWidth))
+      .toBeLessThanOrEqual(768)
     await expect(page.getByRole('separator', { name: 'Resize Thread list' })).toHaveCount(0)
     await expect(page.getByRole('separator', { name: 'Resize right sidebar' })).toHaveCount(0)
-    const openAssetDrawer = page.getByRole('button', { name: 'Open navigation drawer' })
     await expect(assetRail).toBeHidden()
     await expect(workbenchRail).toBeHidden()
     await openAssetDrawer.click()
