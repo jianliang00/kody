@@ -158,6 +158,16 @@ pub struct ModelInfo {
     pub default_reasoning_effort: String,
     #[serde(default)]
     pub supported_reasoning_efforts: Vec<ReasoningEffortOption>,
+    #[serde(default)]
+    pub additional_speed_tiers: Vec<String>,
+    #[serde(default)]
+    pub service_tiers: Vec<ModelServiceTier>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelServiceTier {
+    pub id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -291,6 +301,10 @@ pub struct TurnStartParams {
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// `Some(None)` explicitly clears a sticky service tier while `None`
+    /// leaves it unchanged. Current Codex schemas support this at turn scope.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_policy: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -309,6 +323,7 @@ impl TurnStartParams {
             cwd: None,
             model: None,
             effort: None,
+            service_tier: None,
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,

@@ -82,6 +82,12 @@ export function registerIpcHandlers(options: IpcOptions): void {
     return options.providerSettings.snapshot()
   })
 
+  ipcMain.handle('kody:provider-settings:select', async (event, input: unknown) => {
+    assertTrustedSender(event, options)
+    const providerId = validateSelectedProviderId(input)
+    return mutateProvider(() => options.providerSettings.setSelectedProvider(providerId))
+  })
+
   ipcMain.handle('kody:provider-settings:upsert', async (event, input: unknown) => {
     assertTrustedSender(event, options)
     const update = validateProviderProfileUpdate(input)
@@ -295,6 +301,18 @@ export function validateProviderProfileUpdate(input: unknown): ProviderProfileUp
     ...(input.secret === undefined ? {} : { secret: input.secret }),
     ...(input.clearSecret === undefined ? {} : { clearSecret: input.clearSecret })
   }
+}
+
+export function validateSelectedProviderId(input: unknown): string | null {
+  if (input === null) return null
+  if (
+    typeof input !== 'string'
+    || input !== input.trim()
+    || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(input)
+  ) {
+    throw new Error('Selected provider id is invalid')
+  }
+  return input
 }
 
 function assertTrustedSender(event: IpcMainInvokeEvent, options: IpcOptions): void {

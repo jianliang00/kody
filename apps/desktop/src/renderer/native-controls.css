@@ -1,0 +1,1824 @@
+/*
+ * Shared macOS control language.
+ *
+ * Permanent navigation rows stay flat; temporary controls use the solid,
+ * softly rounded control faces of current macOS, inset text fields, vibrant
+ * menus, and quiet status tags.
+ * Keep this layer loaded after component styles so every control family uses
+ * the same interaction states without forcing feature components to know the
+ * visual implementation.
+ */
+
+:root {
+  --mac-control-height: 1.5rem;
+  --mac-control-height-compact: 1.5rem;
+  --mac-control-radius: 6px;
+  --mac-field-radius: 8px;
+  --mac-button-radius: 6px;
+  --mac-menu-radius: 10px;
+  --mac-dialog-radius: 30px;
+  --mac-control-font-size: var(--font-body);
+  --mac-compact-control-font-size: var(--font-caption);
+  --mac-menu-font-size: var(--font-caption);
+  --mac-control-border: #858589;
+  --mac-control-border-hover: #69696d;
+  --mac-control-border-pressed: #56565a;
+  --mac-field-fill: rgb(255 255 255 / 98%);
+  --mac-field-fill-disabled: rgb(118 118 128 / 8%);
+  --mac-field-shadow: inset 0 1px 1px rgb(0 0 0 / 8%);
+  --mac-button-fill: rgb(118 118 128 / 13%);
+  --mac-button-fill-hover: rgb(118 118 128 / 19%);
+  --mac-button-fill-pressed: rgb(118 118 128 / 25%);
+  --mac-button-border: transparent;
+  --mac-button-gradient: none;
+  --mac-button-gradient-hover: none;
+  --mac-button-gradient-pressed: none;
+  --mac-button-shadow: none;
+  --mac-button-shadow-pressed: inset 0 1px 1px rgb(0 0 0 / 8%);
+  --mac-popup-control-fill: rgb(246 246 247);
+  --mac-popup-control-fill-hover: rgb(238 238 240);
+  --mac-popup-control-fill-pressed: rgb(226 226 229);
+  --mac-popup-control-border: rgb(60 60 67 / 30%);
+  --mac-popup-control-border-hover: rgb(60 60 67 / 42%);
+  --mac-popup-control-gradient: none;
+  --mac-popup-control-gradient-pressed: none;
+  --mac-popup-control-shadow: inset 0 1px 0 rgb(255 255 255 / 72%), 0 1px 1px rgb(0 0 0 / 9%);
+  --mac-popup-control-shadow-pressed: inset 0 1px 2px rgb(0 0 0 / 14%);
+  --mac-popup-indicator-fill: color-mix(in srgb, var(--mac-control-text) 7%, transparent);
+  --mac-popup-indicator-fill-hover: color-mix(in srgb, var(--mac-control-text) 11%, transparent);
+  --mac-popup-indicator-fill-pressed: color-mix(in srgb, var(--mac-control-text) 16%, transparent);
+  --mac-popup-indicator-border: color-mix(in srgb, var(--mac-control-text) 16%, transparent);
+  --mac-popup-focus-ring: 0 0 0 1px color-mix(in srgb, var(--focus) 68%, transparent);
+  --mac-permission-danger-border: color-mix(in srgb, var(--mac-danger-foreground) 38%, var(--mac-popup-control-border));
+  --mac-permission-danger-border-hover: color-mix(in srgb, var(--mac-danger-foreground) 52%, var(--mac-popup-control-border));
+  --mac-permission-danger-fill: var(--mac-popup-control-fill);
+  --mac-permission-danger-fill-hover: color-mix(in srgb, var(--mac-danger-foreground) 3%, var(--mac-popup-control-fill-hover));
+  --mac-permission-danger-fill-pressed: color-mix(in srgb, var(--mac-danger-foreground) 5%, var(--mac-popup-control-fill-pressed));
+  --mac-popup-menu-shadow: 0 8px 24px rgb(0 0 0 / 18%), 0 1px 4px rgb(0 0 0 / 10%);
+  --mac-focus-color: #946e00;
+  --mac-focus-foreground: #745100;
+  --mac-focus-ring: 0 0 0 2px color-mix(in srgb, var(--mac-focus-color) 72%, transparent);
+  --mac-field-focus-ring: 0 0 0 1px color-mix(in srgb, var(--mac-focus-color) 72%, transparent);
+  --mac-control-text: var(--text);
+  --mac-control-secondary-text: var(--muted);
+  --mac-speedy-foreground: var(--mac-control-secondary-text);
+  --mac-brand-foreground: #9a4d00;
+  --mac-note-foreground: #745100;
+  --mac-thread-foreground: #403ca8;
+  --mac-project-foreground: #00658a;
+  --mac-danger-foreground: #a01d14;
+  --mac-primary-fill: #ffb400;
+  --mac-primary-fill-hover: #ffbf27;
+  --mac-primary-fill-pressed: #eaa400;
+  --mac-primary-contrast: #000;
+  --mac-menu-selection-fill: var(--mac-primary-fill);
+  --mac-menu-selection-text: var(--mac-primary-contrast);
+  --mac-menu-fill: rgb(246 246 247);
+  --mac-menu-border: rgb(60 60 67 / 22%);
+  --mac-menu-shadow: 0 18px 46px rgb(0 0 0 / 22%), 0 3px 10px rgb(0 0 0 / 12%);
+  --mac-dialog-fill: var(--mac-window-background);
+  --mac-dialog-border: rgb(60 60 67 / 28%);
+  --mac-tag-fill: rgb(118 118 128 / 12%);
+  --mac-tag-border: rgb(60 60 67 / 12%);
+}
+
+:root[data-theme="dark"] {
+  --mac-control-border: #757c7d;
+  --mac-control-border-hover: #8a9192;
+  --mac-control-border-pressed: #9aa1a2;
+  --mac-field-fill: #232829;
+  --mac-field-fill-disabled: #292f30;
+  --mac-field-shadow: none;
+  --mac-button-fill: #323839;
+  --mac-button-fill-hover: #3d4445;
+  --mac-button-fill-pressed: #2a3031;
+  --mac-button-shadow-pressed: inset 0 1px 1px rgb(0 0 0 / 28%);
+  --mac-popup-control-fill: rgb(64 64 68);
+  --mac-popup-control-fill-hover: rgb(74 74 78);
+  --mac-popup-control-fill-pressed: rgb(49 49 52);
+  --mac-popup-control-border: rgb(235 235 245 / 19%);
+  --mac-popup-control-border-hover: rgb(235 235 245 / 30%);
+  --mac-popup-control-gradient: none;
+  --mac-popup-control-gradient-pressed: none;
+  --mac-popup-control-shadow: inset 0 1px 0 rgb(255 255 255 / 8%), 0 1px 1px rgb(0 0 0 / 38%);
+  --mac-popup-control-shadow-pressed: inset 0 1px 2px rgb(0 0 0 / 36%);
+  --mac-popup-indicator-fill: color-mix(in srgb, var(--mac-control-text) 13%, transparent);
+  --mac-popup-indicator-fill-hover: color-mix(in srgb, var(--mac-control-text) 19%, transparent);
+  --mac-popup-indicator-fill-pressed: color-mix(in srgb, var(--mac-control-text) 26%, transparent);
+  --mac-popup-indicator-border: color-mix(in srgb, var(--mac-control-text) 19%, transparent);
+  --mac-permission-danger-fill: color-mix(in srgb, var(--mac-danger-foreground) 14%, var(--mac-popup-control-fill));
+  --mac-permission-danger-fill-hover: color-mix(in srgb, var(--mac-danger-foreground) 18%, var(--mac-popup-control-fill-hover));
+  --mac-permission-danger-fill-pressed: color-mix(in srgb, var(--mac-danger-foreground) 22%, var(--mac-popup-control-fill-pressed));
+  --mac-popup-menu-shadow: 0 10px 28px rgb(0 0 0 / 48%), 0 1px 4px rgb(0 0 0 / 30%);
+  --mac-focus-color: #979230;
+  --mac-focus-foreground: #bdb843;
+  --mac-focus-ring: 0 0 0 2px color-mix(in srgb, #928d2c 78%, transparent);
+  --mac-control-text: #dedede;
+  --mac-control-secondary-text: #9c9e9f;
+  --mac-brand-foreground: var(--brand);
+  --mac-note-foreground: var(--note);
+  --mac-thread-foreground: #aaa8ff;
+  --mac-project-foreground: #8addff;
+  --mac-danger-foreground: #ff756d;
+  --mac-primary-fill: #ffb400;
+  --mac-primary-fill-hover: #ffc02b;
+  --mac-primary-fill-pressed: #eaa400;
+  --mac-primary-contrast: #000;
+  --mac-menu-fill: rgb(45 45 48);
+  --mac-menu-border: rgb(235 235 245 / 20%);
+  --mac-menu-shadow: 0 20px 52px rgb(0 0 0 / 56%), 0 3px 12px rgb(0 0 0 / 38%);
+  --mac-dialog-fill: #222829;
+  --mac-dialog-border: #4e5354;
+  --mac-tag-fill: rgb(235 235 245 / 11%);
+  --mac-tag-border: rgb(235 235 245 / 11%);
+}
+
+@supports (color: color(display-p3 1 1 1)) {
+  :root {
+    --mac-primary-fill: color(display-p3 .988 .722 .153);
+  }
+}
+
+::selection {
+  background: color-mix(in srgb, var(--mac-focus-color) 34%, transparent);
+}
+
+:root[data-theme="dark"] ::selection {
+  background: #6f542b;
+  color: #fff;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+summary:focus-visible,
+a:focus-visible {
+  outline-color: var(--mac-focus-color);
+}
+
+/* Text fields ----------------------------------------------------------- */
+
+.provider-field input,
+.provider-field textarea,
+.provider-field .kody-select__trigger--field,
+.provider-secret-field input,
+.user-input-free > input {
+  min-height: var(--mac-control-height);
+  padding: .12rem .5rem;
+  border: 1px solid var(--mac-control-border);
+  border-radius: var(--mac-field-radius);
+  outline: 0;
+  background-color: var(--mac-field-fill);
+  background-image: none;
+  color: var(--mac-control-text);
+  font-size: var(--mac-control-font-size);
+  line-height: 1.25;
+  box-shadow: var(--mac-field-shadow);
+  transition: border-color 100ms ease, background-color 100ms ease, box-shadow 100ms ease;
+}
+
+.provider-field textarea {
+  min-height: 4.25rem;
+  padding-block: .38rem;
+  line-height: 1.4;
+}
+
+.provider-field input:hover:not(:disabled),
+.provider-field textarea:hover:not(:disabled),
+.provider-secret-field input:hover:not(:disabled),
+.user-input-free > input:hover:not(:disabled) {
+  border-color: var(--mac-control-border-hover);
+}
+
+.provider-field input:focus-visible,
+.provider-field textarea:focus-visible,
+.provider-secret-field input:focus-visible,
+.user-input-free > input:focus-visible {
+  border-color: color-mix(in srgb, var(--mac-focus-color) 72%, var(--mac-control-border));
+  outline: 0;
+  box-shadow: var(--mac-field-focus-ring);
+}
+
+.provider-field input:disabled,
+.provider-field textarea:disabled,
+.provider-secret-field input:disabled,
+.user-input-free > input:disabled {
+  background-color: var(--mac-field-fill-disabled);
+  color: var(--faint);
+  cursor: not-allowed;
+  opacity: .72;
+}
+
+.provider-field[data-state="error"] input,
+.provider-field[data-state="error"] textarea,
+.provider-field[data-state="error"] .kody-select__trigger--field {
+  border-color: var(--danger);
+  box-shadow: inset 0 0 0 1px var(--danger), var(--mac-field-shadow);
+}
+
+.provider-field[data-state="error"] input:focus-visible,
+.provider-field[data-state="error"] textarea:focus-visible,
+.provider-field[data-state="error"] .kody-select__trigger--field:focus-visible {
+  border-color: var(--mac-focus-color);
+  box-shadow: var(--mac-field-focus-ring);
+}
+
+.asset-search__control,
+.mention-search {
+  min-height: var(--mac-control-height);
+  padding-inline: .45rem;
+  border: 1px solid var(--mac-control-border);
+  border-radius: var(--mac-field-radius);
+  background: var(--mac-field-fill);
+  color: var(--muted);
+  box-shadow: var(--mac-field-shadow);
+  transition: border-color 90ms ease, box-shadow 90ms ease;
+}
+
+.asset-search__control:hover,
+.mention-search:hover {
+  border-color: var(--mac-control-border-hover);
+}
+
+.asset-search__control:focus-within,
+.mention-search:focus-within {
+  border-color: color-mix(in srgb, var(--mac-focus-color) 72%, var(--mac-control-border));
+  box-shadow: var(--mac-field-focus-ring);
+}
+
+.asset-search__control input,
+.mention-search input {
+  font-size: var(--mac-control-font-size);
+  font-weight: var(--weight-regular);
+  line-height: 1.25;
+}
+
+/* The settings sheet follows the current macOS alert geometry: an opaque,
+ * continuous-corner panel with a quiet divider and flat trailing actions. */
+
+.provider-settings-backdrop {
+  padding: 1.25rem;
+  background: rgb(0 0 0 / 38%);
+  backdrop-filter: saturate(110%) blur(8px);
+  -webkit-backdrop-filter: saturate(110%) blur(8px);
+}
+
+.provider-settings {
+  border-color: var(--mac-dialog-border);
+  border-radius: var(--mac-dialog-radius);
+  background: var(--mac-dialog-fill);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: 0 28px 80px rgb(0 0 0 / 38%), 0 3px 14px rgb(0 0 0 / 20%);
+}
+
+.provider-settings__content {
+  background: var(--mac-text-background);
+}
+
+.provider-settings__header {
+  padding: 1rem 1.25rem .9rem;
+  border-block-end-color: var(--mac-control-border);
+}
+
+.provider-settings__header h2 {
+  font-size: var(--font-heading-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.provider-settings .icon-button {
+  min-width: var(--mac-control-height);
+  min-height: var(--mac-control-height);
+}
+
+.provider-profile-nav {
+  border-inline-end-color: var(--mac-control-border);
+  background: color-mix(in srgb, var(--mac-dialog-fill) 88%, var(--mac-button-fill));
+}
+
+.provider-profile-nav .provider-profile-add {
+  min-height: var(--mac-control-height);
+  padding: .12rem .62rem;
+  border: 1px solid var(--mac-button-border);
+  border-radius: var(--mac-button-radius);
+  background: var(--mac-button-fill);
+  color: var(--mac-control-text);
+  font-size: var(--mac-control-font-size);
+  font-weight: var(--weight-regular);
+  box-shadow: none;
+}
+
+.provider-profile-nav .provider-profile-add:hover,
+.provider-profile-nav .provider-profile-add:focus-visible {
+  background: var(--mac-button-fill-hover);
+}
+
+.provider-profile-nav .provider-profile-add[aria-current="page"],
+.provider-profile-nav .provider-profile-add[aria-current="page"]:hover:not(:disabled) {
+  background: var(--mac-primary-fill);
+  color: var(--mac-primary-contrast);
+  box-shadow: none;
+}
+
+.provider-profile-nav .provider-profile-add[aria-current="page"]:focus-visible {
+  box-shadow: var(--mac-focus-ring);
+}
+
+.codex-account-status {
+  border-color: var(--mac-control-border);
+  border-radius: 12px;
+  background: var(--mac-button-fill);
+  box-shadow: none;
+}
+
+.provider-field > label,
+.provider-secret-field label,
+.provider-secret-fieldset legend {
+  font-size: var(--font-caption);
+  font-weight: var(--weight-medium);
+  line-height: 1.25;
+}
+
+.provider-profile-form__actions {
+  gap: .5rem;
+  padding-block-start: .75rem;
+  border-block-start: 1px solid var(--mac-control-border);
+}
+
+.composer {
+  border-color: var(--mac-control-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--mac-field-fill) 96%, var(--surface));
+  box-shadow: 0 8px 28px rgb(0 0 0 / 9%);
+}
+
+.composer:has(textarea:focus-visible) {
+  border-color: color-mix(in srgb, var(--mac-focus-color) 68%, var(--mac-control-border));
+  box-shadow: var(--mac-field-focus-ring), 0 8px 28px rgb(0 0 0 / 10%);
+}
+
+.permission-mode-control {
+  min-height: var(--mac-control-height);
+  padding-inline: .42rem .14rem;
+  border: 1px solid var(--mac-button-border);
+  border-radius: var(--mac-button-radius);
+  background-color: var(--mac-button-fill);
+  background-image: var(--mac-button-gradient);
+  color: var(--mac-control-secondary-text);
+  box-shadow: var(--mac-button-shadow);
+  transition: border-color 100ms ease, background-color 100ms ease, box-shadow 100ms ease;
+}
+
+.permission-mode-control:hover:not(:disabled),
+.permission-mode-control[data-state="open"] {
+  border-color: var(--mac-button-border);
+  background-color: var(--mac-button-fill-hover);
+  background-image: var(--mac-button-gradient-hover);
+  color: var(--mac-control-text);
+}
+
+.permission-mode-control:focus-visible {
+  box-shadow: var(--mac-focus-ring);
+}
+
+.permission-mode-control--full_access {
+  border-color: color-mix(in srgb, var(--mac-danger-foreground) 34%, var(--mac-control-border));
+  background-color: var(--danger-soft);
+  background-image: none;
+  color: var(--mac-danger-foreground);
+}
+
+.permission-mode-control--full_access:hover:not(:disabled),
+.permission-mode-control--full_access[data-state="open"] {
+  border-color: color-mix(in srgb, var(--mac-danger-foreground) 46%, var(--mac-control-border));
+  background-color: color-mix(in srgb, var(--danger-soft) 84%, var(--mac-button-fill));
+  background-image: none;
+  color: var(--mac-danger-foreground);
+}
+
+/* Push buttons ---------------------------------------------------------- */
+
+.primary-action,
+.secondary-action,
+.primary-button,
+.secondary-button,
+.approval-allow,
+.send-button,
+.turn-button,
+.user-input-submit,
+.provider-primary-button,
+.provider-secondary-button,
+.provider-danger-button,
+.provider-profile-add,
+.process-action,
+.process-output__more,
+  .titlebar__workflow-action,
+  .connection-banner button,
+  .error-banner button,
+  .artifact-card__download {
+  min-height: var(--mac-control-height);
+  padding: .12rem .62rem;
+  border: 1px solid var(--mac-button-border);
+  border-radius: var(--mac-button-radius);
+  background-color: var(--mac-button-fill);
+  background-image: var(--mac-button-gradient);
+  color: var(--mac-control-text);
+  font-size: var(--mac-control-font-size);
+  font-weight: var(--weight-regular);
+  line-height: 1.2;
+  box-shadow: var(--mac-button-shadow);
+  transition: border-color 100ms ease, background-color 100ms ease, box-shadow 100ms ease, color 100ms ease;
+}
+
+/* Keep labeled title-bar actions at the compact toolbar text size. The
+ * shared push-button treatment otherwise promotes this control to body text,
+ * making it look larger than the title and adjacent toolbar controls. */
+.titlebar__workflow-action {
+  font-size: var(--font-caption);
+}
+
+.user-input-free > input {
+  font-weight: var(--weight-regular);
+}
+
+.primary-button,
+.secondary-button,
+.approval-allow,
+.send-button,
+.turn-button,
+.user-input-submit,
+.provider-primary-button,
+.provider-secondary-button,
+.provider-danger-button {
+  min-width: 5rem;
+}
+
+:is(
+  .primary-action,
+  .secondary-action,
+  .primary-button,
+  .secondary-button,
+  .approval-allow,
+  .send-button,
+  .turn-button,
+  .user-input-submit,
+  .provider-primary-button,
+  .provider-secondary-button,
+  .provider-danger-button,
+  .provider-profile-add,
+  .process-action,
+  .process-output__more,
+  .titlebar__workflow-action,
+  .connection-banner button,
+  .error-banner button,
+  .artifact-card__download
+):focus-visible {
+  outline: 0;
+  box-shadow: var(--mac-focus-ring);
+}
+
+.primary-action:hover:not(:disabled),
+.secondary-action:hover:not(:disabled),
+.primary-button:hover:not(:disabled),
+.secondary-button:hover:not(:disabled),
+.approval-allow:hover:not(:disabled),
+.send-button:hover:not(:disabled),
+.turn-button:hover:not(:disabled),
+.user-input-submit:hover:not(:disabled),
+.provider-primary-button:hover:not(:disabled),
+.provider-secondary-button:hover:not(:disabled),
+.provider-danger-button:hover:not(:disabled),
+.provider-profile-add:hover:not(:disabled),
+.process-action:hover:not(:disabled),
+.process-output__more:hover:not(:disabled),
+.titlebar__workflow-action:hover:not(:disabled),
+.connection-banner button:hover:not(:disabled),
+.error-banner button:hover:not(:disabled),
+.artifact-card__download:hover {
+  border-color: var(--mac-button-border);
+  background-color: var(--mac-button-fill-hover);
+  background-image: var(--mac-button-gradient-hover);
+  filter: none;
+}
+
+.primary-action:active:not(:disabled),
+.secondary-action:active:not(:disabled),
+.primary-button:active:not(:disabled),
+.secondary-button:active:not(:disabled),
+.approval-allow:active:not(:disabled),
+.send-button:active:not(:disabled),
+.turn-button:active:not(:disabled),
+.user-input-submit:active:not(:disabled),
+.provider-primary-button:active:not(:disabled),
+.provider-secondary-button:active:not(:disabled),
+.provider-danger-button:active:not(:disabled),
+.provider-profile-add:active:not(:disabled),
+.process-action:active:not(:disabled),
+.process-output__more:active:not(:disabled),
+.titlebar__workflow-action:active:not(:disabled),
+.artifact-card__download:active {
+  border-color: var(--mac-button-border);
+  background-color: var(--mac-button-fill-pressed);
+  background-image: var(--mac-button-gradient-pressed);
+  box-shadow: var(--mac-button-shadow-pressed);
+}
+
+.primary-button,
+.approval-allow,
+.send-button,
+.user-input-submit,
+.provider-primary-button {
+  border-color: transparent;
+  background-color: var(--mac-primary-fill);
+  background-image: none;
+  color: var(--mac-primary-contrast);
+  box-shadow: none;
+}
+
+.primary-button:hover:not(:disabled),
+.approval-allow:hover:not(:disabled),
+.send-button:hover:not(:disabled),
+.user-input-submit:hover:not(:disabled),
+.provider-primary-button:hover:not(:disabled) {
+  border-color: transparent;
+  background-color: var(--mac-primary-fill-hover);
+  background-image: none;
+}
+
+.turn-button {
+  min-width: 5rem;
+  border-color: transparent;
+  background-color: var(--mac-primary-fill);
+  background-image: none;
+  color: var(--mac-primary-contrast);
+  box-shadow: none;
+}
+
+.turn-button:hover:not(:disabled) {
+  border-color: transparent;
+  background-color: var(--mac-primary-fill-hover);
+  background-image: none;
+}
+
+.primary-button:active:not(:disabled),
+.approval-allow:active:not(:disabled),
+.send-button:active:not(:disabled),
+.user-input-submit:active:not(:disabled),
+.provider-primary-button:active:not(:disabled) {
+  border-color: transparent;
+  background-color: var(--mac-primary-fill-pressed);
+  background-image: none;
+  box-shadow: var(--mac-button-shadow-pressed);
+}
+
+.turn-button:active:not(:disabled) {
+  border-color: transparent;
+  background-color: var(--mac-primary-fill-pressed);
+  background-image: none;
+  box-shadow: var(--mac-button-shadow-pressed);
+}
+
+.turn-button--stop,
+.provider-danger-button {
+  border-color: color-mix(in srgb, var(--mac-danger-foreground) 34%, var(--mac-control-border));
+  background-color: var(--danger-soft);
+  background-image: none;
+  color: var(--mac-danger-foreground);
+  box-shadow: var(--mac-button-shadow);
+}
+
+.turn-button--stop:hover:not(:disabled),
+.provider-danger-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--mac-danger-foreground) 46%, var(--mac-control-border));
+  background-color: color-mix(in srgb, var(--danger-soft) 84%, var(--mac-button-fill));
+  background-image: none;
+  color: var(--mac-danger-foreground);
+}
+
+.turn-button--stop:active:not(:disabled),
+.provider-danger-button:active:not(:disabled) {
+  border-color: color-mix(in srgb, var(--mac-danger-foreground) 52%, var(--mac-control-border));
+  background-color: color-mix(in srgb, var(--danger-soft) 90%, var(--mac-button-fill-pressed));
+  background-image: none;
+  color: var(--mac-danger-foreground);
+  box-shadow: var(--mac-button-shadow-pressed);
+}
+
+.provider-profile-add {
+  color: var(--mac-focus-foreground);
+}
+
+.process-action--stop,
+.provider-link-button,
+.codex-account-status .codex-account-status__error,
+.provider-storage-warning,
+.provider-delete-confirmation,
+.provider-form-error {
+  color: var(--mac-danger-foreground);
+}
+
+.artifact-card__download {
+  text-decoration: none;
+}
+
+.primary-action {
+  justify-content: flex-start;
+  border-color: color-mix(in srgb, var(--mac-focus-foreground) 34%, var(--mac-control-border));
+  color: var(--mac-focus-foreground);
+}
+
+.primary-action:disabled,
+.secondary-action:disabled,
+.primary-button:disabled,
+.secondary-button:disabled,
+.approval-allow:disabled,
+.send-button:disabled,
+.user-input-submit:disabled,
+.provider-primary-button:disabled,
+.provider-secondary-button:disabled,
+.provider-danger-button:disabled,
+.provider-profile-add:disabled,
+.process-action:disabled,
+.process-output__more:disabled,
+.titlebar__workflow-action:disabled {
+  border-color: var(--mac-control-border);
+  background-color: var(--mac-field-fill-disabled);
+  background-image: none;
+  color: var(--faint);
+  box-shadow: none;
+  cursor: default;
+  opacity: .62;
+}
+
+.turn-button:disabled {
+  border-color: color-mix(in srgb, var(--brand) 18%, var(--mac-control-border));
+  background-color: color-mix(in srgb, var(--brand-soft) 55%, var(--mac-field-fill-disabled));
+  background-image: none;
+  color: color-mix(in srgb, var(--brand) 58%, var(--muted));
+  box-shadow: none;
+  opacity: 1;
+}
+
+.turn-button--stop:disabled,
+.provider-danger-button:disabled {
+  border-color: color-mix(in srgb, var(--mac-danger-foreground) 30%, var(--mac-control-border));
+  background-color: color-mix(in srgb, var(--danger-soft) 80%, var(--mac-field-fill-disabled));
+  background-image: none;
+  color: var(--mac-danger-foreground);
+  box-shadow: none;
+  opacity: .62;
+}
+
+/* Borderless toolbar buttons ------------------------------------------ */
+
+.icon-button,
+.context-button,
+.asset-row__menu-trigger,
+.asset-row__status-action,
+.working-directory-chip > button,
+.composer__image > button,
+.reference-chip__remove,
+.provider-link-button,
+.process-section__history {
+  border: 1px solid transparent;
+  border-radius: var(--mac-control-radius);
+  background: transparent;
+  box-shadow: none;
+  transition: border-color 80ms ease, background-color 80ms ease, color 80ms ease;
+}
+
+:is(
+  .icon-button,
+  .context-button,
+  .asset-row__menu-trigger,
+  .asset-row__status-action,
+  .working-directory-chip > button,
+  .composer__image > button,
+  .reference-chip__remove,
+  .provider-link-button,
+  .process-section__history
+):focus-visible {
+  outline: 0;
+  box-shadow: var(--mac-focus-ring);
+}
+
+:is(
+  .icon-button,
+  .context-button,
+  .asset-row__menu-trigger,
+  .asset-row__status-action,
+  .working-directory-chip > button,
+  .composer__image > button,
+  .reference-chip__remove,
+  .provider-link-button,
+  .process-section__history
+):disabled {
+  color: var(--faint);
+  cursor: default;
+  opacity: .42;
+}
+
+.icon-button:hover:not(:disabled),
+.context-button:hover:not(:disabled),
+.asset-row__menu-trigger:hover:not(:disabled),
+.asset-row__status-action:hover:not(:disabled),
+.working-directory-chip > button:hover:not(:disabled),
+.composer__image > button:hover:not(:disabled),
+.reference-chip__remove:hover:not(:disabled),
+.provider-link-button:hover:not(:disabled),
+.process-section__history:hover:not(:disabled) {
+  border-color: var(--mac-tag-border);
+  background: var(--mac-tag-fill);
+  color: var(--text);
+}
+
+.icon-button:active:not(:disabled),
+.context-button:active:not(:disabled),
+.asset-row__menu-trigger:active:not(:disabled),
+.asset-row__status-action:active:not(:disabled),
+.working-directory-chip > button:active:not(:disabled),
+.composer__image > button:active:not(:disabled),
+.reference-chip__remove:active:not(:disabled),
+.provider-link-button:active:not(:disabled),
+.process-section__history:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+  box-shadow: inset 0 1px 1px rgb(0 0 0 / 8%);
+  transform: none;
+}
+
+.working-directory-chip > button:hover:not(:disabled),
+.composer__image > button:hover:not(:disabled),
+.reference-chip__remove:hover:not(:disabled),
+.provider-link-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--mac-danger-foreground) 22%, transparent);
+  background: var(--danger-soft);
+  color: var(--mac-danger-foreground);
+}
+
+.asset-row__status-action,
+.reference-chip__remove {
+  border-radius: 50%;
+}
+
+.asset-row__menu-trigger {
+  width: var(--mac-control-height);
+  min-width: var(--mac-control-height);
+}
+
+.provider-link-button {
+  min-height: var(--mac-control-height);
+  padding-inline: .3rem;
+}
+
+.context-button {
+  width: var(--mac-control-height);
+  min-width: var(--mac-control-height);
+  min-height: var(--mac-control-height);
+}
+
+/* Choice controls keep the compact native row instead of turning every
+ * option into a card. */
+
+.user-input-options {
+  gap: .4rem;
+}
+
+.user-input-options > label {
+  min-block-size: var(--mac-control-height);
+  padding: .16rem .25rem;
+  align-items: center;
+  border-color: transparent;
+  border-radius: var(--mac-button-radius);
+  background: transparent;
+}
+
+.user-input-options > label:hover {
+  border-color: transparent;
+  background: var(--mac-tag-fill);
+}
+
+.user-input-options > label:focus-within {
+  border-color: transparent;
+  box-shadow: var(--mac-focus-ring);
+}
+
+.user-input-options input[type="radio"] {
+  inline-size: 1rem;
+  block-size: 1rem;
+  min-inline-size: 1rem;
+  min-block-size: 1rem;
+  margin: 0;
+  accent-color: var(--mac-primary-fill);
+}
+
+input[type="checkbox"] {
+  inline-size: 1rem;
+  block-size: 1rem;
+  accent-color: var(--mac-primary-fill);
+}
+
+.user-input-card .secondary-button,
+.user-input-card .user-input-submit {
+  min-block-size: var(--mac-control-height);
+}
+
+.composer__provider .kody-select__trigger--toolbar {
+  padding: .12rem .5rem .12rem .625rem;
+}
+
+.model-menu__trigger,
+.model-provider-settings-button {
+  min-height: var(--mac-control-height);
+  padding: .12rem .5rem .12rem .625rem;
+  border-color: var(--mac-button-border);
+  border-radius: var(--mac-button-radius);
+  background-color: var(--mac-button-fill);
+  background-image: var(--mac-button-gradient);
+  color: var(--mac-control-text);
+  font-size: var(--mac-compact-control-font-size);
+  font-weight: var(--weight-regular);
+  box-shadow: var(--mac-button-shadow);
+}
+
+.model-menu__trigger:hover:not(:disabled),
+.model-provider-settings-button:hover:not(:disabled) {
+  border-color: var(--mac-button-border);
+  background-color: var(--mac-button-fill-hover);
+  background-image: var(--mac-button-gradient-hover);
+}
+
+.model-menu__trigger:focus-visible,
+.model-menu__trigger[data-state="open"],
+.model-provider-settings-button:focus-visible {
+  border-color: color-mix(in srgb, var(--mac-focus-color) 72%, var(--mac-control-border));
+  outline: 0;
+  box-shadow: var(--mac-focus-ring);
+}
+
+.model-menu__trigger[data-state="open"] {
+  background-color: var(--mac-button-fill-pressed);
+  background-image: var(--mac-button-gradient-pressed);
+}
+
+.model-menu__trigger:disabled,
+.model-provider-settings-button:disabled {
+  background-color: var(--mac-field-fill-disabled);
+  background-image: none;
+  color: var(--faint);
+  box-shadow: none;
+  cursor: default;
+  opacity: .62;
+}
+
+/* Select triggers and popup menus ------------------------------------- */
+
+.kody-select__trigger {
+  border-color: var(--mac-button-border);
+  border-radius: var(--mac-button-radius);
+  background-color: var(--mac-button-fill);
+  background-image: var(--mac-button-gradient);
+  color: var(--mac-control-text);
+  font-size: var(--mac-control-font-size);
+  font-weight: var(--weight-regular);
+  box-shadow: var(--mac-button-shadow);
+  transition: border-color 90ms ease, background-color 90ms ease, box-shadow 90ms ease;
+}
+
+.kody-select__trigger:hover:not(:disabled) {
+  border-color: var(--mac-button-border);
+  background-color: var(--mac-button-fill-hover);
+  background-image: var(--mac-button-gradient-hover);
+}
+
+.kody-select__trigger:focus-visible,
+.kody-select__trigger[data-state="open"] {
+  border-color: color-mix(in srgb, var(--mac-focus-color) 72%, var(--mac-control-border));
+  outline: 0;
+  box-shadow: var(--mac-focus-ring);
+}
+
+.kody-select__trigger[data-state="open"] {
+  background-color: var(--mac-button-fill-pressed);
+  background-image: var(--mac-button-gradient-pressed);
+}
+
+.kody-select__trigger:disabled {
+  background-color: var(--mac-field-fill-disabled);
+  background-image: none;
+  color: var(--faint);
+  box-shadow: none;
+  cursor: default;
+  opacity: .62;
+}
+
+.kody-select__trigger--field,
+.provider-field .kody-select__trigger--field {
+  width: 100%;
+  min-height: var(--mac-control-height);
+  padding: .12rem .45rem .12rem .5rem;
+  border-color: var(--mac-control-border);
+  border-radius: var(--mac-field-radius);
+  background-color: var(--mac-field-fill);
+  background-image: none;
+  box-shadow: var(--mac-field-shadow);
+}
+
+.kody-select__trigger--field:hover:not(:disabled) {
+  border-color: var(--mac-control-border-hover);
+  background-color: var(--mac-field-fill);
+  background-image: none;
+}
+
+.kody-select__trigger--field:focus-visible,
+.kody-select__trigger--field[data-state="open"] {
+  border-color: color-mix(in srgb, var(--mac-focus-color) 72%, var(--mac-control-border));
+  background-color: var(--mac-field-fill);
+  background-image: none;
+  box-shadow: var(--mac-field-focus-ring);
+}
+
+.kody-select__trigger--field:disabled,
+.provider-field .kody-select__trigger--field:disabled {
+  border-color: var(--mac-control-border);
+  background-color: var(--mac-field-fill-disabled);
+  background-image: none;
+  color: var(--faint);
+  box-shadow: none;
+  cursor: default;
+  opacity: .62;
+}
+
+.kody-select__trigger--toolbar {
+  min-height: var(--mac-control-height);
+  padding: .12rem .45rem .12rem .55rem;
+  border-color: var(--mac-button-border);
+  border-radius: var(--mac-button-radius);
+  background-color: var(--mac-button-fill);
+  background-image: var(--mac-button-gradient);
+  font-size: var(--mac-compact-control-font-size);
+}
+
+.kody-select__trigger--compact {
+  min-height: var(--mac-control-height-compact);
+  padding: .08rem .32rem;
+  border: 1px solid transparent;
+  background: transparent;
+  font-size: var(--mac-compact-control-font-size);
+  box-shadow: none;
+}
+
+.image-composer__options .kody-select__trigger--compact {
+  border-color: var(--mac-button-border);
+  background-color: var(--mac-button-fill);
+  background-image: var(--mac-button-gradient);
+  box-shadow: var(--mac-button-shadow);
+}
+
+.kody-select__trigger--chip {
+  min-height: var(--mac-control-height-compact);
+  padding: 0 .15rem;
+  border: 0;
+  background: transparent;
+  font-size: var(--mac-compact-control-font-size);
+  box-shadow: none;
+}
+
+.kody-select__trigger--compact:hover:not(:disabled),
+.kody-select__trigger--compact[data-state="open"] {
+  border-color: var(--mac-tag-border);
+  background: var(--mac-tag-fill);
+  box-shadow: none;
+}
+
+.image-composer__options .kody-select__trigger--compact:hover:not(:disabled) {
+  border-color: var(--mac-button-border);
+  background-color: var(--mac-button-fill-hover);
+  background-image: var(--mac-button-gradient-hover);
+  box-shadow: var(--mac-button-shadow);
+}
+
+.image-composer__options .kody-select__trigger--compact[data-state="open"] {
+  border-color: color-mix(in srgb, var(--mac-focus-color) 72%, var(--mac-control-border));
+  background-color: var(--mac-button-fill-pressed);
+  background-image: var(--mac-button-gradient-pressed);
+  box-shadow: var(--mac-focus-ring);
+}
+
+.kody-select__trigger--chip:hover:not(:disabled),
+.kody-select__trigger--chip[data-state="open"] {
+  background: transparent;
+  box-shadow: none;
+}
+
+.kody-select__trigger--chip:focus-visible {
+  outline: 0;
+  box-shadow: none;
+}
+
+.reference-chip:focus-within {
+  border-color: color-mix(in srgb, var(--mac-focus-color) 64%, var(--mac-tag-border));
+  box-shadow: var(--mac-focus-ring);
+}
+
+.kody-select__trigger-icon {
+  color: var(--muted);
+}
+
+.kody-select__trigger[data-state="open"] .kody-select__trigger-icon {
+  transform: none;
+}
+
+.kody-select__content,
+.model-menu__content,
+.thread-workflow-menu {
+  border: 1px solid var(--mac-menu-border);
+  border-radius: var(--mac-menu-radius);
+  background: var(--mac-menu-fill);
+  color: var(--text);
+  box-shadow: var(--mac-menu-shadow);
+  backdrop-filter: saturate(180%) blur(30px);
+  -webkit-backdrop-filter: saturate(180%) blur(30px);
+}
+
+.kody-select__viewport,
+.thread-workflow-menu {
+  padding: .24rem;
+}
+
+.kody-select__item,
+.model-menu__item,
+.thread-workflow-menu > button {
+  min-height: 1.625rem;
+  border-radius: 6px;
+  font-size: var(--mac-menu-font-size);
+  font-weight: var(--weight-regular);
+  line-height: 1.2;
+}
+
+.kody-select__item {
+  padding: .28rem .55rem .28rem 1.75rem;
+}
+
+.thread-workflow-menu > button {
+  padding: .25rem .38rem;
+}
+
+.kody-select__item[data-highlighted],
+.kody-select__item[data-state="checked"][data-highlighted],
+.model-menu__item[data-highlighted],
+.thread-workflow-menu > button:hover:not(:disabled),
+.thread-workflow-menu > button:focus-visible {
+  outline: 0;
+  background: var(--mac-menu-selection-fill);
+  color: var(--mac-menu-selection-text);
+}
+
+.kody-select__item[data-state="checked"] {
+  background: transparent;
+  font-weight: var(--weight-regular);
+}
+
+.kody-select__item-indicator {
+  inset-inline-start: .45rem;
+  color: var(--mac-focus-color);
+}
+
+.kody-select__item[data-highlighted] .kody-select__item-indicator {
+  color: var(--mac-menu-selection-text);
+}
+
+.kody-select__item[data-disabled],
+.model-menu__item[data-disabled],
+.thread-workflow-menu > button:disabled {
+  color: var(--faint);
+  opacity: .58;
+}
+
+.thread-workflow-menu > button[aria-checked="true"]:disabled {
+  color: var(--mac-control-text);
+  opacity: 1;
+}
+
+.kody-select__scroll-button {
+  color: var(--mac-control-secondary-text);
+}
+
+.kody-select__scroll-button:hover,
+.kody-select__scroll-button:focus-visible {
+  outline: 0;
+  background: var(--mac-button-fill-hover);
+  color: var(--mac-control-text);
+}
+
+/* Search palettes are roomier than menus, but still use a Mac popover. */
+
+.mention-palette {
+  border: 1px solid var(--mac-menu-border);
+  border-radius: var(--mac-menu-radius);
+  background: var(--mac-menu-fill);
+  box-shadow: var(--mac-menu-shadow);
+  backdrop-filter: saturate(180%) blur(30px);
+  -webkit-backdrop-filter: saturate(180%) blur(30px);
+}
+
+.mention-palette__header {
+  min-height: 2.25rem;
+  padding: .38rem .5rem .35rem .6rem;
+  border-color: var(--separator);
+}
+
+.mention-palette__header .eyebrow {
+  display: none;
+}
+
+.mention-palette__header h3 {
+  margin: 0;
+  font-size: var(--mac-control-font-size);
+  font-weight: var(--weight-medium);
+}
+
+.mention-search {
+  margin: .4rem;
+}
+
+.mention-options {
+  padding: .2rem;
+}
+
+.mention-option {
+  min-height: 2.35rem;
+  padding: .3rem .4rem;
+  gap: .45rem;
+  border-radius: 5px;
+}
+
+.mention-option__glyph {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 5px;
+}
+
+.mention-option__copy strong {
+  font-size: var(--mac-control-font-size);
+  font-weight: var(--weight-medium);
+}
+
+.mention-option__copy span,
+.mention-palette__footer,
+.mention-options__empty {
+  font-size: var(--font-small);
+}
+
+.mention-option[aria-selected="true"] .mention-option__copy span,
+.mention-option[aria-selected="true"] .asset-kind {
+  color: var(--mac-primary-contrast);
+}
+
+.mention-option[aria-selected="true"] {
+  background: var(--mac-primary-fill);
+  color: var(--mac-primary-contrast);
+}
+
+/* Tags, badges, and state capsules ------------------------------------ */
+
+.asset-row__badge,
+.thread-badge,
+.server-pill,
+.conversation-document-header__status,
+.live-label,
+.count-pill,
+.asset-kind,
+.update-status,
+.working-directory-chip,
+.reference-chip,
+.thread-loading-overlay {
+  border: 1px solid var(--mac-tag-border);
+  border-radius: 999px;
+  background: var(--mac-tag-fill);
+  box-shadow: none;
+  font-weight: var(--weight-medium);
+  line-height: 1.15;
+}
+
+.asset-row__badge,
+.thread-badge,
+.asset-kind,
+.count-pill {
+  min-height: 1.25rem;
+  padding: .08rem .38rem;
+  font-size: var(--font-micro);
+}
+
+.conversation-document-header__status,
+.live-label {
+  min-height: 1.25rem;
+  padding: .08rem .38rem;
+  font-size: var(--font-small);
+}
+
+.live-label {
+  font-weight: var(--weight-semibold);
+}
+
+.server-pill {
+  min-height: 1.35rem;
+  background: transparent;
+}
+
+.update-status {
+  min-height: 1.55rem;
+  padding: .14rem .4rem;
+  font-size: var(--font-small);
+  font-weight: var(--weight-regular);
+}
+
+.working-directory-chip,
+.reference-chip {
+  height: var(--mac-control-height);
+  min-height: var(--mac-control-height);
+  padding-block: 0;
+  border-radius: 6px;
+}
+
+.working-directory-chip {
+  padding-inline: .42rem .15rem;
+}
+
+.reference-chip {
+  padding-inline: .38rem .15rem;
+}
+
+.working-directory-chip > button,
+.reference-chip__remove {
+  width: var(--mac-control-height);
+  min-width: var(--mac-control-height);
+  height: var(--mac-control-height);
+}
+
+.right-rail-trigger__count {
+  border-color: var(--surface);
+  background: var(--control-strong);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 12%);
+}
+
+.asset-row__badge--new_progress,
+.conversation-document-header__status {
+  border-color: color-mix(in srgb, var(--brand) 24%, transparent);
+  background: var(--brand-soft);
+  color: var(--mac-brand-foreground);
+}
+
+.asset-row__badge--deferred,
+.conversation-document-header__status--deferred {
+  border-color: color-mix(in srgb, var(--note) 24%, transparent);
+  background: var(--note-soft);
+  color: var(--mac-note-foreground);
+}
+
+.asset-row__badge--running,
+.conversation-document-header__status--running,
+.live-label,
+.update-status--up-to-date {
+  border-color: color-mix(in srgb, var(--success) 24%, transparent);
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.asset-row__badge--handled,
+.conversation-document-header__status--handled {
+  border-color: var(--mac-tag-border);
+  background: var(--mac-tag-fill);
+  color: var(--muted);
+}
+
+.asset-kind--thread {
+  border-color: color-mix(in srgb, var(--thread) 24%, transparent);
+  background: var(--thread-soft);
+  color: var(--mac-thread-foreground);
+}
+
+.asset-kind--project {
+  border-color: color-mix(in srgb, var(--project) 24%, transparent);
+  background: var(--project-soft);
+  color: var(--mac-project-foreground);
+}
+
+.update-status--available,
+.update-status--downloaded {
+  border-color: color-mix(in srgb, var(--thread) 30%, transparent);
+  color: var(--mac-thread-foreground);
+}
+
+.update-status--error {
+  border-color: color-mix(in srgb, var(--mac-danger-foreground) 30%, transparent);
+  color: var(--mac-danger-foreground);
+}
+
+.update-status--checking,
+.update-status--downloading,
+.working-directory-chip {
+  border-color: color-mix(in srgb, var(--workspace) 28%, transparent);
+}
+
+/* Message composer -----------------------------------------------------
+ * The footer uses compact macOS pop-up buttons: one control surface, a
+ * fixed disclosure well, a pressed state on pointer open, and a focus ring
+ * only for keyboard navigation. Keep this below the shared families because
+ * Radix portals and density variants otherwise reintroduce layered faces. */
+
+.composer--message :is(
+  .model-menu__trigger,
+  .model-provider-settings-button,
+  .permission-mode-control
+) {
+  height: var(--mac-control-height);
+  min-height: var(--mac-control-height);
+  padding: .0625rem .1875rem .0625rem .375rem;
+  justify-content: flex-start;
+  gap: .3rem;
+  border: 1px solid var(--mac-popup-control-border);
+  border-radius: var(--mac-button-radius);
+  background-color: var(--mac-popup-control-fill);
+  background-image: var(--mac-popup-control-gradient);
+  color: var(--mac-control-text);
+  font-size: var(--mac-compact-control-font-size);
+  font-weight: var(--weight-regular);
+  line-height: 1.2;
+  box-shadow: var(--mac-popup-control-shadow);
+  transition: border-color 90ms ease, background-color 90ms ease, box-shadow 90ms ease;
+}
+
+.composer--message .model-menu__trigger,
+.composer--message .permission-mode-control {
+  max-width: 11rem;
+  border: 0;
+  box-shadow: none;
+  transition: background-color 90ms ease, color 90ms ease;
+}
+
+.composer--message :is(
+  .model-menu__trigger,
+  .model-provider-settings-button,
+  .permission-mode-control
+):hover:not(:disabled) {
+  border-color: var(--mac-popup-control-border-hover);
+  background-color: var(--mac-popup-control-fill-hover);
+  background-image: var(--mac-popup-control-gradient);
+  color: var(--mac-control-text);
+  box-shadow: var(--mac-popup-control-shadow);
+}
+
+.composer--message :is(
+  .model-menu__trigger,
+  .permission-mode-control
+)[data-state="open"] {
+  border-color: var(--mac-popup-control-border-hover);
+  background-color: var(--mac-popup-control-fill-pressed);
+  background-image: var(--mac-popup-control-gradient-pressed);
+  box-shadow: var(--mac-popup-control-shadow-pressed);
+}
+
+.composer--message :is(
+  .model-menu__trigger,
+  .permission-mode-control
+):hover:not(:disabled),
+.composer--message :is(
+  .model-menu__trigger,
+  .permission-mode-control
+)[data-state="open"] {
+  box-shadow: none;
+}
+
+.composer--message :is(
+  .model-menu__trigger,
+  .permission-mode-control
+):hover:not(:disabled):focus-visible,
+.composer--message :is(
+  .model-menu__trigger,
+  .permission-mode-control
+)[data-state="open"]:focus-visible {
+  box-shadow: var(--mac-popup-focus-ring);
+}
+
+.composer--message :is(
+  .model-menu__trigger,
+  .model-provider-settings-button,
+  .permission-mode-control
+):focus-visible {
+  border-color: color-mix(in srgb, var(--focus) 70%, var(--mac-popup-control-border));
+  outline: 0;
+  box-shadow: var(--mac-popup-focus-ring);
+}
+
+.composer--message :is(
+  .model-menu__trigger,
+  .model-provider-settings-button,
+  .permission-mode-control
+):disabled {
+  border-color: var(--mac-popup-control-border);
+  background-color: var(--mac-field-fill-disabled);
+  background-image: none;
+  color: var(--faint);
+  box-shadow: none;
+  cursor: default;
+  opacity: .62;
+}
+
+.composer--message .model-menu__trigger-label,
+.composer--message .permission-mode-control .kody-select__value {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: currentColor;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer--message .model-menu__trigger-leading,
+.composer--message .permission-mode-control .kody-select__leading-icon {
+  width: .875rem;
+  height: .875rem;
+  color: var(--mac-control-secondary-text);
+}
+
+.composer--message .model-menu__trigger[data-speedy="true"] .model-menu__trigger-leading {
+  color: var(--mac-speedy-foreground);
+  fill: currentColor;
+}
+
+.composer--message .model-menu__trigger-indicator,
+.composer--message .permission-mode-control .kody-select__trigger-icon {
+  width: 1rem;
+  min-width: 1rem;
+  height: 1rem;
+  margin-inline-start: .05rem;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: var(--mac-popup-indicator-fill);
+  color: var(--mac-control-secondary-text);
+  box-shadow: none;
+}
+
+.composer--message .model-menu__trigger-indicator > svg,
+.composer--message .permission-mode-control .kody-select__trigger-icon > svg {
+  width: .6875rem;
+  height: .6875rem;
+  stroke-width: 2;
+}
+
+.composer--message :is(
+  .model-menu__trigger,
+  .permission-mode-control
+):hover:not(:disabled) :is(
+  .model-menu__trigger-indicator,
+  .kody-select__trigger-icon
+) {
+  background: var(--mac-popup-indicator-fill-hover);
+}
+
+.composer--message :is(
+  .model-menu__trigger,
+  .permission-mode-control
+)[data-state="open"] :is(
+  .model-menu__trigger-indicator,
+  .kody-select__trigger-icon
+) {
+  background: var(--mac-popup-indicator-fill-pressed);
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 18%);
+  transform: none;
+}
+
+.composer--message .permission-mode-control--full_access {
+  border: 0;
+  background-color: var(--mac-permission-danger-fill);
+  background-image: none;
+  color: var(--mac-danger-foreground);
+}
+
+.composer--message .permission-mode-control--full_access:hover:not(:disabled),
+.composer--message .permission-mode-control--full_access[data-state="open"] {
+  background-color: var(--mac-permission-danger-fill-hover);
+  color: var(--mac-danger-foreground);
+}
+
+.composer--message .permission-mode-control--full_access[data-state="open"] {
+  background-color: var(--mac-permission-danger-fill-pressed);
+  background-image: none;
+}
+
+.composer--message .permission-mode-control--full_access .kody-select__leading-icon {
+  color: var(--mac-danger-foreground);
+}
+
+.composer--message .permission-mode-control--full_access:disabled {
+  background-color: var(--mac-field-fill-disabled);
+  background-image: none;
+  color: var(--faint);
+}
+
+.composer--message .permission-mode-control--full_access:disabled .kody-select__leading-icon {
+  color: inherit;
+}
+
+.composer--message .context-button {
+  width: var(--mac-control-height);
+  min-width: var(--mac-control-height);
+  height: var(--mac-control-height);
+  min-height: var(--mac-control-height);
+  border-radius: 5px;
+}
+
+.composer--message .context-button > svg {
+  width: .875rem;
+  height: .875rem;
+  stroke-width: 1.75;
+}
+
+.composer--message .context-button:hover:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--mac-control-text) 7%, transparent);
+}
+
+.composer--message .context-button:active:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--mac-control-text) 13%, transparent);
+}
+
+.composer--message :is(.context-button, .turn-button):focus-visible,
+.composer--message .working-directory-chip > button:focus-visible {
+  outline: 0;
+  box-shadow: var(--mac-field-focus-ring);
+}
+
+.composer--message .turn-button {
+  height: var(--mac-control-height);
+  min-width: 4.5rem;
+  min-height: var(--mac-control-height);
+  padding: .1rem .55rem;
+  border-radius: var(--mac-button-radius);
+  font-size: var(--mac-compact-control-font-size);
+  font-weight: var(--weight-medium);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 24%), 0 1px 1px rgb(0 0 0 / 10%);
+}
+
+.composer--message .turn-button:active:not(:disabled) {
+  box-shadow: var(--mac-popup-control-shadow-pressed);
+}
+
+.composer--message .turn-button:disabled {
+  border-color: var(--mac-popup-control-border);
+  background: var(--mac-field-fill-disabled);
+  color: var(--faint);
+  box-shadow: none;
+  opacity: .58;
+}
+
+.composer--message .working-directory-chip {
+  max-width: min(15rem, 38vw);
+  border-color: var(--mac-popup-control-border);
+  background: color-mix(in srgb, var(--mac-button-fill) 72%, transparent);
+  color: var(--mac-control-secondary-text);
+  font-weight: var(--weight-regular);
+}
+
+.composer--message .working-directory-chip > button:hover:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--mac-control-text) 8%, transparent);
+  color: var(--mac-control-text);
+}
+
+.composer--message .working-directory-chip > button:active:not(:disabled) {
+  background: color-mix(in srgb, var(--mac-control-text) 14%, transparent);
+  color: var(--mac-control-text);
+}
+
+.model-menu__content,
+.composer-permission-menu {
+  border: 0;
+  border-radius: 8px;
+  background-color: var(--mac-menu-fill);
+  background-image: none;
+  box-shadow: var(--mac-popup-menu-shadow);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.model-menu__content {
+  min-width: 13.5rem;
+  padding: .1875rem;
+}
+
+.model-menu__sub-content {
+  min-width: 11.5rem;
+}
+
+.model-menu__item {
+  min-height: var(--mac-control-height);
+  padding-block: .2rem;
+  border-radius: 5px;
+}
+
+.composer-permission-menu {
+  min-width: max(11.5rem, var(--radix-select-trigger-width));
+}
+
+.composer-permission-menu .kody-select__viewport {
+  padding: .1875rem;
+}
+
+.composer-permission-menu .kody-select__item {
+  min-height: var(--mac-control-height);
+  padding: .2rem .5rem .2rem 1.625rem;
+  border-radius: 5px;
+}
+
+.composer-permission-menu .kody-select__item-indicator {
+  inset-inline-start: .375rem;
+}
+
+@media (max-width: 48rem) {
+  .provider-settings-backdrop {
+    padding: 0;
+  }
+
+  .provider-settings {
+    border: 0;
+    border-radius: 0;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .kody-select__content,
+  .model-menu__content,
+  .thread-workflow-menu,
+  .mention-palette,
+  .composer,
+  .thread-loading-overlay {
+    background: var(--surface-strong);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .provider-settings {
+    background: var(--mac-dialog-fill);
+  }
+
+  .provider-settings-backdrop {
+    background: rgb(0 0 0 / 32%);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --mac-control-border: color-mix(in srgb, var(--text) 46%, transparent);
+    --mac-control-border-hover: color-mix(in srgb, var(--text) 62%, transparent);
+    --mac-button-border: color-mix(in srgb, var(--text) 46%, transparent);
+    --mac-menu-border: color-mix(in srgb, var(--text) 52%, transparent);
+    --mac-tag-border: color-mix(in srgb, var(--text) 34%, transparent);
+  }
+}
+
+@media (forced-colors: active) {
+  .provider-field input,
+  .provider-field textarea,
+  .provider-secret-field input,
+  .user-input-free > input,
+  .asset-search__control,
+  .mention-search,
+  .kody-select__trigger,
+  .kody-select__content,
+  .model-menu__trigger,
+  .model-menu__content,
+  .thread-workflow-menu {
+    border-color: ButtonBorder;
+    background: Canvas;
+    color: CanvasText;
+    box-shadow: none;
+  }
+
+  :is(
+    .primary-action,
+    .secondary-action,
+    .primary-button,
+    .secondary-button,
+    .approval-allow,
+    .send-button,
+    .turn-button,
+    .user-input-submit,
+    .provider-primary-button,
+    .provider-secondary-button,
+    .provider-danger-button,
+    .provider-profile-add,
+    .provider-link-button,
+    .process-action,
+    .process-output__more,
+    .process-section__history,
+    .titlebar__workflow-action,
+    .connection-banner button,
+    .error-banner button,
+    .artifact-card__download,
+    .icon-button,
+    .context-button,
+    .asset-row__menu-trigger,
+    .asset-row__status-action,
+    .working-directory-chip > button,
+    .composer__image > button,
+    .reference-chip__remove
+  ) {
+    border-color: ButtonBorder;
+    background: ButtonFace;
+    color: ButtonText;
+    box-shadow: none;
+  }
+
+  :is(
+    .primary-button,
+    .approval-allow,
+    .send-button,
+    .turn-button:not(.turn-button--stop),
+    .user-input-submit,
+    .provider-primary-button
+  ) {
+    border-color: Highlight;
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  .provider-settings,
+  .asset-row__badge,
+  .thread-badge,
+  .conversation-document-header__status,
+  .live-label,
+  .count-pill,
+  .asset-kind,
+  .update-status,
+  .working-directory-chip,
+  .reference-chip {
+    border-color: ButtonBorder;
+    background: Canvas;
+    color: CanvasText;
+    box-shadow: none;
+  }
+
+  .kody-select__item[data-highlighted],
+  .model-menu__item[data-highlighted],
+  .thread-workflow-menu > button:focus-visible {
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  .provider-field input:focus-visible,
+  .provider-field textarea:focus-visible,
+  .provider-secret-field input:focus-visible,
+  .user-input-free > input:focus-visible,
+  .kody-select__trigger:focus-visible,
+  .model-menu__trigger:focus-visible,
+  .asset-search__control:focus-within,
+  .mention-search:focus-within,
+  .permission-mode-control:focus-visible,
+  .reference-chip:focus-within {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+    box-shadow: none;
+  }
+
+  :is(
+    .primary-action,
+    .secondary-action,
+    .primary-button,
+    .secondary-button,
+    .approval-allow,
+    .send-button,
+    .turn-button,
+    .user-input-submit,
+    .provider-primary-button,
+    .provider-secondary-button,
+    .provider-danger-button,
+    .provider-profile-add,
+    .provider-link-button,
+    .process-action,
+    .process-output__more,
+    .process-section__history,
+    .titlebar__workflow-action,
+    .connection-banner button,
+    .error-banner button,
+    .artifact-card__download,
+    .icon-button,
+    .context-button,
+    .asset-row__menu-trigger,
+    .asset-row__status-action,
+    .working-directory-chip > button,
+    .composer__image > button,
+    .reference-chip__remove
+  ):focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+    box-shadow: none;
+  }
+}

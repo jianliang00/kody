@@ -18,20 +18,14 @@ describe('right rail section state', () => {
     expect(RIGHT_RAIL_SECTION_IDS).toEqual([
       'context',
       'workspace',
-      'references',
-      'processes',
       'changes',
-      'timeline',
-      'projects'
+      'timeline'
     ])
     expect(DEFAULT_RIGHT_RAIL_SECTIONS).toEqual({
       context: true,
       workspace: false,
-      references: false,
-      processes: false,
       changes: false,
-      timeline: false,
-      projects: true
+      timeline: false
     })
   })
 
@@ -39,8 +33,11 @@ describe('right rail section state', () => {
     window.localStorage.setItem(RIGHT_RAIL_SECTIONS_STORAGE_KEY, JSON.stringify({
       context: false,
       workspace: true,
+      // Removed duplicate detail sections from older builds are ignored.
       references: 'true',
+      processes: true,
       changes: null,
+      // Removed section keys from older builds are ignored.
       projects: false,
       unknown: true
     }))
@@ -48,11 +45,8 @@ describe('right rail section state', () => {
     expect(readStoredRightRailSections(window.localStorage)).toEqual({
       context: false,
       workspace: true,
-      references: false,
-      processes: false,
       changes: false,
-      timeline: false,
-      projects: false
+      timeline: false
     })
   })
 
@@ -68,11 +62,8 @@ describe('right rail section state', () => {
     expect(readStoredRightRailSections(window.localStorage)).toEqual({
       context: true,
       workspace: true,
-      references: true,
-      processes: true,
       changes: true,
-      timeline: true,
-      projects: true
+      timeline: true
     })
 
     window.localStorage.setItem(RIGHT_RAIL_SECTIONS_STORAGE_KEY, '{bad json')
@@ -101,11 +92,8 @@ describe('right rail section state', () => {
     expect(serializeRightRailSections(state)).toBe(JSON.stringify({
       context: false,
       workspace: false,
-      references: false,
-      processes: false,
       changes: true,
-      timeline: false,
-      projects: true
+      timeline: false
     }))
   })
 

@@ -2358,6 +2358,8 @@ mod tests {
                     input_message_id: message_id,
                     provider: "scripted".into(),
                     model: "test".into(),
+                    reasoning_effort: None,
+                    speedy: false,
                     permission_mode: PermissionMode::Ask,
                     temperature: None,
                     max_output_tokens: None,

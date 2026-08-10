@@ -533,6 +533,8 @@ async fn websocket_create_and_start_is_idempotent_and_streams_from_the_first_eve
                 "message": "Explain the provider neutral agent loop",
                 "references": [],
                 "provider": "echo",
+                "reasoning_effort": "high",
+                "speedy": true,
                 "permission_mode": "full_access"
             }
         })
@@ -552,6 +554,8 @@ async fn websocket_create_and_start_is_idempotent_and_streams_from_the_first_eve
         .context("create-and-start returned no Turn")?
         .to_owned();
     assert_eq!(created["result"]["turn"]["permission_mode"], "full_access");
+    assert_eq!(created["result"]["turn"]["reasoning_effort"], "high");
+    assert_eq!(created["result"]["turn"]["speedy"], true);
     let mut event_types = Vec::new();
     let mut last_sequence = 0_u64;
     for _ in 0..48 {
@@ -684,6 +688,8 @@ async fn authorized_websocket_runs_echo_turn_and_streams_subscribed_events() -> 
                 "thread_id": thread_id,
                 "message": "echo across the network",
                 "provider": "echo",
+                "reasoning_effort": "low",
+                "speedy": false,
                 "permission_mode": "read_only"
             }
         }),
@@ -698,6 +704,8 @@ async fn authorized_websocket_runs_echo_turn_and_streams_subscribed_events() -> 
         if message["id"] == "start-turn" {
             assert_eq!(message["result"]["status"], "queued");
             assert_eq!(message["result"]["permission_mode"], "read_only");
+            assert_eq!(message["result"]["reasoning_effort"], "low");
+            assert_eq!(message["result"]["speedy"], false);
             turn_id = message["result"]["id"].as_str().map(str::to_owned);
             continue;
         }
@@ -803,6 +811,8 @@ async fn websocket_exposes_managed_process_events_output_and_stop() -> Result<()
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
+            reasoning_effort: None,
+            speedy: false,
             permission_mode: None,
             temperature: None,
             max_output_tokens: None,

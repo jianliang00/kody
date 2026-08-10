@@ -1,13 +1,12 @@
 import {
   Activity,
-  FolderGit2,
-  MessagesSquare,
+  ChevronRight,
   ShieldAlert,
   TerminalSquare
 } from 'lucide-react'
 import type { Project, Thread, ThreadSnapshot } from '@shared/protocol'
-import type { ThreadContextView } from '../lib/threadContext'
-import { isProcessActive, sortManagedProcesses } from '../lib/processes'
+import { deriveThreadRuntime, type ThreadContextView } from '../lib/threadContext'
+import type { ContextDetailKind } from './ContextDetailsDialog'
 import { RightRailDisclosure } from './RightRailDisclosure'
 
 interface ThreadContextCardProps {
@@ -17,6 +16,7 @@ interface ThreadContextCardProps {
   context: ThreadContextView
   expanded: boolean
   onExpandedChange: (expanded: boolean) => void
+  onOpenDetails: (kind: ContextDetailKind, trigger: HTMLButtonElement) => void
 }
 
 export function ThreadContextCard({
@@ -25,18 +25,12 @@ export function ThreadContextCard({
   projects,
   context,
   expanded,
-  onExpandedChange
+  onExpandedChange,
+  onOpenDetails
 }: ThreadContextCardProps) {
-  const activeProcesses = sortManagedProcesses(snapshot.processes.filter(isProcessActive))
-  const activeProcessOrigins = new Set(activeProcesses.map((process) => (
-    `${process.origin.turn_id}:${process.origin.tool_call_id}`
-  )))
-  const foregroundTools = context.runningTools.filter((tool) => !activeProcessOrigins.has(tool.key))
-  const foregroundLeafCount = foregroundTools.length + context.pendingApprovals.length
-  const foregroundActivityCount = foregroundLeafCount > 0
-    ? foregroundLeafCount
-    : Math.min(context.activeTurns.length, 1)
-  const activeCount = foregroundActivityCount + activeProcesses.length
+  const { activeProcesses, foregroundTools, activeCount } = deriveThreadRuntime(snapshot, context)
+  const pendingThreadCount = context.pendingReferences.filter((reference) => reference.kind === 'thread').length
+  const pendingProjectCount = context.pendingReferences.filter((reference) => reference.kind === 'project').length
 
   return (
     <RightRailDisclosure
@@ -47,21 +41,6 @@ export function ThreadContextCard({
       expanded={expanded}
       onExpandedChange={onExpandedChange}
     >
-      <dl className="thread-context-card__metrics">
-        <div className="thread-context-card__metric thread-context-card__metric--thread">
-          <dt><MessagesSquare aria-hidden="true" size={14} /> Threads</dt>
-          <dd>{context.threadReferences.length}</dd>
-        </div>
-        <div className="thread-context-card__metric thread-context-card__metric--project">
-          <dt><FolderGit2 aria-hidden="true" size={14} /> Projects</dt>
-          <dd>{context.projectReferences.length}</dd>
-        </div>
-        <div className="thread-context-card__metric thread-context-card__metric--process">
-          <dt title="Active managed background processes"><TerminalSquare aria-hidden="true" size={14} /> Managed procs</dt>
-          <dd>{activeProcesses.length}</dd>
-        </div>
-      </dl>
-
       <div className="thread-context-card__body">
         <ContextGroup
           label="Referenced Threads"
@@ -72,6 +51,8 @@ export function ThreadContextCard({
             detail: threadModeLabel(reference.mode),
             kind: 'thread' as const
           }))}
+          pendingCount={pendingThreadCount}
+          onOpenDetails={(trigger) => onOpenDetails('threads', trigger)}
         />
         <ContextGroup
           label="Referenced Projects"
@@ -82,13 +63,24 @@ export function ThreadContextCard({
             detail: reference.access === 'read_write' ? 'Read & write' : 'Read only',
             kind: 'project' as const
           }))}
+          pendingCount={pendingProjectCount}
+          onOpenDetails={(trigger) => onOpenDetails('projects', trigger)}
         />
 
         <section className="thread-context-card__runtime" aria-labelledby="thread-runtime-title">
-          <div className="thread-context-card__group-label">
+          <button
+            className="thread-context-card__group-label thread-context-card__detail-trigger"
+            type="button"
+            aria-haspopup="dialog"
+            aria-label="Show Runtime details"
+            onClick={(event) => onOpenDetails('runtime', event.currentTarget)}
+          >
             <span id="thread-runtime-title">Runtime</span>
-            {activeCount > 0 ? <span className="activity-count"><span aria-hidden="true" /> {activeCount} active</span> : null}
-          </div>
+            <span className="thread-context-card__detail-meta">
+              {activeCount > 0 ? <span className="activity-count"><span aria-hidden="true" /> {activeCount} active</span> : null}
+              <ChevronRight aria-hidden="true" size={13} />
+            </span>
+          </button>
           {activeCount === 0 ? (
             <p className="thread-context-card__empty">No active operations</p>
           ) : (
@@ -142,20 +134,35 @@ export function ThreadContextCard({
 function ContextGroup({
   label,
   empty,
-  items
+  items,
+  pendingCount,
+  onOpenDetails
 }: {
   label: string
   empty: string
   items: Array<{ key: string; name: string; detail: string; kind: 'thread' | 'project' }>
+  pendingCount: number
+  onOpenDetails: (trigger: HTMLButtonElement) => void
 }) {
   return (
     <section className="thread-context-card__group" aria-label={label}>
-      <div className="thread-context-card__group-label">
+      <button
+        className="thread-context-card__group-label thread-context-card__detail-trigger"
+        type="button"
+        aria-haspopup="dialog"
+        aria-label={`Show ${label} details`}
+        onClick={(event) => onOpenDetails(event.currentTarget)}
+      >
         <span>{label}</span>
-        <span>{items.length}</span>
-      </div>
+        <span className="thread-context-card__detail-meta">
+          <span>{items.length}{pendingCount > 0 ? ` · ${pendingCount} pending` : ''}</span>
+          <ChevronRight aria-hidden="true" size={13} />
+        </span>
+      </button>
       {items.length === 0 ? (
-        <p className="thread-context-card__empty">{empty}</p>
+        <p className="thread-context-card__empty">
+          {pendingCount > 0 ? `No active ${label.toLowerCase()}` : empty}
+        </p>
       ) : (
         <ul>
           {items.slice(0, 3).map((item) => (

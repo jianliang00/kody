@@ -43,10 +43,13 @@ import type {
 import { AssetRail } from './components/AssetRail'
 import { Composer } from './components/Composer'
 import { Conversation } from './components/Conversation'
+import {
+  ContextDetailsDialog,
+  type ContextDetailKind
+} from './components/ContextDetailsDialog'
 import { DraftConversation } from './components/DraftConversation'
 import { Inspector } from './components/Inspector'
 import { ImageComposer, type ImageGenerationOptions } from './components/ImageComposer'
-import { ProjectShelf } from './components/ProjectShelf'
 import {
   ProviderSettingsDialog,
   type ProviderProfileSubmission
@@ -56,7 +59,6 @@ import { ThreadContextCard } from './components/ThreadContextCard'
 import { TitleBar } from './components/TitleBar'
 import { WorkbenchRail } from './components/WorkbenchRail'
 import { getKodyBridge } from './lib/mockBridge'
-import { referenceKey, upsertReference } from './lib/references'
 import { isProcessActive, shouldRefreshProcessSnapshot } from './lib/processes'
 import {
   readStoredRightRailSections,
@@ -84,6 +86,19 @@ import {
 } from './lib/workbench'
 
 type ExtendedBridge = KodyDesktopBridge & { copyText?: (text: string) => Promise<void> }
+
+function setSelectedProvider(
+  bridge: KodyDesktopBridge,
+  providerId: string | null
+): Promise<ProviderSettingsResult> {
+  const selectProvider = (bridge as Partial<KodyDesktopBridge>).setSelectedProvider
+  if (typeof selectProvider !== 'function') {
+    return Promise.reject(new Error(
+      'Kody was updated while running. Restart the app to change the model Provider.'
+    ))
+  }
+  return selectProvider.call(bridge, providerId)
+}
 
 const TERMINAL_EVENTS = new Set(['turn_completed', 'turn_failed', 'turn_cancelled'])
 const ASSET_RAIL_WIDTH_KEY = 'kody.assetRailWidth'
@@ -189,8 +204,9 @@ interface ComposerDraftState {
   message: string
   images: UploadedImage[]
   references: ContextReference[]
-  providerId: string
   model: string
+  reasoningEffort: string
+  speedy: boolean
   permissionMode: PermissionMode
 }
 
@@ -198,8 +214,9 @@ const EMPTY_COMPOSER_DRAFT: ComposerDraftState = {
   message: '',
   images: [],
   references: [],
-  providerId: '',
   model: '',
+  reasoningEffort: '',
+  speedy: false,
   permissionMode: 'ask'
 }
 
@@ -253,7 +270,7 @@ export function App() {
   )
   const [projectsHydrated, setProjectsHydrated] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(false)
-  const [projectShelfOpen, setProjectShelfOpen] = useState(false)
+  const [contextDetailKind, setContextDetailKind] = useState<ContextDetailKind | null>(null)
   const [focusThreadSearchRequest, setFocusThreadSearchRequest] = useState(0)
   const [rightRailSections, setRightRailSections] = useState(
     () => readStoredRightRailSections(window.localStorage)
@@ -292,7 +309,10 @@ export function App() {
   const userInputRef = useRef(new Set<string>())
   const processStopRef = useRef(new Set<string>())
   const modelLoadRef = useRef(new Set<string>())
+  const providerCatalogRequestRef = useRef(0)
+  const providerSettingsRequestRef = useRef(0)
   const focusThreadSearchRef = useRef(false)
+  const contextDetailTriggerRef = useRef<HTMLButtonElement>(null)
   const statusRef = useRef<ServerStatus['phase']>('starting')
   const hasHydratedRef = useRef(false)
   const preferDraftRef = useRef(false)
@@ -518,16 +538,45 @@ export function App() {
         return
       }
       await bridge.rpc('initialize', {})
-      const [threadResult, projectResult, providerResult] = await Promise.all([
+      const [threadResult, projectResult, providerResult, storedProviderSettings] = await Promise.all([
         bridge.rpc('thread/list', {}),
         bridge.rpc('project/list', {}),
-        bridge.rpc('provider/list', {})
+        bridge.rpc('provider/list', {}),
+        bridge.getProviderSettings()
       ])
       setThreads(threadProjectionRef.current.reconcileAll(threadResult.threads))
       setProjects(projectResult.projects)
       setProjectsHydrated(true)
       setProviders(providerResult.providers)
-      await refreshImageCatalog()
+      setProviderSettings(storedProviderSettings)
+
+      let nextProviderSettings = storedProviderSettings
+      if (!nextProviderSettings.selectedProviderId) {
+        const migrationCandidates = providerResult.providers.filter((provider) => (
+          provider.id !== 'echo' && provider.auth !== 'missing'
+        ))
+        const [migrationProvider] = migrationCandidates
+        if (migrationCandidates.length === 1 && migrationProvider) {
+          // Provider selection was moved from the composer into Settings. Keep
+          // this one-time migration non-fatal so a renderer HMR update cannot
+          // blank the whole app while Electron still has the previous preload.
+          nextProviderSettings = {
+            ...storedProviderSettings,
+            selectedProviderId: migrationProvider.id
+          }
+          try {
+            nextProviderSettings = await setSelectedProvider(bridge, migrationProvider.id)
+          } catch (error) {
+            console.warn('Could not persist the migrated model Provider selection:', error)
+          }
+        }
+      }
+      setProviderSettings(nextProviderSettings)
+      try {
+        await refreshImageCatalog()
+      } catch (error) {
+        console.warn('Could not load image providers during startup:', error)
+      }
 
       const activeId = activeThreadRef.current
       if (preserveNavigation) {
@@ -570,21 +619,36 @@ export function App() {
   }, [applySnapshot, bridge, refreshImageCatalog, selectThread])
 
   const refreshProviderCatalog = useCallback(async (): Promise<void> => {
-    const [result] = await Promise.all([
-      bridge.rpc('provider/list', {}),
-      refreshImageCatalog()
-    ])
-    setProviders(result.providers)
-  }, [bridge, refreshImageCatalog])
+    const request = ++providerCatalogRequestRef.current
+    const result = await bridge.rpc('provider/list', {})
+    if (providerCatalogRequestRef.current === request) setProviders(result.providers)
+  }, [bridge])
 
   const refreshProviderSettings = useCallback(async (): Promise<void> => {
-    const [settings, account] = await Promise.all([
-      bridge.getProviderSettings(),
-      bridge.getCodexAccountStatus()
-    ])
+    const request = ++providerSettingsRequestRef.current
+    const settings = await bridge.getProviderSettings()
+    if (providerSettingsRequestRef.current !== request) return
     setProviderSettings(settings)
-    setCodexAccount(account)
-  }, [bridge])
+    if (settings.selectedProviderId === 'codex') {
+      try {
+        const account = await bridge.getCodexAccountStatus()
+        if (providerSettingsRequestRef.current !== request) return
+        setCodexAccount(account)
+      } catch (error) {
+        if (providerSettingsRequestRef.current !== request) return
+        setCodexAccount({
+          state: 'unavailable',
+          detail: error instanceof Error ? error.message : 'Codex account status is unavailable.'
+        })
+      }
+    }
+    try {
+      // account/read can change the Codex provider's public auth descriptor.
+      await refreshProviderCatalog()
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : 'Could not refresh providers.')
+    }
+  }, [bridge, refreshProviderCatalog])
 
   const openProviderSettings = useCallback((): void => {
     setProviderSettingsOpen(true)
@@ -638,7 +702,12 @@ export function App() {
   }, [bridge])
 
   useEffect(() => {
-    if (!providerSettingsOpen || codexAccount.state === 'signed-in' || codexAccount.state === 'unavailable') return
+    if (
+      !providerSettingsOpen
+      || providerSettings.selectedProviderId !== 'codex'
+      || codexAccount.state === 'signed-in'
+      || codexAccount.state === 'unavailable'
+    ) return
     let cancelled = false
     let polling = false
     const poll = async (): Promise<void> => {
@@ -675,7 +744,13 @@ export function App() {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [bridge, codexAccount.state, providerSettingsOpen, refreshProviderCatalog])
+  }, [
+    bridge,
+    codexAccount.state,
+    providerSettings.selectedProviderId,
+    providerSettingsOpen,
+    refreshProviderCatalog
+  ])
 
   useEffect(() => {
     document.documentElement.dataset.theme = darkTheme ? 'dark' : 'light'
@@ -743,16 +818,17 @@ export function App() {
     if (!railOpen && !inspectorOpen) return
     const closeDrawer = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return
+      if (contextDetailKind !== null) return
       setRailOpen(false)
       setInspectorOpen(false)
     }
     window.addEventListener('keydown', closeDrawer)
     return () => window.removeEventListener('keydown', closeDrawer)
-  }, [inspectorOpen, railOpen])
+  }, [contextDetailKind, inspectorOpen, railOpen])
 
   useEffect(() => {
-    if (!inspectorIsNarrow) setProjectShelfOpen(false)
-  }, [inspectorIsNarrow])
+    setContextDetailKind(null)
+  }, [activeThreadId])
 
   useEffect(() => {
     const railIsDrawer = railOpen && railIsNarrow
@@ -801,7 +877,7 @@ export function App() {
   }, [inspectorIsNarrow, inspectorOpen, railIsNarrow, railOpen])
 
   useEffect(() => {
-    if (!focusThreadSearchRef.current || projectShelfOpen) return
+    if (!focusThreadSearchRef.current) return
     if (railIsNarrow ? !railOpen : railCollapsed) return
     let focusFrame: number | undefined
     let focusSettleTimer: number | undefined
@@ -824,7 +900,7 @@ export function App() {
       if (focusFrame !== undefined) cancelAnimationFrame(focusFrame)
       if (focusSettleTimer !== undefined) window.clearTimeout(focusSettleTimer)
     }
-  }, [focusThreadSearchRequest, projectShelfOpen, railCollapsed, railIsNarrow, railOpen])
+  }, [focusThreadSearchRequest, railCollapsed, railIsNarrow, railOpen])
 
   useEffect(() => {
     const removeEventListener = bridge.onEvent((envelope) => {
@@ -1017,19 +1093,34 @@ export function App() {
     [bridge]
   )
 
+  const selectedProviderId = providerSettings.selectedProviderId ?? ''
+  const selectedProvider = providers.find((provider) => provider.id === selectedProviderId)
+  const composerProvider = selectedProvider?.auth === 'missing' ? undefined : selectedProvider
+  const composerProviderId = composerProvider?.id ?? ''
+  const composerModels = composerProviderId ? modelsByProvider[composerProviderId] ?? [] : []
+  const defaultCatalogModel = composerModels.find((model) => model.is_default) ?? composerModels[0]
   const composerDraftKey = activeThreadId ? `thread:${activeThreadId}` : `draft:${draftId}`
   const latestThreadTurn = snapshot && snapshot.thread.id === activeThreadId
     ? snapshot.turns.at(-1)
     : undefined
-  const initialComposerDraft = useMemo<ComposerDraftState>(() => latestThreadTurn ? {
-    ...EMPTY_COMPOSER_DRAFT,
-    providerId: latestThreadTurn.provider,
-    model: latestThreadTurn.model,
-    permissionMode: latestThreadTurn.permission_mode
-  } : EMPTY_COMPOSER_DRAFT, [
+  const initialComposerDraft = useMemo<ComposerDraftState>(() => {
+    if (!latestThreadTurn) return EMPTY_COMPOSER_DRAFT
+    return {
+      ...EMPTY_COMPOSER_DRAFT,
+      model: latestThreadTurn.provider === selectedProviderId ? latestThreadTurn.model : '',
+      reasoningEffort: latestThreadTurn.provider === selectedProviderId
+        ? latestThreadTurn.reasoning_effort ?? ''
+        : '',
+      speedy: latestThreadTurn.provider === selectedProviderId && Boolean(latestThreadTurn.speedy),
+      permissionMode: latestThreadTurn.permission_mode
+    }
+  }, [
     latestThreadTurn?.model,
     latestThreadTurn?.permission_mode,
-    latestThreadTurn?.provider
+    latestThreadTurn?.provider,
+    latestThreadTurn?.reasoning_effort,
+    latestThreadTurn?.speedy,
+    selectedProviderId
   ])
   useEffect(() => {
     if (!activeThreadId || !latestThreadTurn) return
@@ -1041,15 +1132,15 @@ export function App() {
   }, [activeThreadId, initialComposerDraft, latestThreadTurn])
   const composerDraft = composerDrafts[composerDraftKey] ?? initialComposerDraft
   const draftReferences = composerDraft.references
-  const composerProvider = providers.find((item) => (
-    item.id === composerDraft.providerId && item.auth !== 'missing'
-  )) ?? providers.find((item) => item.auth !== 'missing')
-  const composerProviderId = composerProvider?.id ?? ''
-  const composerModels = composerProviderId ? modelsByProvider[composerProviderId] ?? [] : []
-  const defaultCatalogModel = composerModels.find((model) => model.is_default) ?? composerModels[0]
-  const composerModel = (
-    composerDraft.providerId === composerProviderId ? composerDraft.model : ''
-  ) || composerProvider?.default_model || defaultCatalogModel?.id || ''
+  const composerModel = composerDraft.model || composerProvider?.default_model || defaultCatalogModel?.id || ''
+  const composerModelDescriptor = composerModels.find((model) => model.id === composerModel)
+  const composerReasoningEfforts = composerModelDescriptor?.reasoning_efforts ?? []
+  const composerReasoningEffort = composerReasoningEfforts.includes(composerDraft.reasoningEffort)
+    ? composerDraft.reasoningEffort
+    : composerModelDescriptor?.default_reasoning_effort
+      ?? composerReasoningEfforts[0]
+      ?? ''
+  const composerSpeedy = Boolean(composerModelDescriptor?.supports_speedy && composerDraft.speedy)
   const setDraftReferences = useCallback((
     update: ContextReference[] | ((current: ContextReference[]) => ContextReference[])
   ): void => {
@@ -1071,24 +1162,35 @@ export function App() {
       return { ...current, [composerDraftKey]: { ...existing, images } }
     })
   }, [composerDraftKey, initialComposerDraft])
-  const setComposerProvider = useCallback((providerId: string): void => {
-    const descriptor = providers.find((item) => item.id === providerId)
-    const catalog = modelsByProvider[providerId] ?? []
-    const model = descriptor?.default_model ?? catalog.find((item) => item.is_default)?.id ?? catalog[0]?.id ?? ''
-    setComposerDrafts((current) => {
-      const existing = current[composerDraftKey] ?? initialComposerDraft
-      return { ...current, [composerDraftKey]: { ...existing, providerId, model } }
-    })
-  }, [composerDraftKey, initialComposerDraft, modelsByProvider, providers])
   const setComposerModel = useCallback((model: string): void => {
+    const descriptor = composerModels.find((item) => item.id === model)
     setComposerDrafts((current) => {
       const existing = current[composerDraftKey] ?? initialComposerDraft
       return {
         ...current,
-        [composerDraftKey]: { ...existing, providerId: composerProviderId, model }
+        [composerDraftKey]: {
+          ...existing,
+          model,
+          reasoningEffort: descriptor?.default_reasoning_effort
+            ?? descriptor?.reasoning_efforts?.[0]
+            ?? '',
+          speedy: descriptor?.supports_speedy ? existing.speedy : false
+        }
       }
     })
-  }, [composerDraftKey, composerProviderId, initialComposerDraft])
+  }, [composerDraftKey, composerModels, initialComposerDraft])
+  const setComposerReasoningEffort = useCallback((reasoningEffort: string): void => {
+    setComposerDrafts((current) => {
+      const existing = current[composerDraftKey] ?? initialComposerDraft
+      return { ...current, [composerDraftKey]: { ...existing, reasoningEffort } }
+    })
+  }, [composerDraftKey, initialComposerDraft])
+  const setComposerSpeedy = useCallback((speedy: boolean): void => {
+    setComposerDrafts((current) => {
+      const existing = current[composerDraftKey] ?? initialComposerDraft
+      return { ...current, [composerDraftKey]: { ...existing, speedy } }
+    })
+  }, [composerDraftKey, initialComposerDraft])
   const setComposerPermissionMode = useCallback((permissionMode: PermissionMode): void => {
     setComposerDrafts((current) => {
       const existing = current[composerDraftKey] ?? initialComposerDraft
@@ -1178,26 +1280,14 @@ export function App() {
     }
   }, [bridge])
 
-  const addProjectContext = (project: Project): void => {
-    const reference: ContextReference = {
-      kind: 'project',
-      project_id: project.id,
-      access: 'read_only'
-    }
-    if (draftReferences.some((item) => referenceKey(item) === referenceKey(reference))) {
-      setAnnouncement(`${project.name} is already pending in context`)
-      return
-    }
-    setDraftReferences((current) => upsertReference(current, reference))
-    setAnnouncement(`Added ${project.name} as read-only context`)
-  }
-
   const handleStartTurn = async (
     message: string,
     images: UploadedImage[],
     references: ContextReference[],
     providerId: string,
     model: string,
+    reasoningEffort: string,
+    speedy: boolean,
     permissionMode: PermissionMode
   ): Promise<boolean> => {
     if (!providerId || !model || startTurnRef.current || isRunning) return false
@@ -1213,6 +1303,8 @@ export function App() {
           references,
           provider: providerId,
           model,
+          reasoning_effort: reasoningEffort || undefined,
+          speedy,
           permission_mode: permissionMode,
           working_directory: draftWorkingDirectory
         })
@@ -1229,8 +1321,9 @@ export function App() {
             message: '',
             images: [],
             references: [],
-            providerId,
             model,
+            reasoningEffort,
+            speedy,
             permissionMode
           }
         }))
@@ -1271,6 +1364,8 @@ export function App() {
         references,
         provider: providerId,
         model,
+        reasoning_effort: reasoningEffort || undefined,
+        speedy,
         permission_mode: permissionMode
       })
       setRunningTurns((current) => ({ ...current, [snapshot.thread.id]: turn.id }))
@@ -1335,8 +1430,9 @@ export function App() {
           ...current,
           [`thread:${threadId}`]: {
             ...EMPTY_COMPOSER_DRAFT,
-            providerId: composerProviderId,
-            model: composerModel
+            model: composerModel,
+            reasoningEffort: composerReasoningEffort,
+            speedy: composerSpeedy
           }
         }))
         setDraftWorkingDirectory(undefined)
@@ -1506,6 +1602,39 @@ export function App() {
     throw new Error('Clipboard access is unavailable.')
   }
 
+  const handleSelectedProviderChange = async (providerId: string): Promise<void> => {
+    const request = ++providerSettingsRequestRef.current
+    const settings = await setSelectedProvider(bridge, providerId)
+    if (providerSettingsRequestRef.current === request) setProviderSettings(settings)
+    if (providerId === 'codex') {
+      void bridge.getCodexAccountStatus()
+        .then((account) => {
+          if (providerSettingsRequestRef.current !== request) return
+          setCodexAccount(account)
+          void refreshProviderCatalog().catch((error) => {
+            setAppError(error instanceof Error ? error.message : 'Could not refresh providers.')
+          })
+        })
+        .catch((error) => {
+          if (providerSettingsRequestRef.current !== request) return
+          setCodexAccount({
+            state: 'unavailable',
+            detail: error instanceof Error ? error.message : 'Codex account status is unavailable.'
+          })
+        })
+    }
+    setComposerDrafts((current) => Object.fromEntries(
+      Object.entries(current).map(([key, draft]) => [key, {
+        ...draft,
+        model: '',
+        reasoningEffort: '',
+        speedy: false
+      }])
+    ))
+    const provider = providers.find((item) => item.id === providerId)
+    setAnnouncement(`Model Provider changed to ${provider?.display_name ?? providerId}`)
+  }
+
   const handleSaveProvider = async (profile: ProviderProfileSubmission): Promise<void> => {
     const saved = await bridge.upsertProviderProfile(profile as ProviderProfileUpdate)
     setProviderSettings((current) => ({
@@ -1524,10 +1653,7 @@ export function App() {
 
   const handleDeleteProvider = async (profileId: string): Promise<void> => {
     await bridge.deleteProviderProfile(profileId)
-    setProviderSettings((current) => ({
-      ...current,
-      profiles: current.profiles.filter((item) => item.id !== profileId)
-    }))
+    setProviderSettings(await bridge.getProviderSettings())
     setModelsByProvider((current) => {
       const next = { ...current }
       delete next[profileId]
@@ -1558,20 +1684,17 @@ export function App() {
 
   useEffect(() => bridge.onCommand((command) => {
     if (command === 'new-thread') {
-      setProjectShelfOpen(false)
       setWorkbenchSelection('new_progress')
       beginDraft()
       return
     }
     if (command === 'import-project') {
-      setProjectShelfOpen(false)
       void handleImportProject()
       return
     }
     if (command === 'focus-assets') {
       focusThreadSearchRef.current = true
       setFocusThreadSearchRequest((current) => current + 1)
-      setProjectShelfOpen(false)
       setRailCollapsed(false)
       if (railIsNarrow) {
         setInspectorOpen(false)
@@ -1580,7 +1703,6 @@ export function App() {
       return
     }
     if (command === 'open-settings') {
-      setProjectShelfOpen(false)
       openProviderSettings()
       return
     }
@@ -1589,7 +1711,6 @@ export function App() {
       return
     }
     if (command === 'toggle-rail') {
-      setProjectShelfOpen(false)
       if (railIsNarrow) {
         setInspectorOpen(false)
         setRailCollapsed(false)
@@ -1600,7 +1721,6 @@ export function App() {
     }
     if (inspectorIsNarrow) {
       setRailOpen(false)
-      setProjectShelfOpen(false)
       setRightRailCollapsed(false)
       setInspectorOpen((current) => !current)
     } else {
@@ -1617,11 +1737,6 @@ export function App() {
   ])
 
   const emptyDisconnected = status.phase !== 'connected' && !snapshot
-  const selectedProjectIds = new Set(
-    [...(snapshot?.thread.default_references ?? []), ...draftReferences]
-      .filter((reference): reference is Extract<ContextReference, { kind: 'project' }> => reference.kind === 'project')
-      .map((reference) => reference.project_id)
-  )
   const threadContext = useMemo(
     () => snapshot ? deriveThreadContext(snapshot, activeEvents, draftReferences) : undefined,
     [activeEvents, draftReferences, snapshot]
@@ -1664,23 +1779,19 @@ export function App() {
     setRightRailSections((current) => updateRightRailSection(current, id, expanded))
   }, [])
 
-  const handleProjectShelfOpenChange = useCallback((open: boolean): void => {
-    setProjectShelfOpen(open)
-    if (!open) return
-    setInspectorOpen(false)
-    setRailOpen(false)
+  const openContextDetails = useCallback((
+    kind: ContextDetailKind,
+    trigger: HTMLButtonElement
+  ): void => {
+    contextDetailTriggerRef.current = trigger
+    setContextDetailKind(kind)
   }, [])
 
   const toggleRightSidebar = (): void => {
     if (inspectorIsNarrow) {
       setRailOpen(false)
       setRightRailCollapsed(false)
-      if (projectShelfOpen) {
-        setProjectShelfOpen(false)
-        setInspectorOpen(false)
-      } else {
-        setInspectorOpen((current) => !current)
-      }
+      setInspectorOpen((current) => !current)
     } else {
       setRightRailCollapsed((current) => !current)
     }
@@ -1760,19 +1871,15 @@ export function App() {
       </div>
 
       {((railOpen && railIsNarrow)
-        || (inspectorOpen && inspectorIsNarrow)
-        || (projectShelfOpen && inspectorIsNarrow)) ? (
+        || (inspectorOpen && inspectorIsNarrow)) ? (
         <button
           className={`drawer-scrim drawer-scrim--${railOpen && railIsNarrow
             ? 'asset'
-            : inspectorOpen
-              ? 'inspector'
-              : 'projects'}`}
+            : 'inspector'}`}
           type="button"
           onClick={() => {
             setRailOpen(false)
             setInspectorOpen(false)
-            setProjectShelfOpen(false)
           }}
           aria-label="Close open drawer"
         />
@@ -1788,14 +1895,13 @@ export function App() {
         navigationDrawerOpen={railOpen && railIsNarrow}
         showRightSidebar={!inspectorIsNarrow || Boolean(snapshot)}
         rightSidebarExpanded={inspectorIsNarrow
-          ? inspectorOpen || projectShelfOpen
+          ? inspectorOpen
           : !rightRailCollapsed}
         contextCount={contextCount}
         contextActive={contextActive}
         workflowPending={snapshot ? workflowPendingIds.has(snapshot.thread.id) : false}
         onOpenRail={() => {
           setInspectorOpen(false)
-          setProjectShelfOpen(false)
           setRailCollapsed(false)
           setRailOpen(true)
         }}
@@ -1885,10 +1991,12 @@ export function App() {
                     threads={threads}
                     projects={projects}
                     references={draftReferences}
-                    providers={providers}
                     providerId={composerProviderId}
+                    providerName={selectedProvider?.display_name}
                     models={composerModels}
                     model={composerModel}
+                    reasoningEffort={composerReasoningEffort}
+                    speedy={composerSpeedy}
                     permissionMode={composerDraft.permissionMode}
                     modelsLoading={loadingModelProviders.has(composerProviderId)}
                     running={isRunning}
@@ -1896,8 +2004,9 @@ export function App() {
                     images={composerDraft.images}
                     unavailable={status.phase !== 'connected' || loadingThread || snapshot.thread.id !== activeThreadId}
                     onReferencesChange={setDraftReferences}
-                    onProviderChange={setComposerProvider}
                     onModelChange={setComposerModel}
+                    onReasoningEffortChange={setComposerReasoningEffort}
+                    onSpeedyChange={setComposerSpeedy}
                     onPermissionModeChange={setComposerPermissionMode}
                     onMessageChange={setComposerMessage}
                     onImagesChange={setComposerImages}
@@ -1905,6 +2014,7 @@ export function App() {
                     onCancel={handleCancelTurn}
                     imageGenerationAvailable={canGenerateImages}
                     onOpenImageGenerator={() => setImageComposerOpen(true)}
+                    onOpenProviderSettings={openProviderSettings}
                   />
                 )}
               </div>
@@ -1931,10 +2041,12 @@ export function App() {
                     threads={threads}
                     projects={projects}
                     references={draftReferences}
-                    providers={providers}
                     providerId={composerProviderId}
+                    providerName={selectedProvider?.display_name}
                     models={composerModels}
                     model={composerModel}
+                    reasoningEffort={composerReasoningEffort}
+                    speedy={composerSpeedy}
                     permissionMode={composerDraft.permissionMode}
                     modelsLoading={loadingModelProviders.has(composerProviderId)}
                     running={false}
@@ -1944,8 +2056,9 @@ export function App() {
                     workingDirectory={draftWorkingDirectory}
                     unavailable={status.phase !== 'connected'}
                     onReferencesChange={setDraftReferences}
-                    onProviderChange={setComposerProvider}
                     onModelChange={setComposerModel}
+                    onReasoningEffortChange={setComposerReasoningEffort}
+                    onSpeedyChange={setComposerSpeedy}
                     onPermissionModeChange={setComposerPermissionMode}
                     onMessageChange={setComposerMessage}
                     onImagesChange={setComposerImages}
@@ -1958,6 +2071,7 @@ export function App() {
                     onCancel={async () => undefined}
                     imageGenerationAvailable={canGenerateImages}
                     onOpenImageGenerator={() => setImageComposerOpen(true)}
+                    onOpenProviderSettings={openProviderSettings}
                   />
                 )}
               </div>
@@ -1969,52 +2083,56 @@ export function App() {
 
       <aside
         id="right-rail"
-        className={`right-rail${(inspectorOpen || projectShelfOpen) && inspectorIsNarrow
+        className={`right-rail${inspectorOpen && inspectorIsNarrow
           ? ' right-rail--modal-open'
           : ''}`}
-        aria-label="Thread context and projects"
+        aria-label="Thread context and activity"
       >
-        {snapshot && threadContext ? (
-          <ThreadContextCard
-            snapshot={snapshot}
-            threads={threads}
-            projects={projects}
-            context={threadContext}
-            expanded={rightRailSections.context}
-            onExpandedChange={(expanded) => setRightRailSectionExpanded('context', expanded)}
-          />
-        ) : null}
         {snapshot ? (
           <Inspector
             snapshot={snapshot}
-            threads={threads}
             projects={projects}
-            draftReferences={draftReferences}
             events={activeEvents}
             open={inspectorOpen}
             modal={inspectorIsNarrow}
+            modalSuspended={contextDetailKind !== null}
             sections={rightRailSections}
-            stoppingProcessIds={stoppingProcessIds}
-            processOutputCursors={processOutputCursors}
             onClose={() => setInspectorOpen(false)}
             onSectionExpandedChange={setRightRailSectionExpanded}
             onCopyText={copyText}
-            onReadProcessOutput={handleReadProcessOutput}
-            onStopProcess={handleStopProcess}
-          />
+          >
+            {threadContext ? (
+              <ThreadContextCard
+                snapshot={snapshot}
+                threads={threads}
+                projects={projects}
+                context={threadContext}
+                expanded={rightRailSections.context}
+                onExpandedChange={(expanded) => setRightRailSectionExpanded('context', expanded)}
+                onOpenDetails={openContextDetails}
+              />
+            ) : null}
+          </Inspector>
         ) : null}
-        <ProjectShelf
-          projects={projects}
-          selectedProjectIds={selectedProjectIds}
-          open={projectShelfOpen}
-          expanded={rightRailSections.projects}
-          unavailable={status.phase !== 'connected'}
-          onOpenChange={handleProjectShelfOpenChange}
-          onExpandedChange={(expanded) => setRightRailSectionExpanded('projects', expanded)}
-          onImportProject={handleImportProject}
-          onAddProject={addProjectContext}
-        />
       </aside>
+
+      {snapshot && threadContext ? (
+        <ContextDetailsDialog
+          kind={contextDetailKind}
+          snapshot={snapshot}
+          threads={threads}
+          projects={projects}
+          context={threadContext}
+          returnFocusRef={contextDetailTriggerRef}
+          stoppingProcessIds={stoppingProcessIds}
+          processOutputCursors={processOutputCursors}
+          onOpenChange={(open) => {
+            if (!open) setContextDetailKind(null)
+          }}
+          onReadProcessOutput={handleReadProcessOutput}
+          onStopProcess={handleStopProcess}
+        />
+      ) : null}
 
       {desktopAssetRailVisible ? (
         <SidebarResizeHandle
@@ -2046,12 +2164,15 @@ export function App() {
 
       <ProviderSettingsDialog
         open={providerSettingsOpen}
+        providers={providers}
+        selectedProviderId={providerSettings.selectedProviderId}
         profiles={providerSettings.profiles}
         credentialStorage={providerSettings.credentialStorage}
         codexAccount={codexAccount}
         onClose={() => setProviderSettingsOpen(false)}
         onSave={handleSaveProvider}
         onDelete={handleDeleteProvider}
+        onSelectedProviderChange={handleSelectedProviderChange}
         onConnectCodexAccount={handleConnectCodexAccount}
         onDisconnectCodexAccount={handleDisconnectCodexAccount}
       />

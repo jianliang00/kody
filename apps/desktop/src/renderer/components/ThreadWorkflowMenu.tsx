@@ -12,7 +12,8 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type KeyboardEvent
+  type KeyboardEvent,
+  type RefObject
 } from 'react'
 import { createPortal } from 'react-dom'
 import type { Thread, ThreadWorkflowState } from '@shared/protocol'
@@ -21,6 +22,7 @@ interface ThreadWorkflowMenuProps {
   thread: Thread
   open: boolean
   pending: boolean
+  focusFallbackRef?: RefObject<HTMLButtonElement | null>
   onOpenChange: (open: boolean) => void
   onWorkflowChange: (workflowState: ThreadWorkflowState) => void
 }
@@ -35,6 +37,7 @@ export function ThreadWorkflowMenu({
   thread,
   open,
   pending,
+  focusFallbackRef,
   onOpenChange,
   onWorkflowChange
 }: ThreadWorkflowMenuProps) {
@@ -43,6 +46,45 @@ export function ThreadWorkflowMenu({
   const menuRef = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState<CSSProperties>({})
   const unavailable = pending || thread.status === 'running'
+
+  const closeAndRestoreFocus = (preferFallback = false): void => {
+    onOpenChange(false)
+    requestAnimationFrame(() => {
+      const trigger = triggerRef.current
+      const fallback = focusFallbackRef?.current
+      const target = preferFallback || trigger?.disabled ? fallback : trigger
+      if (target && !target.disabled) {
+        target.focus()
+        return
+      }
+      if (trigger && !trigger.disabled) trigger.focus()
+    })
+  }
+
+  const moveFocusPastTrigger = (backward: boolean): void => {
+    const trigger = triggerRef.current
+    if (!trigger) return
+    const menu = menuRef.current
+    const candidates = [...document.querySelectorAll<HTMLElement>([
+      'a[href]',
+      'button:not([disabled])',
+      'input:not([disabled])',
+      'select:not([disabled])',
+      'textarea:not([disabled])',
+      '[contenteditable="true"]',
+      '[tabindex]:not([tabindex="-1"])'
+    ].join(','))].filter((element) => (
+      element.tabIndex >= 0
+      && !menu?.contains(element)
+      && !element.closest('[hidden], [aria-hidden="true"]')
+      && getComputedStyle(element).display !== 'none'
+      && getComputedStyle(element).visibility !== 'hidden'
+    ))
+    const triggerIndex = candidates.indexOf(trigger)
+    if (triggerIndex < 0) return
+    const nextIndex = triggerIndex + (backward ? -1 : 1)
+    candidates[nextIndex]?.focus()
+  }
 
   useLayoutEffect(() => {
     if (!open) return
@@ -84,8 +126,13 @@ export function ThreadWorkflowMenu({
   const handleMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (event.key === 'Escape') {
       event.preventDefault()
+      closeAndRestoreFocus()
+      return
+    }
+    if (event.key === 'Tab') {
+      event.preventDefault()
       onOpenChange(false)
-      requestAnimationFrame(() => triggerRef.current?.focus())
+      requestAnimationFrame(() => moveFocusPastTrigger(event.shiftKey))
       return
     }
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
@@ -138,10 +185,11 @@ export function ThreadWorkflowMenu({
                 type="button"
                 role="menuitemradio"
                 aria-checked={selected}
-                disabled={unavailable || selected}
+                disabled={unavailable}
                 onClick={() => {
-                  onOpenChange(false)
-                  onWorkflowChange(state)
+                  const changesWorkflow = !selected
+                  closeAndRestoreFocus(changesWorkflow)
+                  if (changesWorkflow) onWorkflowChange(state)
                 }}
               >
                 <Icon aria-hidden="true" size={14} />

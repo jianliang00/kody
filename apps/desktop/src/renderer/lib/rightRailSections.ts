@@ -1,11 +1,8 @@
 export const RIGHT_RAIL_SECTION_IDS = [
   'context',
   'workspace',
-  'references',
-  'processes',
   'changes',
-  'timeline',
-  'projects'
+  'timeline'
 ] as const
 
 export type RightRailSectionId = (typeof RIGHT_RAIL_SECTION_IDS)[number]
@@ -17,11 +14,8 @@ export const LEGACY_INSPECTOR_COLLAPSED_STORAGE_KEY = 'kody.inspectorCollapsed'
 export const DEFAULT_RIGHT_RAIL_SECTIONS: Readonly<RightRailSectionsState> = Object.freeze({
   context: true,
   workspace: false,
-  references: false,
-  processes: false,
   changes: false,
-  timeline: false,
-  projects: true
+  timeline: false
 })
 
 type ReadableStorage = Pick<Storage, 'getItem'>
@@ -40,8 +34,6 @@ function migrateLegacyInspectorState(storage: ReadableStorage): RightRailSection
   }
 
   sections.workspace = true
-  sections.references = true
-  sections.processes = true
   sections.changes = true
   sections.timeline = true
   return sections

@@ -7,7 +7,7 @@ import {
   Search,
   X
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState, type RefObject } from 'react'
 import type { Project, Thread, ThreadWorkflowState } from '@shared/protocol'
 import {
   filterWorkbenchThreads,
@@ -54,6 +54,7 @@ interface ThreadListRowProps {
   project?: Project
   active: boolean
   pending: boolean
+  workflowFocusFallbackRef: RefObject<HTMLButtonElement | null>
   onOpen: () => void
   onWorkflowChange: (workflowState: ThreadWorkflowState) => void
 }
@@ -63,6 +64,7 @@ function ThreadListRow({
   project,
   active,
   pending,
+  workflowFocusFallbackRef,
   onOpen,
   onWorkflowChange
 }: ThreadListRowProps) {
@@ -130,6 +132,7 @@ function ThreadListRow({
         thread={thread}
         open={menuOpen}
         pending={pending}
+        focusFallbackRef={workflowFocusFallbackRef}
         onOpenChange={setMenuOpen}
         onWorkflowChange={onWorkflowChange}
       />
@@ -152,6 +155,7 @@ export function AssetRail({
   workflowPendingIds
 }: AssetRailProps) {
   const [query, setQuery] = useState('')
+  const workflowFocusFallbackRef = useRef<HTMLButtonElement>(null)
   const normalizedQuery = query.trim().toLocaleLowerCase()
   const selectionThreads = useMemo(
     () => filterWorkbenchThreads(threads, selection),
@@ -179,6 +183,7 @@ export function AssetRail({
         </div>
         <div className="asset-rail__header-actions">
           <button
+            ref={workflowFocusFallbackRef}
             className="icon-button"
             type="button"
             onClick={() => document.querySelector<HTMLInputElement>('#asset-filter')?.focus()}
@@ -234,13 +239,16 @@ export function AssetRail({
         </span>
       </label>
 
-      <nav className="asset-navigation" aria-label="Thread list">
+      <nav
+        className={`asset-navigation${visibleThreads.length === 0 ? ' asset-navigation--empty' : ''}`}
+        aria-label="Thread list"
+      >
         <div className="asset-list-meta">
           <span>{visibleThreads.length} {visibleThreads.length === 1 ? 'Thread' : 'Threads'}</span>
           {query ? <span>Filtered</span> : null}
         </div>
         {visibleThreads.length === 0 ? (
-          <p className="asset-list-empty">
+          <p className="asset-list-empty" role="status">
             {query ? 'No matching Threads' : `No Threads in ${selectionLabel}`}
           </p>
         ) : (
@@ -254,6 +262,7 @@ export function AssetRail({
                   project={project}
                   active={activeThreadId === thread.id}
                   pending={workflowPendingIds.has(thread.id)}
+                  workflowFocusFallbackRef={workflowFocusFallbackRef}
                   onOpen={() => {
                     onSelectThread(thread.id)
                     onClose()

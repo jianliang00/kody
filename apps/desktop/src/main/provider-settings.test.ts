@@ -12,7 +12,7 @@ import {
 } from './provider-settings'
 
 describe('ProviderSettingsStore', () => {
-  it('atomically migrates v1 settings to v2 without losing encrypted credentials', async () => {
+  it('atomically migrates v1 settings to v3 without losing encrypted credentials', async () => {
     const fileSystem = new MemoryFileSystem()
     const safeStorage = new FakeSafeStorage('kwallet6')
     const secret = 'CANARY-v1-provider-secret'
@@ -44,7 +44,7 @@ describe('ProviderSettingsStore', () => {
 
     const persisted = JSON.parse(fileSystem.contents('/state/provider-settings.json'))
     expect(persisted).toMatchObject({
-      version: 2,
+      version: 3,
       profiles: [{
         id: 'legacy-profile',
         toolModels: [],
@@ -58,6 +58,84 @@ describe('ProviderSettingsStore', () => {
       'rename:/state/provider-settings.json.tmp-write-1->/state/provider-settings.json',
       'sync:/state'
     ]))
+  })
+
+  it('migrates v2 settings to v3 with no implicit provider selection', async () => {
+    const fileSystem = new MemoryFileSystem()
+    fileSystem.seed('/state/provider-settings.json', JSON.stringify({
+      version: 2,
+      profiles: []
+    }), 0o600)
+    const store = createStore(fileSystem, new FakeSafeStorage('kwallet6'))
+
+    await expect(store.snapshot()).resolves.toEqual({
+      profiles: [],
+      credentialStorage: { available: true, backend: 'kwallet6' }
+    })
+    expect(JSON.parse(fileSystem.contents('/state/provider-settings.json'))).toEqual({
+      version: 3,
+      profiles: []
+    })
+  })
+
+  it('persists a selected provider and clears it atomically when its profile is deleted', async () => {
+    const fileSystem = new MemoryFileSystem()
+    const safeStorage = new FakeSafeStorage('kwallet6')
+    const store = createStore(fileSystem, safeStorage)
+    const profile = await store.upsert({
+      name: 'Team gateway',
+      kind: 'openai',
+      defaultModel: 'gpt-team'
+    })
+
+    await expect(store.setSelectedProvider('codex')).resolves.toMatchObject({
+      selectedProviderId: 'codex'
+    })
+    await expect(store.setSelectedProvider(profile.id)).resolves.toMatchObject({
+      selectedProviderId: profile.id
+    })
+    expect(JSON.parse(fileSystem.contents('/state/provider-settings.json'))).toMatchObject({
+      version: 3,
+      selectedProviderId: profile.id
+    })
+
+    const reloaded = new ProviderSettingsStore({
+      filePath: '/state/provider-settings.json',
+      fileSystem,
+      safeStorage,
+      platform: 'linux',
+      createTemporaryToken: () => 'delete-selected'
+    })
+    await expect(reloaded.snapshot()).resolves.toMatchObject({ selectedProviderId: profile.id })
+    await reloaded.delete(profile.id)
+    const snapshot = await reloaded.snapshot()
+    expect(snapshot).not.toHaveProperty('selectedProviderId')
+    expect(snapshot.profiles).toEqual([])
+    expect(JSON.parse(fileSystem.contents('/state/provider-settings.json')))
+      .not.toHaveProperty('selectedProviderId')
+  })
+
+  it('validates selected provider ids from API calls and persisted v3 settings', async () => {
+    const fileSystem = new MemoryFileSystem()
+    const store = createStore(fileSystem, new FakeSafeStorage('kwallet6'))
+
+    for (const invalid of ['', ' codex', 'provider/unsafe', 'a'.repeat(201)]) {
+      await expect(store.setSelectedProvider(invalid)).rejects.toThrow(/unsupported characters/)
+    }
+    await expect(store.setSelectedProvider(null)).resolves.not.toHaveProperty('selectedProviderId')
+
+    fileSystem.seed('/state/invalid-selected.json', JSON.stringify({
+      version: 3,
+      selectedProviderId: '../unsafe',
+      profiles: []
+    }), 0o600)
+    const invalidStore = new ProviderSettingsStore({
+      filePath: '/state/invalid-selected.json',
+      fileSystem,
+      safeStorage: new FakeSafeStorage('kwallet6'),
+      platform: 'linux'
+    })
+    await expect(invalidStore.snapshot()).rejects.toThrow(/selectedProviderId.*invalid/)
   })
 
   it('keeps v2 model-routing fields strict', async () => {

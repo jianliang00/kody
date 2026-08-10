@@ -69,6 +69,10 @@ pub struct StartTurn {
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub speedy: bool,
+    #[serde(default)]
     pub permission_mode: Option<PermissionMode>,
     #[serde(default)]
     pub temperature: Option<f32>,
@@ -303,6 +307,8 @@ impl AgentRuntime {
             input_message_id,
             provider: request.provider,
             model,
+            reasoning_effort: request.reasoning_effort,
+            speedy: request.speedy,
             permission_mode: request.permission_mode.unwrap_or(default_permission_mode),
             temperature: request.temperature.or(self.config.temperature),
             max_output_tokens: request.max_output_tokens.or(self.config.max_output_tokens),
@@ -1150,6 +1156,13 @@ fn validate_start_turn(request: &StartTurn) -> Result<()> {
     {
         return Err(KodyError::InvalidInput(
             "model cannot be blank when provided".into(),
+        ));
+    }
+    if request.reasoning_effort.as_deref().is_some_and(|effort| {
+        effort.trim().is_empty() || effort != effort.trim() || effort.chars().count() > 64
+    }) {
+        return Err(KodyError::InvalidInput(
+            "reasoning_effort must be a trimmed, non-empty value of at most 64 characters".into(),
         ));
     }
     if let Some(temperature) = request.temperature {

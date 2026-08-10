@@ -75,7 +75,9 @@ for raw in sys.stdin:
             "hidden": False,
             "isDefault": cursor is None,
             "defaultReasoningEffort": "medium",
-            "supportedReasoningEfforts": [{"reasoningEffort": "medium", "description": "Balanced"}]
+            "supportedReasoningEfforts": [{"reasoningEffort": "medium", "description": "Balanced"}],
+            "additionalSpeedTiers": ["fast"],
+            "serviceTiers": [{"id": "priority", "name": "Fast", "description": "Priority processing"}]
         }
         send({"id": request_id, "result": {"data": [model], "nextCursor": "page-2" if cursor is None else None}})
     elif method == "thread/start":
@@ -203,11 +205,19 @@ fn serializes_kody_owned_ephemeral_threads_and_user_review() {
     assert_eq!(resumed["approvalsReviewer"], "user");
 
     let mut turn = TurnStartParams::text("codex-thread-1", "hello");
+    turn.effort = Some("high".into());
+    turn.service_tier = Some(Some("priority".into()));
     turn.approval_policy = Some("on-request".into());
     turn.approvals_reviewer = Some("user".into());
     let turn = serde_json::to_value(turn).unwrap();
     assert_eq!(turn["approvalPolicy"], "on-request");
     assert_eq!(turn["approvalsReviewer"], "user");
+    assert_eq!(turn["effort"], "high");
+    assert_eq!(turn["serviceTier"], "priority");
+
+    let mut normal_speed = TurnStartParams::text("codex-thread-1", "hello");
+    normal_speed.service_tier = Some(None);
+    assert!(serde_json::to_value(normal_speed).unwrap()["serviceTier"].is_null());
 }
 
 #[tokio::test]
@@ -236,6 +246,8 @@ async fn supports_protocol_lifecycle_models_threads_turns_and_safe_auth() {
     assert_eq!(page.next_cursor.as_deref(), Some("page-2"));
     let models = client.models_all(false).await.unwrap();
     assert_eq!(models.len(), 2);
+    assert_eq!(models[0].service_tiers[0].id, "priority");
+    assert_eq!(models[0].additional_speed_tiers, ["fast"]);
 
     let started = client
         .thread_start(ThreadStartParams {

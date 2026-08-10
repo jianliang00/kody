@@ -4,6 +4,26 @@ All notable changes to Kody are documented in this file. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.1.19] - 2026-08-10
+
+### Added
+
+- Added a native-style hierarchical model menu for model, reasoning effort, and per-Turn Fast mode selection.
+- Added persistent provider selection in Settings with provider-specific account and configuration details.
+- Added a focused Context details dialog for inspecting Thread references and managed processes on demand.
+
+### Changed
+
+- Refined the desktop typography, system colors, form controls, menus, focus states, and light/dark appearance to more closely match native macOS applications.
+- Simplified the Inspector to a single collapsible Context section, kept Projects in the Workbench, and made long Workspace paths horizontally scrollable.
+- Moved provider selection out of the composer and preserved model, effort, and Fast choices in Thread drafts.
+- Passed reasoning effort and Fast service-tier choices through the persisted Turn model and Codex app-server backend.
+
+### Fixed
+
+- Made Codex account information follow the selected provider and restored provider catalog discovery when Codex is available.
+- Harmonized composer control sizing, border treatment, menu selection colors, and empty-state typography.
+
 ## [0.1.18] - 2026-08-09
 
 ### Added
@@ -84,7 +104,8 @@ All notable changes to Kody are documented in this file. The format follows [Kee
 
 - Signed in-app updates backed by public GitHub Release artifacts.
 
-[Unreleased]: https://github.com/jianliang00/kody/compare/v0.1.18...HEAD
+[Unreleased]: https://github.com/jianliang00/kody/compare/v0.1.19...HEAD
+[0.1.19]: https://github.com/jianliang00/kody/compare/v0.1.18...v0.1.19
 [0.1.18]: https://github.com/jianliang00/kody/compare/v0.1.17...v0.1.18
 [0.1.17]: https://github.com/jianliang00/kody/compare/v0.1.16...v0.1.17
 [0.1.16]: https://github.com/jianliang00/kody/compare/v0.1.15...v0.1.16

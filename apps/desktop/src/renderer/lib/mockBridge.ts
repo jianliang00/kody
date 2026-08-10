@@ -129,6 +129,7 @@ const seedTurns: Turn[] = [
     input_message_id: 'message-electron-user',
     provider: 'echo',
     model: 'kody-demo',
+    speedy: false,
     permission_mode: 'ask',
     status: 'completed',
     created_at: iso(-20),
@@ -391,8 +392,23 @@ function createMockStore() {
         return {
           models: input.provider_id === 'codex'
             ? [
-                { id: 'codex-default', display_name: 'Codex default', is_default: true, capabilities: { tool_calling: true, input_modalities: ['text', 'image'] } },
-                { id: 'codex-fast', display_name: 'Codex fast', capabilities: { tool_calling: true, input_modalities: ['text', 'image'] } }
+                {
+                  id: 'codex-default',
+                  display_name: 'Codex default',
+                  is_default: true,
+                  capabilities: { tool_calling: true, input_modalities: ['text', 'image'] },
+                  default_reasoning_effort: 'medium',
+                  reasoning_efforts: ['low', 'medium', 'high', 'xhigh'],
+                  supports_speedy: true
+                },
+                {
+                  id: 'codex-fast',
+                  display_name: 'Codex fast',
+                  capabilities: { tool_calling: true, input_modalities: ['text', 'image'] },
+                  default_reasoning_effort: 'low',
+                  reasoning_efforts: ['low', 'medium', 'high'],
+                  supports_speedy: true
+                }
               ]
             : [{ id: 'kody-demo', display_name: 'Kody demo', is_default: true, capabilities: { tool_calling: false, input_modalities: ['text'] } }]
         } as RpcMethodMap[M]['result']
@@ -568,6 +584,8 @@ function createMockStore() {
           references: input.references,
           provider: input.provider,
           model: input.model,
+          reasoning_effort: input.reasoning_effort,
+          speedy: input.speedy ?? false,
           permission_mode: input.permission_mode
         })
         const started = { ...created, turn }
@@ -655,6 +673,8 @@ function createMockStore() {
           input_message_id: message.id,
           provider: input.provider,
           model: input.model || 'kody-demo',
+          reasoning_effort: input.reasoning_effort,
+          speedy: input.speedy ?? false,
           permission_mode: input.permission_mode,
           status: 'running',
           created_at: createdAt,
@@ -798,6 +818,7 @@ function createMockStore() {
 export function createMockBridge(): KodyDesktopBridge {
   const store = createMockStore()
   let providerProfiles: ProviderProfileRecord[] = []
+  let selectedProviderId = 'codex'
   let codexAccount: CodexAccountStatus = {
     state: 'signed-in',
     accountLabel: 'preview@example.test',
@@ -815,9 +836,18 @@ export function createMockBridge(): KodyDesktopBridge {
     pickDirectory: async () => '/Users/demo/Code/new-project',
     getServerStatus: async () => connectedStatus,
     getProviderSettings: async () => ({
+      selectedProviderId,
       profiles: clone(providerProfiles),
       credentialStorage: { available: true, backend: 'browser-preview' }
     }),
+    setSelectedProvider: async (providerId) => {
+      selectedProviderId = providerId ?? ''
+      return {
+        ...(selectedProviderId ? { selectedProviderId } : {}),
+        profiles: clone(providerProfiles),
+        credentialStorage: { available: true, backend: 'browser-preview' }
+      }
+    },
     upsertProviderProfile: async (input) => {
       const existing = input.id
         ? providerProfiles.find((profile) => profile.id === input.id)
@@ -843,6 +873,7 @@ export function createMockBridge(): KodyDesktopBridge {
     },
     deleteProviderProfile: async (profileId) => {
       providerProfiles = providerProfiles.filter((profile) => profile.id !== profileId)
+      if (selectedProviderId === profileId) selectedProviderId = ''
     },
     getCodexAccountStatus: async () => clone(codexAccount),
     connectCodexAccount: async () => {
@@ -915,6 +946,9 @@ function createDisconnectedBridge(): KodyDesktopBridge {
     pickDirectory: async () => null,
     getServerStatus: async () => status,
     getProviderSettings: async () => {
+      throw new Error(status.detail)
+    },
+    setSelectedProvider: async () => {
       throw new Error(status.detail)
     },
     upsertProviderProfile: async () => {

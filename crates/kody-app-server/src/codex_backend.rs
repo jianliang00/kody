@@ -55,23 +55,11 @@ impl fmt::Debug for CodexService {
 
 impl CodexService {
     pub fn new(engine: Arc<KodyEngine>) -> Arc<Self> {
-        let mut options = CodexClientOptions::default();
-        // Kody owns this sidecar's execution policy. Override only the service
-        // tier so an unsupported value in a user's global Codex config cannot
-        // prevent otherwise valid ChatGPT-plan execution. The supported tier
-        // may be selected by trusted host configuration, never the renderer.
-        let service_tier = match std::env::var("KODY_CODEX_SERVICE_TIER").as_deref() {
-            Ok("flex") => "flex",
-            _ => "fast",
-        };
-        options
-            .config_overrides
-            .push(format!("service_tier=\"{service_tier}\""));
         Arc::new(Self {
             engine,
             client: Mutex::new(None),
             thread_bindings: Mutex::new(HashMap::new()),
-            options,
+            options: CodexClientOptions::default(),
             auth_state: AtomicU8::new(0),
         })
     }
@@ -293,7 +281,12 @@ impl ExternalTurnBackend for CodexService {
                 });
             }
         }
-        start.model = Some(turn.model.clone());
+        apply_model_options(
+            &mut start,
+            &turn.model,
+            turn.reasoning_effort.as_deref(),
+            turn.speedy,
+        );
         start.cwd = Some(context.workspace.root.clone());
         start.approval_policy = Some(codex_approval_policy(turn.permission_mode).into());
         start.approvals_reviewer = Some("user".into());
@@ -557,9 +550,28 @@ fn model_descriptor(model: ModelInfo) -> ModelDescriptor {
             .into_iter()
             .map(|effort| effort.reasoning_effort)
             .collect(),
+        supports_speedy: model.service_tiers.iter().any(|tier| tier.id == "priority")
+            || model
+                .additional_speed_tiers
+                .iter()
+                .any(|tier| tier == "fast"),
         owned_by: Some("openai".into()),
         created_at: None,
     }
+}
+
+fn apply_model_options(
+    start: &mut TurnStartParams,
+    model: &str,
+    reasoning_effort: Option<&str>,
+    speedy: bool,
+) {
+    start.model = Some(model.to_owned());
+    start.effort = reasoning_effort.map(str::to_owned);
+    // The current app-server schema exposes serviceTier on turn/start.
+    // Sending null when Speedy is off clears a tier inherited from thread or
+    // user configuration; priority is the catalog's Fast tier id.
+    start.service_tier = Some(speedy.then(|| "priority".into()));
 }
 
 fn codex_provider_error(error: crate::codex::CodexError) -> KodyError {
@@ -1030,5 +1042,69 @@ mod permission_tests {
             codex_sandbox_policy(PermissionMode::FullAccess, &context),
             json!({ "type": "dangerFullAccess" })
         );
+    }
+
+    #[test]
+    fn exposes_speedy_only_when_the_model_catalog_advertises_a_fast_tier() {
+        let priority = serde_json::from_value(json!({
+            "id": "gpt-priority",
+            "model": "gpt-priority",
+            "displayName": "GPT Priority",
+            "description": "Fast model",
+            "hidden": false,
+            "isDefault": true,
+            "defaultReasoningEffort": "medium",
+            "supportedReasoningEfforts": [],
+            "serviceTiers": [{
+                "id": "priority",
+                "name": "Fast",
+                "description": "Priority processing"
+            }]
+        }))
+        .unwrap();
+        assert!(model_descriptor(priority).supports_speedy);
+
+        let legacy = serde_json::from_value(json!({
+            "id": "gpt-legacy-fast",
+            "model": "gpt-legacy-fast",
+            "displayName": "GPT Legacy Fast",
+            "description": "Legacy fast model",
+            "hidden": false,
+            "isDefault": false,
+            "defaultReasoningEffort": "medium",
+            "supportedReasoningEfforts": [],
+            "additionalSpeedTiers": ["fast"]
+        }))
+        .unwrap();
+        assert!(model_descriptor(legacy).supports_speedy);
+
+        let standard = serde_json::from_value(json!({
+            "id": "gpt-standard",
+            "model": "gpt-standard",
+            "displayName": "GPT Standard",
+            "description": "Standard model",
+            "hidden": false,
+            "isDefault": false,
+            "defaultReasoningEffort": "medium",
+            "supportedReasoningEfforts": []
+        }))
+        .unwrap();
+        assert!(!model_descriptor(standard).supports_speedy);
+    }
+
+    #[test]
+    fn maps_turn_model_effort_and_speedy_to_current_codex_fields() {
+        let mut speedy = TurnStartParams::text("thread-1", "hello");
+        apply_model_options(&mut speedy, "gpt-test", Some("high"), true);
+        let speedy = serde_json::to_value(speedy).unwrap();
+        assert_eq!(speedy["model"], "gpt-test");
+        assert_eq!(speedy["effort"], "high");
+        assert_eq!(speedy["serviceTier"], "priority");
+
+        let mut standard = TurnStartParams::text("thread-1", "hello");
+        apply_model_options(&mut standard, "gpt-test", None, false);
+        let standard = serde_json::to_value(standard).unwrap();
+        assert!(standard.get("effort").is_none());
+        assert!(standard["serviceTier"].is_null());
     }
 }

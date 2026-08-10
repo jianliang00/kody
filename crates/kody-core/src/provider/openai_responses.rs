@@ -214,6 +214,7 @@ impl OpenAiResponsesProvider {
                     description: None,
                     default_reasoning_effort: None,
                     reasoning_efforts: Vec::new(),
+                    supports_speedy: false,
                     owned_by: model.owned_by,
                     created_at: model.created,
                 }

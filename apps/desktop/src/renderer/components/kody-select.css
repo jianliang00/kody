@@ -17,15 +17,23 @@
   transition: border-color 100ms ease, background-color 100ms ease, color 100ms ease;
 }
 
-.kody-select__trigger > span:first-child {
+.kody-select__value {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.kody-select__trigger > span[data-placeholder] {
+.kody-select__value[data-placeholder] {
   color: var(--faint);
+}
+
+.kody-select__leading-icon {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  color: currentColor;
 }
 
 .kody-select__trigger:hover:not(:disabled) {

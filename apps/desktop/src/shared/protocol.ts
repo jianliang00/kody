@@ -42,6 +42,7 @@ export interface ModelDescriptor {
   description?: string
   default_reasoning_effort?: string
   reasoning_efforts?: string[]
+  supports_speedy?: boolean
 }
 
 export interface ImageProviderDescriptor {
@@ -176,6 +177,8 @@ export interface Turn {
   input_message_id: EntityId
   provider: string
   model: string
+  reasoning_effort?: string
+  speedy: boolean
   permission_mode: PermissionMode
   temperature?: number
   max_output_tokens?: number
@@ -376,6 +379,8 @@ export interface StartTurnInput {
   references: ContextReference[]
   provider: string
   model?: string
+  reasoning_effort?: string
+  speedy?: boolean
   permission_mode: PermissionMode
 }
 
@@ -423,6 +428,8 @@ export interface RpcMethodMap {
       references: ContextReference[]
       provider: string
       model?: string
+      reasoning_effort?: string
+      speedy?: boolean
       permission_mode: PermissionMode
       working_directory?: string
     }

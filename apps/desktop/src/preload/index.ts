@@ -38,6 +38,12 @@ const bridge: KodyDesktopBridge = Object.freeze({
   getProviderSettings() {
     return ipcRenderer.invoke('kody:provider-settings:get') as Promise<ProviderSettingsResult>
   },
+  setSelectedProvider(providerId: string | null) {
+    return ipcRenderer.invoke(
+      'kody:provider-settings:select',
+      providerId
+    ) as Promise<ProviderSettingsResult>
+  },
   upsertProviderProfile(profile: ProviderProfileUpdate) {
     return ipcRenderer.invoke('kody:provider-settings:upsert', profile) as Promise<ProviderProfileRecord>
   },

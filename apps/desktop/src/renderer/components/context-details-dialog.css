@@ -1,0 +1,97 @@
+.context-details-dialog .kody-dialog__body {
+  padding-block-start: .85rem;
+}
+
+.context-details__references .reference-group:first-child {
+  margin-block-start: 0;
+}
+
+.context-details__references .reference-group + .reference-group {
+  padding-block-start: .85rem;
+  border-block-start: 1px solid var(--separator);
+}
+
+.context-details__references .reference-group__label {
+  grid-template-columns: minmax(8rem, .8fr) minmax(0, 1.2fr);
+  margin-block-end: .5rem;
+}
+
+.context-details__references .reference-empty {
+  margin: .1rem 0 0;
+  color: var(--faint);
+  font-size: var(--font-small);
+  font-weight: var(--weight-regular);
+  line-height: 1.35;
+}
+
+.context-details__runtime {
+  display: grid;
+  gap: 1rem;
+}
+
+.context-details__activity {
+  padding-block-end: 1rem;
+  border-block-end: 1px solid var(--separator);
+}
+
+.context-details__activity .section-heading {
+  align-items: center;
+}
+
+.context-details__activity .section-heading h3 {
+  margin: 0;
+}
+
+.context-details__activity-list {
+  list-style: none;
+  margin: .65rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: .5rem;
+}
+
+.context-details__activity-list li {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: .5rem;
+  color: var(--success);
+}
+
+.context-details__activity-list li > span {
+  min-width: 0;
+  display: grid;
+}
+
+.context-details__activity-list strong,
+.context-details__activity-list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-details__activity-list strong {
+  color: var(--text);
+  font-size: var(--font-body);
+  font-weight: var(--weight-medium);
+}
+
+.context-details__activity-list small {
+  color: var(--muted);
+  font-size: var(--font-caption);
+}
+
+.context-details__runtime .process-section > .section-heading {
+  align-items: center;
+}
+
+.context-details__runtime .process-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 36rem) {
+  .context-details__references .reference-group__label,
+  .context-details__runtime .process-list {
+    grid-template-columns: 1fr;
+  }
+}

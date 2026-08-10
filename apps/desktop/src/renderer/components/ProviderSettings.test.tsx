@@ -19,6 +19,7 @@ describe('ProviderSettingsDialog', () => {
     render(<ProviderSettingsDialog {...baseProps()} onSave={save} />)
     expect(screen.queryByRole('option', { name: /Anthropic/ })).toBeNull()
     expect(screen.queryByRole('option', { name: 'Codex account' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Save provider' }))
     expect((await screen.findByText('Enter a profile name.')).getAttribute('role')).toBe('alert')
@@ -106,17 +107,18 @@ describe('ProviderSettingsDialog', () => {
     }
 
     render(<Harness />)
-    const dialog = screen.getByRole('dialog', { name: 'Provider settings' })
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText(/Profile name/)))
+    const dialog = screen.getByRole('dialog', { name: 'Settings' })
+    const general = screen.getByRole('button', { name: 'General' })
+    await waitFor(() => expect(document.activeElement).toBe(general))
     const close = screen.getByRole('button', { name: 'Close provider settings' })
-    const save = screen.getByRole('button', { name: 'Save provider' })
+    const done = screen.getByRole('button', { name: 'Done' })
 
-    save.focus()
+    done.focus()
     fireEvent.keyDown(dialog, { key: 'Tab' })
     expect(document.activeElement).toBe(close)
     close.focus()
     fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true })
-    expect(document.activeElement).toBe(save)
+    expect(document.activeElement).toBe(done)
 
     fireEvent.keyDown(dialog, { key: 'Escape' })
     expect(closed).toHaveBeenCalledTimes(1)
@@ -152,17 +154,136 @@ describe('ProviderSettingsDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete profile' }))
     await waitFor(() => expect(deleteProfile).toHaveBeenCalledWith('provider-team'))
   })
+
+  it('changes the global model provider from General settings', async () => {
+    const changeProvider = vi.fn(async () => undefined)
+    render(
+      <ProviderSettingsDialog
+        {...baseProps()}
+        selectedProviderId="codex"
+        onSelectedProviderChange={changeProvider}
+      />
+    )
+
+    const provider = screen.getByRole('combobox', { name: 'Provider' })
+    expect(provider.getAttribute('data-value')).toBe('codex')
+    fireEvent.click(provider)
+    fireEvent.click(screen.getByRole('option', { name: 'Echo demo' }))
+    await waitFor(() => expect(changeProvider).toHaveBeenCalledWith('echo'))
+  })
+
+  it('shows details and actions for the currently selected Provider', async () => {
+    const profile = {
+      ...savedProfile(),
+      baseUrl: 'https://models.example.test/v1'
+    }
+    const props = baseProps()
+
+    function Harness() {
+      const [selectedProviderId, setSelectedProviderId] = useState('codex')
+      return (
+        <ProviderSettingsDialog
+          {...props}
+          selectedProviderId={selectedProviderId}
+          profiles={[profile]}
+          providers={[
+            ...props.providers,
+            {
+              id: profile.id,
+              display_name: profile.name,
+              kind: 'openai_responses',
+              auth: 'configured',
+              capabilities: {
+                streaming: true,
+                reasoning: true,
+                model_catalog: true,
+                custom_models: true
+              },
+              default_model: profile.defaultModel
+            }
+          ]}
+          codexAccount={{
+            state: 'signed-in',
+            accountLabel: 'dev@example.test',
+            detail: 'Codex Pro'
+          }}
+          onSelectedProviderChange={async (providerId) => setSelectedProviderId(providerId)}
+        />
+      )
+    }
+
+    render(<Harness />)
+    expect(screen.getByRole('heading', { name: 'Codex account' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Provider' }))
+    fireEvent.click(screen.getByRole('option', { name: 'Echo demo' }))
+    expect(await screen.findByRole('heading', { name: 'Echo demo' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Codex account' })).toBeNull()
+    expect(screen.getByText(/No account or API key required/)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Provider' }))
+    fireEvent.click(screen.getByRole('option', { name: 'Team OpenAI' }))
+    expect(await screen.findByRole('heading', { name: 'Team OpenAI' })).toBeTruthy()
+    expect(screen.getByText(/https:\/\/models\.example\.test\/v1/)).toBeTruthy()
+    expect(screen.getByText(/Default model: gpt-team/)).toBeTruthy()
+    expect(screen.getByText(/Credential saved/)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit connection' }))
+    await waitFor(() => expect((screen.getByLabelText(/Profile name/) as HTMLInputElement).value)
+      .toBe('Team OpenAI'))
+  })
+
+  it('keeps signed-out Codex selectable so its account action remains reachable', async () => {
+    const changeProvider = vi.fn(async () => undefined)
+    const props = baseProps()
+    render(
+      <ProviderSettingsDialog
+        {...props}
+        providers={props.providers.map((provider) => provider.id === 'codex'
+          ? { ...provider, auth: 'missing' as const }
+          : provider)}
+        selectedProviderId="echo"
+        onSelectedProviderChange={changeProvider}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Provider' }))
+    const codexOption = screen.getByRole('option', { name: 'Codex account · Setup required' })
+    expect(codexOption.getAttribute('data-disabled')).toBeNull()
+    fireEvent.click(codexOption)
+    await waitFor(() => expect(changeProvider).toHaveBeenCalledWith('codex'))
+  })
 })
 
 function baseProps() {
   return {
     open: true,
+    providers: [
+      {
+        id: 'codex',
+        display_name: 'Codex account',
+        kind: 'codex_app_server',
+        auth: 'configured' as const,
+        capabilities: { streaming: true, reasoning: true, model_catalog: true, custom_models: false },
+        default_model: 'codex-default'
+      },
+      {
+        id: 'echo',
+        display_name: 'Echo demo',
+        kind: 'echo',
+        auth: 'not_required' as const,
+        capabilities: { streaming: true, reasoning: false, model_catalog: false, custom_models: false },
+        default_model: 'kody-demo'
+      }
+    ],
+    selectedProviderId: 'codex',
     profiles: [] as ProviderProfileView[],
     credentialStorage: { available: true, backend: 'keychain' },
     codexAccount: { state: 'signed-out' as const },
     onClose: vi.fn(),
     onSave: vi.fn(async (_profile: ProviderProfileSubmission) => undefined),
-    onDelete: vi.fn(async (_profileId: string) => undefined)
+    onDelete: vi.fn(async (_profileId: string) => undefined),
+    onSelectedProviderChange: vi.fn(async (_providerId: string) => undefined)
   }
 }
 

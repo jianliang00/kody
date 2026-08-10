@@ -193,7 +193,7 @@ The account authority remains inside the official sidecar. Kody never reads `~/.
 
 `codex/account/read` returns only public account metadata, whether OpenAI authentication is required, and the selected binary path/version. `codex/account/rate-limits` returns the sidecar's structured plan limits. When signed in with ChatGPT, Codex Turns consume the Codex quota available to that account; separately configured API-key Providers remain API-usage based.
 
-Binary selection and the `fast`/`flex` service-tier override are trusted host configuration (`KODY_CODEX_PATH`, `KODY_CODEX_SERVICE_TIER`), not JSON-RPC or Renderer options.
+Binary selection remains trusted host configuration through `KODY_CODEX_PATH`. Codex model metadata exposes supported reasoning efforts and whether the `priority` service tier is available. Validated Turn inputs may select an advertised effort and opt into Speedy; Kody maps Speedy to `serviceTier: "priority"` and explicitly clears the tier when it is off.
 
 ## Draft-first Thread creation
 
@@ -208,8 +208,11 @@ Desktop clients should keep a new conversation entirely local until the first me
     "client_request_id": "LOCAL_DRAFT_UUID",
     "message": "Implement OAuth login",
     "images": [],
-    "provider": "openai",
+    "provider": "codex",
     "model": "gpt-example",
+    "reasoning_effort": "high",
+    "speedy": true,
+    "permission_mode": "ask",
     "working_directory": "/absolute/path/to/repo",
     "references": []
   }

@@ -1,10 +1,12 @@
 import type {
   ContextReference,
   EventEnvelope,
+  ManagedProcess,
   PendingApproval,
   ThreadSnapshot,
   Turn
 } from '@shared/protocol'
+import { isProcessActive, sortManagedProcesses } from './processes'
 
 export type ThreadContextReference = Extract<ContextReference, { kind: 'thread' }>
 export type ProjectContextReference = Extract<ContextReference, { kind: 'project' }>
@@ -26,6 +28,35 @@ export interface ThreadContextView {
   activeTurns: Turn[]
   runningTools: RunningToolActivity[]
   pendingApprovals: PendingApproval[]
+}
+
+export interface ThreadRuntimeView {
+  activeProcesses: ManagedProcess[]
+  foregroundTools: RunningToolActivity[]
+  foregroundActivityCount: number
+  activeCount: number
+}
+
+export function deriveThreadRuntime(
+  snapshot: ThreadSnapshot,
+  context: ThreadContextView
+): ThreadRuntimeView {
+  const activeProcesses = sortManagedProcesses(snapshot.processes.filter(isProcessActive))
+  const activeProcessOrigins = new Set(activeProcesses.map((process) => (
+    `${process.origin.turn_id}:${process.origin.tool_call_id}`
+  )))
+  const foregroundTools = context.runningTools.filter((tool) => !activeProcessOrigins.has(tool.key))
+  const foregroundLeafCount = foregroundTools.length + context.pendingApprovals.length
+  const foregroundActivityCount = foregroundLeafCount > 0
+    ? foregroundLeafCount
+    : Math.min(context.activeTurns.length, 1)
+
+  return {
+    activeProcesses,
+    foregroundTools,
+    foregroundActivityCount,
+    activeCount: foregroundActivityCount + activeProcesses.length
+  }
 }
 
 /** Mirrors the runtime context builder: defaults first, then linear history, last value wins. */

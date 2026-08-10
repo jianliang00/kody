@@ -36,8 +36,8 @@ describe('command approval lifecycle', () => {
 
     const composer = await screen.findByRole('combobox', { name: 'Message' })
     fireEvent.change(composer, { target: { value: 'Run cargo test for this project' } })
-    fireEvent.click(screen.getByRole('combobox', { name: 'Provider' }))
-    fireEvent.click(screen.getByRole('option', { name: 'Echo demo' }))
+    await screen.findByRole('button', { name: 'Model options: Codex default' })
+    expect(screen.queryByRole('combobox', { name: 'Provider' })).toBeNull()
     expect(screen.getByRole('combobox', { name: 'Permission mode' }).getAttribute('data-value')).toBe('ask')
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
@@ -76,5 +76,52 @@ describe('Thread todo workflow', () => {
 
     const snapshot = await window.kody!.rpc('thread/get', { thread_id: 'thread-electron' })
     expect(snapshot.thread.workflow_state).toBe('new_progress')
+  })
+})
+
+describe('Provider bootstrap compatibility', () => {
+  it('keeps Codex available when renderer HMR is ahead of the preload bridge', async () => {
+    const bridge = createMockBridge()
+    bridge.getProviderSettings = async () => ({
+      profiles: [],
+      credentialStorage: { available: true, backend: 'browser-preview' }
+    })
+    Object.defineProperty(bridge, 'setSelectedProvider', {
+      configurable: true,
+      value: undefined
+    })
+    Object.defineProperty(window, 'kody', {
+      configurable: true,
+      value: bridge
+    })
+
+    render(<App />)
+
+    expect(await screen.findByRole('button', { name: 'Model options: Codex default' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Kody could not start' })).toBeNull()
+  })
+
+  it('only reads the Codex account when Codex is the selected Provider', async () => {
+    const bridge = createMockBridge()
+    bridge.getProviderSettings = async () => ({
+      selectedProviderId: 'echo',
+      profiles: [],
+      credentialStorage: { available: true, backend: 'browser-preview' }
+    })
+    const getCodexAccountStatus = vi.fn(bridge.getCodexAccountStatus)
+    bridge.getCodexAccountStatus = getCodexAccountStatus
+    Object.defineProperty(window, 'kody', {
+      configurable: true,
+      value: bridge
+    })
+
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Open model settings' }))
+    expect(await screen.findByRole('heading', { name: 'Echo demo' })).toBeTruthy()
+    expect(getCodexAccountStatus).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Provider' }))
+    fireEvent.click(screen.getByRole('option', { name: 'Codex account' }))
+    await waitFor(() => expect(getCodexAccountStatus).toHaveBeenCalledTimes(1))
   })
 })

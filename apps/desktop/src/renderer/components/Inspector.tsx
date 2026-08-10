@@ -8,39 +8,27 @@ import {
   Terminal,
   X
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import type {
-  ContextReference,
   EventEnvelope,
-  ProcessOutputPage,
   Project,
-  Thread,
   ThreadSnapshot
 } from '@shared/protocol'
-import { BackgroundProcesses } from './BackgroundProcesses'
-import { ReferenceChips } from './ReferenceChips'
 import { RightRailDisclosure } from './RightRailDisclosure'
-import { isProcessActive } from '../lib/processes'
-import { referenceKey } from '../lib/references'
 import type { RightRailSectionId, RightRailSectionsState } from '../lib/rightRailSections'
-import { collectEffectiveReferences } from '../lib/threadContext'
 
 interface InspectorProps {
   snapshot: ThreadSnapshot
-  threads: Thread[]
   projects: Project[]
-  draftReferences: ContextReference[]
   events: EventEnvelope[]
   open: boolean
   modal: boolean
+  modalSuspended?: boolean
   sections: RightRailSectionsState
-  stoppingProcessIds: Set<string>
-  processOutputCursors: Record<string, number>
+  children?: ReactNode
   onClose: () => void
   onSectionExpandedChange: (id: RightRailSectionId, expanded: boolean) => void
   onCopyText: (text: string) => Promise<void>
-  onReadProcessOutput: (processId: string, afterCursor: number, limit: number) => Promise<ProcessOutputPage>
-  onStopProcess: (processId: string) => Promise<void>
 }
 
 function eventCopy(event: EventEnvelope['event']): { label: string; detail?: string; kind: string } | null {
@@ -111,20 +99,16 @@ function formatEventTime(value: string): string {
 
 export function Inspector({
   snapshot,
-  threads,
   projects,
-  draftReferences,
   events,
   open,
   modal,
+  modalSuspended = false,
   sections,
-  stoppingProcessIds,
-  processOutputCursors,
+  children,
   onClose,
   onSectionExpandedChange,
-  onCopyText,
-  onReadProcessOutput,
-  onStopProcess
+  onCopyText
 }: InspectorProps) {
   const [copied, setCopied] = useState(false)
   const changedFiles = useMemo(() => {
@@ -138,13 +122,6 @@ export function Inspector({
     }
     return [...byPath.values()]
   }, [events])
-  const historyReferences = useMemo(() => {
-    const references = new Map<string, ContextReference>()
-    for (const message of snapshot.messages) {
-      for (const reference of message.references) references.set(referenceKey(reference), reference)
-    }
-    return [...references.values()]
-  }, [snapshot.messages])
   const timeline = useMemo(
     () => events
       .map((envelope) => ({ envelope, copy: eventCopy(envelope.event) }))
@@ -153,17 +130,13 @@ export function Inspector({
       .reverse(),
     [events]
   )
-  const effectiveReferences = useMemo(() => collectEffectiveReferences(snapshot), [snapshot])
-  const effectiveReferenceCount = effectiveReferences.threads.length + effectiveReferences.projects.length
-  const activeProcessCount = snapshot.processes.filter(isProcessActive).length
-
   return (
     <section
       id="thread-inspector"
       className={`inspector${open ? ' inspector--open' : ''}`}
-      role={open && modal ? 'dialog' : undefined}
-      aria-modal={open && modal ? true : undefined}
-      aria-label="Thread context and activity"
+      role={open && modal && !modalSuspended ? 'dialog' : undefined}
+      aria-modal={open && modal && !modalSuspended ? true : undefined}
+      aria-label={open && modal && !modalSuspended ? 'Thread context and activity' : undefined}
     >
       {modal ? (
         <header className="inspector__header">
@@ -184,6 +157,7 @@ export function Inspector({
       ) : null}
 
       <div className="inspector__scroll">
+        {children}
         <RightRailDisclosure
           id="right-rail-workspace"
           className="workspace-card"
@@ -193,7 +167,14 @@ export function Inspector({
           onExpandedChange={(expanded) => onSectionExpandedChange('workspace', expanded)}
         >
           <div className="path-copy">
-            <code title={snapshot.workspace.root}>{snapshot.workspace.root}</code>
+            <div
+              className="path-copy__scroll"
+              role="region"
+              aria-label="Workspace path"
+              tabIndex={0}
+            >
+              <code title={snapshot.workspace.root}>{snapshot.workspace.root}</code>
+            </div>
             <button
               className="icon-button icon-button--small"
               type="button"
@@ -212,101 +193,6 @@ export function Inspector({
             </button>
           </div>
           <p>Temporary files and generated artifacts for this Thread live here.</p>
-        </RightRailDisclosure>
-
-        <RightRailDisclosure
-          id="right-rail-references"
-          className="context-constellation"
-          eyebrow="Context constellation"
-          title="Active references"
-          badge={<span className="count-pill">{effectiveReferenceCount}</span>}
-          expanded={sections.references}
-          onExpandedChange={(expanded) => onSectionExpandedChange('references', expanded)}
-        >
-          <div className="constellation-graphic" aria-hidden="true">
-            <span className="constellation-orbit" />
-            <span className="constellation-core">C</span>
-            <span className="constellation-dot constellation-dot--workspace" />
-            {[...effectiveReferences.threads, ...effectiveReferences.projects].slice(0, 3).map((reference, index) => (
-              <span
-                className={`constellation-dot constellation-dot--${reference.kind} constellation-dot--position-${index + 1}`}
-                key={reference.kind === 'thread' ? reference.thread_id : reference.project_id}
-              />
-            ))}
-          </div>
-
-          <div className="reference-group">
-            <div className="reference-group__label">
-              <strong>Default context</strong>
-              <span>Always included in future turns</span>
-            </div>
-            <ReferenceChips
-              references={snapshot.thread.default_references}
-              threads={threads}
-              projects={projects}
-              compact
-              emptyLabel="No persistent defaults"
-            />
-          </div>
-          <div className="reference-group">
-            <div className="reference-group__label">
-              <strong>Active history</strong>
-              <span>Accumulated from earlier messages</span>
-            </div>
-            <ReferenceChips
-              references={historyReferences}
-              threads={threads}
-              projects={projects}
-              compact
-              emptyLabel="No references attached in history"
-            />
-          </div>
-          <div className="reference-group">
-            <div className="reference-group__label">
-              <strong>Pending context</strong>
-              <span>Editable in the composer</span>
-            </div>
-            <ReferenceChips
-              references={draftReferences}
-              threads={threads}
-              projects={projects}
-              compact
-              emptyLabel="Mention an asset to add context"
-            />
-            {draftReferences.length > 0 ? (
-              <p className="reference-group__note">
-                These references attach to the next message, then remain available to later turns in this Thread.
-              </p>
-            ) : null}
-          </div>
-        </RightRailDisclosure>
-
-        <RightRailDisclosure
-          id="right-rail-processes"
-          eyebrow="Process manager"
-          title="Background processes"
-          badge={(
-            <span className="process-section__counts">
-              {activeProcessCount > 0 ? (
-                <span className="activity-count"><span aria-hidden="true" /> {activeProcessCount} active</span>
-              ) : null}
-              <span className="count-pill" title={`${snapshot.processes.length} managed process records`}>
-                {snapshot.processes.length}
-              </span>
-            </span>
-          )}
-          expanded={sections.processes}
-          onExpandedChange={(expanded) => onSectionExpandedChange('processes', expanded)}
-        >
-          <BackgroundProcesses
-            processes={snapshot.processes}
-            projects={projects}
-            showHeading={false}
-            stoppingProcessIds={stoppingProcessIds}
-            liveOutputCursors={processOutputCursors}
-            onReadOutput={onReadProcessOutput}
-            onStop={onStopProcess}
-          />
         </RightRailDisclosure>
 
         <RightRailDisclosure

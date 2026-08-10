@@ -107,6 +107,8 @@ pub struct ModelDescriptor {
     pub default_reasoning_effort: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reasoning_efforts: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub supports_speedy: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owned_by: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -124,6 +126,7 @@ impl ModelDescriptor {
             description: None,
             default_reasoning_effort: None,
             reasoning_efforts: Vec::new(),
+            supports_speedy: false,
             owned_by: None,
             created_at: None,
         }
@@ -248,6 +251,7 @@ mod tests {
         assert!(model.description.is_none());
         assert!(model.default_reasoning_effort.is_none());
         assert!(model.reasoning_efforts.is_empty());
+        assert!(!model.supports_speedy);
         assert!(model.capabilities.accepts_images());
     }
 
@@ -259,5 +263,6 @@ mod tests {
         assert!(value.get("description").is_none());
         assert!(value.get("default_reasoning_effort").is_none());
         assert!(value.get("reasoning_efforts").is_none());
+        assert!(value.get("supports_speedy").is_none());
     }
 }

@@ -86,6 +86,8 @@ describe('renderer RPC allowlist', () => {
       references: [],
       provider: 'codex',
       model: 'codex-default',
+      reasoning_effort: 'high',
+      speedy: true,
       permission_mode: 'ask'
     }
     expect(() => validateRpcInvocation('turn/start', params)).not.toThrow()
@@ -95,6 +97,37 @@ describe('renderer RPC allowlist', () => {
     })).toThrow(/permission_mode/)
     const { permission_mode: _omitted, ...withoutPermissionMode } = params
     expect(() => validateRpcInvocation('turn/start', withoutPermissionMode)).toThrow(/missing/)
+    expect(() => validateRpcInvocation('turn/start', {
+      ...params,
+      reasoning_effort: 'x'.repeat(65)
+    })).toThrow(/reasoning_effort/)
+    expect(() => validateRpcInvocation('turn/start', {
+      ...params,
+      reasoning_effort: ' high'
+    })).toThrow(/reasoning_effort/)
+    expect(() => validateRpcInvocation('turn/start', {
+      ...params,
+      speedy: 'yes'
+    })).toThrow(/speedy/)
+    const { speedy: _withoutSpeedy, ...withoutSpeedy } = params
+    expect(() => validateRpcInvocation('turn/start', withoutSpeedy)).not.toThrow()
+  })
+
+  it('accepts optional model tuning when atomically creating a Thread and Turn', () => {
+    const params = {
+      client_request_id: 'draft-1',
+      message: 'Inspect the project',
+      images: [],
+      references: [],
+      provider: 'codex',
+      model: 'codex-default',
+      reasoning_effort: 'medium',
+      speedy: true,
+      permission_mode: 'ask'
+    }
+    expect(() => validateRpcInvocation('thread/create-and-start', params)).not.toThrow()
+    const { speedy: _speedy, reasoning_effort: _effort, ...legacyParams } = params
+    expect(() => validateRpcInvocation('thread/create-and-start', legacyParams)).not.toThrow()
   })
 
   it('accepts bounded image inputs and rejects empty or unsupported Turn content', () => {
@@ -108,6 +141,7 @@ describe('renderer RPC allowlist', () => {
       }],
       references: [],
       provider: 'codex',
+      speedy: false,
       permission_mode: 'ask'
     }
     expect(() => validateRpcInvocation('turn/start', params)).not.toThrow()

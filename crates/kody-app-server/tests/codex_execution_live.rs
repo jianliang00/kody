@@ -44,6 +44,8 @@ async fn executes_a_real_turn_with_codex_plan_quota() {
                 references: Vec::new(),
                 provider: "codex".into(),
                 model: Some(model),
+                reasoning_effort: None,
+                speedy: false,
                 permission_mode: Some(PermissionMode::ReadOnly),
                 temperature: None,
                 max_output_tokens: None,

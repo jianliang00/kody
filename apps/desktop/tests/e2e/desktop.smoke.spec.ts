@@ -107,7 +107,7 @@ test('creates the first Thread through one idempotent draft request', async () =
     expect(updateCapsuleStyle).toEqual({
       borderRadius: '999px',
       copyWhiteSpace: 'nowrap',
-      fontSize: '13px',
+      fontSize: '12px',
       fontWeight: '400'
     })
     expect(connectionStatusStyle).toEqual({ fontSize: '11px', fontWeight: '400' })
@@ -209,8 +209,19 @@ test('creates the first Thread through one idempotent draft request', async () =
     }
 
     await openModelSettings.click()
-    const providerSettings = page.getByRole('dialog', { name: 'Provider settings' })
+    const providerSettings = page.getByRole('dialog', { name: 'Settings' })
     await expect(providerSettings).toBeVisible()
+    if (process.env.KODY_QA_GENERAL_SETTINGS_SCREENSHOT) {
+      await page.screenshot({ path: process.env.KODY_QA_GENERAL_SETTINGS_SCREENSHOT, animations: 'disabled' })
+    }
+    const selectedProvider = providerSettings.getByRole('combobox', { name: 'Provider' })
+    await selectedProvider.click()
+    await page.getByRole('option', { name: /Echo/ }).click()
+    await expect(selectedProvider).toHaveAttribute('data-value', 'echo')
+    await expect.poll(() => page.evaluate(async () => (
+      (await window.kody?.getProviderSettings())?.selectedProviderId
+    ))).toBe('echo')
+    await providerSettings.getByRole('button', { name: 'Add provider' }).click()
     const settingsTypography = await providerSettings.evaluate((dialog) => {
       const fontSize = (selector: string) => {
         const element = dialog.querySelector(selector)
@@ -218,18 +229,75 @@ test('creates the first Thread through one idempotent draft request', async () =
         return getComputedStyle(element).fontSize
       }
       return {
+        dialogTitle: fontSize('.provider-settings__header h2'),
+        sectionTitle: fontSize('.provider-profile-form__heading h3'),
         headerCopy: fontSize('.provider-settings__header > div > p:last-child'),
+        navigationLabel: fontSize('.provider-profile-general'),
         navigationAction: fontSize('.provider-profile-add'),
-        navigationEmpty: fontSize('.provider-profile-nav > p'),
+        navigationEmpty: fontSize('.provider-profile-nav > p:not(.provider-profile-nav__heading)'),
         fieldLabel: fontSize('.provider-field > label')
       }
     })
     expect(settingsTypography).toEqual({
-      headerCopy: '14px',
+      dialogTitle: '17px',
+      sectionTitle: '15px',
+      headerCopy: '13px',
+      navigationLabel: '14px',
       navigationAction: '14px',
-      navigationEmpty: '13px',
+      navigationEmpty: '12px',
       fieldLabel: '13px'
     })
+    const settingsDialogSurface = await providerSettings.evaluate((dialog) => {
+      const style = getComputedStyle(dialog)
+      return {
+        backgroundColor: style.backgroundColor,
+        backgroundImage: style.backgroundImage,
+        backdropFilter: style.backdropFilter,
+        borderRadius: style.borderRadius,
+        borderWidth: style.borderTopWidth
+      }
+    })
+    expect(settingsDialogSurface).toMatchObject({
+      backgroundImage: 'none',
+      backdropFilter: 'none',
+      borderRadius: '30px',
+      borderWidth: '1px'
+    })
+    expect(settingsDialogSurface.backgroundColor).not.toBe('rgba(0, 0, 0, 0)')
+
+    const cancelProvider = providerSettings.getByRole('button', { name: 'Close', exact: true })
+    const saveProvider = providerSettings.getByRole('button', { name: 'Save provider' })
+    const [cancelBox, saveBox] = await Promise.all([cancelProvider.boundingBox(), saveProvider.boundingBox()])
+    expect(cancelBox).not.toBeNull()
+    expect(saveBox).not.toBeNull()
+    expect(cancelBox!.x).toBeLessThan(saveBox!.x)
+    const settingsActionSurface = async (control: typeof cancelProvider) => control.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        backgroundColor: style.backgroundColor,
+        backgroundImage: style.backgroundImage,
+        borderRadius: style.borderRadius,
+        color: style.color,
+        fontSize: style.fontSize,
+        fontWeight: style.fontWeight,
+        height: element.getBoundingClientRect().height,
+        width: element.getBoundingClientRect().width
+      }
+    })
+    const [cancelSurface, saveSurface] = await Promise.all([
+      settingsActionSurface(cancelProvider),
+      settingsActionSurface(saveProvider)
+    ])
+    for (const surface of [cancelSurface, saveSurface]) {
+      expect(surface.height).toBe(24)
+      expect(surface.width).toBeGreaterThanOrEqual(80)
+      expect(surface.borderRadius).toBe('6px')
+      expect(surface.backgroundImage).toBe('none')
+      expect(surface.fontSize).toBe('14px')
+      expect(surface.fontWeight).toBe('400')
+    }
+    expect(saveSurface.backgroundColor).not.toBe(cancelSurface.backgroundColor)
+    expect(saveSurface.color).toBe('rgb(0, 0, 0)')
     const providerKind = providerSettings.getByRole('combobox', { name: /Provider kind/ })
     await providerKind.click()
     const selectContent = page.locator('.kody-select__content')
@@ -244,10 +312,10 @@ test('creates the first Thread through one idempotent draft request', async () =
         itemMinHeight: getComputedStyle(item).minHeight
       }
     })
-    expect(selectSurface.borderRadius).toBe('8px')
+    expect(selectSurface.borderRadius).toBe('10px')
     expect(selectSurface.boxShadow).not.toBe('none')
-    expect(selectSurface.itemFontSize).toBe('14px')
-    expect(selectSurface.itemMinHeight).toBe('36px')
+    expect(selectSurface.itemFontSize).toBe('13px')
+    expect(selectSurface.itemMinHeight).toBe('26px')
     if (process.env.KODY_QA_SELECT_SCREENSHOT) {
       await page.screenshot({ path: process.env.KODY_QA_SELECT_SCREENSHOT, animations: 'disabled' })
     }
@@ -262,24 +330,60 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expect(selectContent).toHaveCount(0)
     await expect(providerSettings).toBeVisible()
     await expect(providerKind).toBeFocused()
-    const closedFieldSurfaces = await providerSettings.evaluate((dialog) => {
+    await providerSettings.getByRole('button', { name: 'Close provider settings' }).focus()
+    const readClosedFieldSurfaces = async () => providerSettings.evaluate((dialog) => {
       const input = dialog.querySelector<HTMLInputElement>('input[name="base-url"]')
       const select = dialog.querySelector<HTMLElement>('.kody-select__trigger--field')
       if (!input || !select) throw new Error('Missing provider field controls')
-      const surface = (element: HTMLElement) => {
+      const surface = (element: Element) => {
         const style = getComputedStyle(element)
         return {
           backgroundColor: style.backgroundColor,
+          backgroundImage: style.backgroundImage,
           borderColor: style.borderTopColor,
           borderRadius: style.borderRadius,
           borderWidth: style.borderTopWidth,
           minHeight: style.minHeight,
-          fontSize: style.fontSize
+          fontSize: style.fontSize,
+          boxShadow: style.boxShadow,
+          height: element.getBoundingClientRect().height
         }
       }
       return { input: surface(input), select: surface(select) }
     })
+    await expect.poll(async () => {
+      const surfaces = await readClosedFieldSurfaces()
+      return JSON.stringify(surfaces.select) === JSON.stringify(surfaces.input)
+    }).toBe(true)
+    const closedFieldSurfaces = await readClosedFieldSurfaces()
     expect(closedFieldSurfaces.select).toEqual(closedFieldSurfaces.input)
+    expect(closedFieldSurfaces.input).toMatchObject({
+      backgroundImage: 'none',
+      borderRadius: '8px',
+      borderWidth: '1px',
+      minHeight: '24px',
+      fontSize: '14px',
+      height: 24
+    })
+    expect(closedFieldSurfaces.input.backgroundColor).not.toBe('rgba(0, 0, 0, 0)')
+
+    const settingsFocusSurface = async (control: typeof providerKind) => control.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return { borderColor: style.borderTopColor, boxShadow: style.boxShadow }
+    })
+    const baseUrlField = providerSettings.getByLabel(/Base URL/)
+    await baseUrlField.focus()
+    const focusedInputSurface = await settingsFocusSurface(baseUrlField)
+    expect(focusedInputSurface.borderColor).not.toBe(closedFieldSurfaces.input.borderColor)
+    expect(focusedInputSurface.boxShadow).not.toBe(closedFieldSurfaces.input.boxShadow)
+    await expect.poll(async () => (await settingsFocusSurface(baseUrlField)).boxShadow)
+      .toMatch(/0px 0px 0px 1px/)
+    await providerKind.focus()
+    const focusedSelectSurface = await settingsFocusSurface(providerKind)
+    expect(focusedSelectSurface.borderColor).not.toBe(closedFieldSurfaces.select.borderColor)
+    expect(focusedSelectSurface.boxShadow).not.toBe(closedFieldSurfaces.select.boxShadow)
+    await expect.poll(async () => (await settingsFocusSurface(providerKind)).boxShadow)
+      .toMatch(/0px 0px 0px 1px/)
     const settingsControlTops = async () => {
       const controls = {
         profileName: providerSettings.getByLabel(/Profile name/),
@@ -302,16 +406,98 @@ test('creates the first Thread through one idempotent draft request', async () =
     await providerSettings.getByRole('button', { name: 'Save provider' }).click()
     await expect(providerSettings.getByText('Enter a profile name.')).toBeVisible()
     expectSettingsRowsAligned(await settingsControlTops())
+    const settingsHeaderPosition = await providerSettings.evaluate((dialog) => {
+      const header = dialog.querySelector<HTMLElement>('.provider-settings__header')
+      if (!header) throw new Error('Missing provider settings header')
+      return {
+        dialogScrollTop: dialog.scrollTop,
+        offset: Math.abs(header.getBoundingClientRect().top - dialog.getBoundingClientRect().top)
+      }
+    })
+    expect(settingsHeaderPosition.dialogScrollTop).toBe(0)
+    expect(settingsHeaderPosition.offset).toBeLessThanOrEqual(1)
     if (process.env.KODY_QA_SETTINGS_SCREENSHOT) {
       await page.screenshot({ path: process.env.KODY_QA_SETTINGS_SCREENSHOT, animations: 'disabled' })
     }
-    if (process.env.KODY_QA_DARK_SETTINGS_SCREENSHOT) {
-      await page.locator('html').evaluate((element) => { element.dataset.theme = 'dark' })
-      await page.screenshot({ path: process.env.KODY_QA_DARK_SETTINGS_SCREENSHOT, animations: 'disabled' })
-      await page.locator('html').evaluate((element) => { element.dataset.theme = 'light' })
+    await page.locator('html').evaluate((element) => { element.dataset.theme = 'dark' })
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+    await expect.poll(async () => baseUrlField.evaluate((element) => getComputedStyle(element).backgroundColor))
+      .toBe('rgb(35, 40, 41)')
+    const darkSettingsSurface = await providerSettings.evaluate((dialog) => {
+      const input = dialog.querySelector<HTMLInputElement>('input[name="base-url"]')
+      const cancel = [...dialog.querySelectorAll<HTMLButtonElement>('button')]
+        .find((button) => button.textContent?.trim() === 'Close')
+      const save = [...dialog.querySelectorAll<HTMLButtonElement>('button')]
+        .find((button) => button.textContent?.includes('Save provider'))
+      if (!input || !cancel || !save) throw new Error('Missing dark settings controls')
+      const surface = (element: Element) => {
+        const style = getComputedStyle(element)
+        return {
+          backgroundColor: style.backgroundColor,
+          backgroundImage: style.backgroundImage,
+          color: style.color
+        }
+      }
+      return {
+        dialog: surface(dialog),
+        detail: surface(dialog.querySelector('.provider-settings__content')!),
+        input: surface(input),
+        cancel: surface(cancel),
+        save: surface(save),
+        selection: getComputedStyle(input, '::selection').backgroundColor
+      }
+    })
+    expect(darkSettingsSurface.dialog.backgroundColor).toBe('rgb(34, 40, 41)')
+    expect(darkSettingsSurface.detail.backgroundColor).toBe('rgb(28, 28, 30)')
+    expect(darkSettingsSurface.input.backgroundColor).toBe('rgb(35, 40, 41)')
+    expect(darkSettingsSurface.cancel.backgroundColor).toBe('rgb(50, 56, 57)')
+    expect(darkSettingsSurface.save.backgroundColor).not.toBe(darkSettingsSurface.cancel.backgroundColor)
+    expect(darkSettingsSurface.save.color).toBe('rgb(0, 0, 0)')
+    expect(darkSettingsSurface.selection).toBe('rgb(111, 84, 43)')
+    for (const surface of [
+      darkSettingsSurface.dialog,
+      darkSettingsSurface.input,
+      darkSettingsSurface.cancel,
+      darkSettingsSurface.save
+    ]) {
+      expect(surface.backgroundImage).toBe('none')
     }
+    await baseUrlField.focus()
+    await page.keyboard.press('Shift+Tab')
+    await page.keyboard.press('Tab')
+    await expect(baseUrlField).toBeFocused()
+    await expect.poll(async () => (await settingsFocusSurface(baseUrlField)).boxShadow)
+      .toMatch(/0px 0px 0px 1px/)
+    if (process.env.KODY_QA_DARK_SETTINGS_SCREENSHOT) {
+      await page.screenshot({ path: process.env.KODY_QA_DARK_SETTINGS_SCREENSHOT, animations: 'disabled' })
+    }
+    await page.locator('html').evaluate((element) => { element.dataset.theme = 'light' })
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+    const lightBackgrounds = await page.evaluate(() => {
+      const background = (selector: string) => {
+        const element = document.querySelector(selector)
+        if (!(element instanceof HTMLElement)) throw new Error(`Missing light surface fixture: ${selector}`)
+        return getComputedStyle(element).backgroundColor
+      }
+      return {
+        conversation: background('.conversation-workspace'),
+        threadList: background('.asset-rail'),
+        inspector: background('.right-rail'),
+        settingsDetail: background('.provider-settings__content'),
+        titlebar: background('.titlebar'),
+        workbench: background('.workbench-rail')
+      }
+    })
+    expect(lightBackgrounds).toMatchObject({
+      conversation: 'rgb(255, 255, 255)',
+      threadList: 'rgb(255, 255, 255)',
+      inspector: 'rgb(255, 255, 255)',
+      settingsDetail: 'rgb(255, 255, 255)'
+    })
+    expect(lightBackgrounds.titlebar).not.toBe('rgb(255, 255, 255)')
+    expect(lightBackgrounds.workbench).not.toBe('rgb(255, 255, 255)')
     await page.getByRole('button', { name: 'Close provider settings' }).click()
-    await expect(page.getByRole('dialog', { name: 'Provider settings' })).toHaveCount(0)
+    await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0)
     await expect(openModelSettings).toBeFocused()
 
     const bridgeProbe = await page.evaluate(async () => {
@@ -370,7 +556,45 @@ test('creates the first Thread through one idempotent draft request', async () =
     await selectKodyOption(page, 'Permission mode', 'Read only')
     await expect(permissionMode).toHaveAttribute('data-value', 'read_only')
     await expect(page.getByRole('dialog')).toHaveCount(0)
+    if (process.env.KODY_QA_PERMISSION_MENU_SCREENSHOT) {
+      await permissionMode.click()
+      await expect(page.locator('.composer-permission-menu')).toBeVisible()
+      await page.screenshot({
+        path: process.env.KODY_QA_PERMISSION_MENU_SCREENSHOT,
+        animations: 'disabled'
+      })
+      await page.keyboard.press('Escape')
+      await expect(page.locator('.composer-permission-menu')).toHaveCount(0)
+    }
     await expect(page.getByText('No Threads in New Progress', { exact: true })).toBeVisible()
+    const emptyThreadState = page.getByRole('status').filter({ hasText: 'No Threads in New Progress' })
+    const emptyThreadStateLayout = await emptyThreadState.evaluate((element) => {
+      const navigation = element.closest('.asset-navigation')
+      if (!(navigation instanceof HTMLElement)) throw new Error('Missing empty Thread navigation region')
+      const style = getComputedStyle(element)
+      const emptyBox = element.getBoundingClientRect()
+      const navigationBox = navigation.getBoundingClientRect()
+      return {
+        fontSize: style.fontSize,
+        fontWeight: style.fontWeight,
+        lineHeight: style.lineHeight,
+        textAlign: style.textAlign,
+        horizontalOffset: Math.abs(
+          emptyBox.left + emptyBox.width / 2 - (navigationBox.left + navigationBox.width / 2)
+        ),
+        verticalOffset: Math.abs(
+          emptyBox.top + emptyBox.height / 2 - (navigationBox.top + navigationBox.height / 2)
+        )
+      }
+    })
+    expect(emptyThreadStateLayout).toMatchObject({
+      fontSize: '13px',
+      fontWeight: '400',
+      textAlign: 'center'
+    })
+    expect(Number.parseFloat(emptyThreadStateLayout.lineHeight)).toBeCloseTo(18.2, 1)
+    expect(emptyThreadStateLayout.horizontalOffset).toBeLessThanOrEqual(1)
+    expect(emptyThreadStateLayout.verticalOffset).toBeLessThanOrEqual(8)
 
     const emptyBackend = await page.evaluate(async () => {
       if (!window.kody) throw new Error('preload bridge is unavailable')
@@ -384,19 +608,12 @@ test('creates the first Thread through one idempotent draft request', async () =
     expect(emptyBackend.projects).toHaveLength(0)
     expect(await readdir(join(actualUserDataRoot, 'engine', 'workspaces'))).toHaveLength(0)
 
-    const projectShelf = page.locator('#project-shelf')
-    await expect(projectShelf).toBeVisible()
-    await expect(projectShelf.getByRole('button', { name: 'Projects', exact: true })).toBeVisible()
-    await expect(projectShelf.locator('.right-rail-disclosure__badge .count-pill')).toHaveText('0')
-    await expect(projectShelf.getByText('No Projects yet.', { exact: true })).toBeVisible()
-    const initialShelfBox = await projectShelf.boundingBox()
-    const initialRightRailBox = await rightRail.boundingBox()
+    const workbenchProjects = workbenchRail.locator('section[aria-labelledby="workbench-projects-title"]')
+    await expect(workbenchProjects.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible()
+    await expect(workbenchProjects.getByRole('button', { name: 'Import Project' })).toBeVisible()
+    await expect(workbenchProjects.getByText('No Projects yet', { exact: true })).toBeVisible()
+    await expect(workbenchProjects.locator('.workbench-project-list')).toHaveCount(0)
     const viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
-    expect(initialShelfBox).not.toBeNull()
-    expect(initialRightRailBox).not.toBeNull()
-    expect(initialShelfBox?.x ?? 0).toBeGreaterThan(viewport.width / 2)
-    expect(initialShelfBox?.x ?? 0).toBeGreaterThanOrEqual(initialRightRailBox?.x ?? 0)
-    expect(initialShelfBox?.width ?? Infinity).toBeLessThanOrEqual(initialRightRailBox?.width ?? 0)
 
     // Stub only the native picker. The renderer still traverses the real preload and IPC boundary.
     await application.evaluate(({ dialog }, directory) => {
@@ -410,6 +627,23 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expect(workingDirectoryChip).toBeVisible()
     await expect(workingDirectoryChip).toContainText(selectedProjectRoot)
     await expect(workingDirectoryChip.getByRole('button', { name: 'Clear working directory' })).toBeVisible()
+    const workingDirectoryChipSurface = await workingDirectoryChip.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        height: element.getBoundingClientRect().height,
+        borderRadius: style.borderRadius,
+        borderWidth: style.borderTopWidth,
+        fontSize: style.fontSize,
+        boxShadow: style.boxShadow
+      }
+    })
+    expect(workingDirectoryChipSurface).toEqual({
+      height: 24,
+      borderRadius: '6px',
+      borderWidth: '1px',
+      fontSize: '13px',
+      boxShadow: 'none'
+    })
 
     const stagedOnly = await page.evaluate(async () => {
       if (!window.kody) throw new Error('preload bridge is unavailable')
@@ -424,72 +658,294 @@ test('creates the first Thread through one idempotent draft request', async () =
 
     const prompt = 'Explain the provider neutral agent loop'
     await composer.fill(prompt)
-    await selectKodyOption(page, 'Provider', 'Echo')
-    await expect(page.getByRole('combobox', { name: 'Provider' })).toHaveAttribute('data-value', 'echo')
-    await expect(page.getByRole('combobox', { name: 'Model' })).toHaveAttribute('data-value', 'echo')
-    const providerTrigger = page.getByRole('combobox', { name: 'Provider' })
-    const modelTrigger = page.getByRole('combobox', { name: 'Model' })
+    await expect(page.getByRole('combobox', { name: 'Provider' })).toHaveCount(0)
+    const modelTrigger = page.locator('#composer-model-menu')
+    await expect(modelTrigger).toHaveAttribute('data-model', 'echo')
+    await expect(modelTrigger).toHaveAttribute('data-speedy', 'false')
+    await expect(modelTrigger).toHaveAttribute('aria-description', /Fast mode (off|unavailable)/)
+    await expect(modelTrigger.locator('.model-menu__trigger-leading')).toHaveCount(0)
+    await expect(modelTrigger.locator('.model-menu__trigger-fast-icon')).toHaveCount(0)
     await expect(page.getByText('Uses the Codex agent loop and tools for this Turn.')).toHaveCount(0)
-    const selectTextInsets = await page.evaluate(() => {
-      const provider = document.querySelector<HTMLElement>('#composer-provider')
-      const model = document.querySelector<HTMLElement>('#composer-model')
-      if (!provider || !model) throw new Error('Missing composer model controls')
-      const insets = (element: HTMLElement) => {
-        const style = getComputedStyle(element)
-        return {
-          start: Number.parseFloat(style.paddingInlineStart),
-          end: Number.parseFloat(style.paddingInlineEnd)
-        }
+    await modelTrigger.focus()
+    await page.keyboard.press('ArrowDown')
+    const modelSettingsMenu = page.getByRole('menu', { name: 'Model settings' })
+    await expect(modelSettingsMenu).toBeVisible()
+    await expect(modelTrigger).toHaveAttribute('aria-haspopup', 'menu')
+    const modelMenuSurface = await modelSettingsMenu.evaluate((element) => {
+      const style = getComputedStyle(element)
+      const firstItem = element.querySelector<HTMLElement>('[role="menuitem"]')
+      const highlightedItem = element.querySelector<HTMLElement>('[data-highlighted]')
+      const highlightedStyle = highlightedItem ? getComputedStyle(highlightedItem) : null
+      return {
+        width: element.getBoundingClientRect().width,
+        backgroundImage: style.backgroundImage,
+        borderStyle: style.borderTopStyle,
+        borderWidth: style.borderTopWidth,
+        borderRadius: style.borderRadius,
+        boxShadow: style.boxShadow,
+        itemHeight: firstItem?.getBoundingClientRect().height ?? 0,
+        highlightedBackground: highlightedStyle?.backgroundColor ?? '',
+        highlightedColor: highlightedStyle?.color ?? ''
       }
-      return { provider: insets(provider), model: insets(model) }
     })
-    expect(selectTextInsets.provider).toEqual(selectTextInsets.model)
-    expect(selectTextInsets.provider.start).toBeGreaterThanOrEqual(10)
-    expect(selectTextInsets.provider.end).toBeGreaterThanOrEqual(8)
+    const menuSelectionColors = await page.evaluate(() => {
+      const probe = document.createElement('span')
+      probe.style.backgroundColor = 'var(--mac-menu-selection-fill)'
+      probe.style.color = 'var(--mac-menu-selection-text)'
+      document.body.append(probe)
+      const style = getComputedStyle(probe)
+      const background = style.backgroundColor
+      const text = style.color
+      probe.style.backgroundColor = 'var(--mac-primary-fill)'
+      probe.style.color = 'var(--mac-primary-contrast)'
+      const primaryStyle = getComputedStyle(probe)
+      const colors = {
+        background,
+        text,
+        primaryBackground: primaryStyle.backgroundColor,
+        primaryText: primaryStyle.color
+      }
+      probe.remove()
+      return colors
+    })
+    expect(menuSelectionColors.background).toBe(menuSelectionColors.primaryBackground)
+    expect(menuSelectionColors.text).toBe(menuSelectionColors.primaryText)
+    expect(modelMenuSurface.width).toBeGreaterThanOrEqual(200)
+    expect(modelMenuSurface.width).toBeLessThanOrEqual(232)
+    expect(modelMenuSurface.backgroundImage).toBe('none')
+    expect(modelMenuSurface.borderStyle).toBe('none')
+    expect(modelMenuSurface.borderWidth).toBe('0px')
+    expect(modelMenuSurface.borderRadius).toBe('8px')
+    expect(modelMenuSurface.boxShadow).not.toBe('none')
+    expect(modelMenuSurface.itemHeight).toBeGreaterThanOrEqual(23.5)
+    expect(modelMenuSurface.itemHeight).toBeLessThanOrEqual(24.5)
+    expect(modelMenuSurface.highlightedBackground).toBe(menuSelectionColors.background)
+    expect(modelMenuSurface.highlightedColor).toBe(menuSelectionColors.text)
+    if (process.env.KODY_QA_MODEL_MENU_SCREENSHOT) {
+      await page.screenshot({ path: process.env.KODY_QA_MODEL_MENU_SCREENSHOT, animations: 'disabled' })
+    }
+    const modelSubmenuTrigger = modelSettingsMenu.getByRole('menuitem', { name: /^Model:/ })
+    await modelSubmenuTrigger.focus()
+    await page.keyboard.press('ArrowRight')
+    const modelsMenu = page.locator('[role="menu"][aria-label="Models"]')
+    await expect(modelsMenu).toBeVisible()
+    await modelsMenu.getByRole('menuitemradio').click()
+    await expect(modelSettingsMenu).toHaveCount(0)
+    await expect(modelTrigger).toBeFocused()
+    const modelTextInsets = await modelTrigger.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        start: Number.parseFloat(style.paddingInlineStart),
+        end: Number.parseFloat(style.paddingInlineEnd)
+      }
+    })
+    expect(modelTextInsets.start).toBeGreaterThanOrEqual(6)
+    expect(modelTextInsets.end).toBeGreaterThanOrEqual(3)
     const addContext = page.getByRole('button', { name: 'Add context' })
     const permissionControl = page.locator('.permission-mode-control')
+    const sendButton = page.getByRole('button', { name: 'Send', exact: true })
     await page.mouse.move(800, 300)
-    await expect(providerTrigger).toHaveCSS('background-color', 'rgb(246, 246, 246)')
-    const compactControlSurfaces = await page.evaluate(() => {
-      const provider = document.querySelector<HTMLElement>('#composer-provider')
-      const context = document.querySelector<HTMLElement>('.composer .context-button')
-      const permission = document.querySelector<HTMLElement>('.permission-mode-control')
-      if (!provider || !context || !permission) throw new Error('Missing composer controls')
-      const surface = (element: HTMLElement) => {
-        const style = getComputedStyle(element)
-        return {
-          backgroundColor: style.backgroundColor,
-          borderRadius: style.borderRadius,
-          borderWidth: style.borderTopWidth,
-          height: element.getBoundingClientRect().height
-        }
+    const readControlSurface = async (control: typeof modelTrigger) => control.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        backgroundColor: style.backgroundColor,
+        backgroundImage: style.backgroundImage,
+        borderColor: style.borderTopColor,
+        borderRadius: style.borderRadius,
+        borderWidth: style.borderTopWidth,
+        boxShadow: style.boxShadow,
+        color: style.color,
+        outlineWidth: style.outlineWidth,
+        height: element.getBoundingClientRect().height
       }
-      return { provider: surface(provider), context: surface(context), permission: surface(permission) }
     })
-    expect(compactControlSurfaces.permission).toEqual(compactControlSurfaces.provider)
-    expect(compactControlSurfaces.context).toEqual({
-      backgroundColor: 'rgba(0, 0, 0, 0)',
-      borderRadius: '6px',
-      borderWidth: '1px',
-      height: 32
+    await composer.focus()
+    await expect.poll(async () => page.getByRole('form', { name: 'Message composer' }).evaluate((element) => (
+      getComputedStyle(element).boxShadow
+    ))).toMatch(/0px 0px 0px 1px/)
+    await expect.poll(async () => {
+      const [model, permission] = await Promise.all([
+        readControlSurface(modelTrigger),
+        readControlSurface(permissionControl)
+      ])
+      return model.backgroundColor === permission.backgroundColor
+        && model.backgroundImage === permission.backgroundImage
+        && model.borderColor === permission.borderColor
+        && model.borderRadius === permission.borderRadius
+        && model.borderWidth === permission.borderWidth
+        && model.boxShadow === permission.boxShadow
+    }).toBe(true)
+    const [modelSurface, contextSurface, permissionSurface, sendSurface] = await Promise.all([
+      readControlSurface(modelTrigger),
+      readControlSurface(addContext),
+      readControlSurface(permissionControl),
+      readControlSurface(sendButton)
+    ])
+    const raisedSurface = ({ backgroundColor, backgroundImage, borderColor, borderRadius, borderWidth, boxShadow }: typeof modelSurface) => ({
+      backgroundColor,
+      backgroundImage,
+      borderColor,
+      borderRadius,
+      borderWidth,
+      boxShadow
     })
-    const hoverSurface = async (control: typeof providerTrigger) => {
-      await control.hover()
-      await expect(control).toHaveCSS('background-color', 'rgb(236, 236, 239)')
-      await expect(control).toHaveCSS('border-top-color', 'rgba(60, 60, 67, 0.28)')
-      return control.evaluate((element) => {
-        const style = getComputedStyle(element)
-        return { backgroundColor: style.backgroundColor, borderColor: style.borderTopColor }
-      })
+    expect(raisedSurface(permissionSurface)).toEqual(raisedSurface(modelSurface))
+    for (const [name, surface] of Object.entries({ model: modelSurface, permission: permissionSurface, send: sendSurface })) {
+      expect(surface.height, `${name} control height`).toBeCloseTo(24, 1)
+      expect(surface.borderRadius, `${name} control radius`).toBe('6px')
     }
-    const providerHover = await hoverSurface(providerTrigger)
-    const contextHover = await hoverSurface(addContext)
-    const permissionHover = await hoverSurface(permissionControl)
-    expect(providerHover).toEqual(contextHover)
-    expect(permissionHover).toEqual(contextHover)
+    expect(modelSurface.borderWidth).toBe('0px')
+    expect(permissionSurface.borderWidth).toBe('0px')
+    expect(sendSurface.borderWidth).toBe('1px')
+    expect(contextSurface.height).toBeCloseTo(24, 1)
+    expect(contextSurface.borderRadius).toBe('5px')
+    expect(contextSurface.borderWidth).toBe('1px')
+    expect(modelSurface.backgroundImage).toBe('none')
+    expect(modelSurface.boxShadow).toBe('none')
+    expect(permissionSurface.boxShadow).toBe('none')
+    expect(contextSurface.backgroundColor).not.toBe(modelSurface.backgroundColor)
+    expect(contextSurface.boxShadow).toBe('none')
+    expect(sendSurface.backgroundColor).not.toBe(modelSurface.backgroundColor)
+    expect(sendSurface.backgroundImage).toBe('none')
+    expect(sendSurface.boxShadow).not.toBe('none')
+    expect(sendSurface.color).toBe('rgb(0, 0, 0)')
+
+    const modelIndicator = modelTrigger.locator('.model-menu__trigger-indicator')
+    const permissionIndicator = permissionControl.locator('.kody-select__trigger-icon')
+    const readIndicatorSurface = async (indicator: typeof modelIndicator) => indicator.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        backgroundColor: style.backgroundColor,
+        borderColor: style.borderTopColor,
+        borderWidth: style.borderTopWidth,
+        boxShadow: style.boxShadow,
+        color: style.color
+      }
+    })
+    const [modelIndicatorSurface, permissionIndicatorSurface, primaryFill] = await Promise.all([
+      readIndicatorSurface(modelIndicator),
+      readIndicatorSurface(permissionIndicator),
+      page.evaluate(() => {
+        const probe = document.createElement('span')
+        probe.style.backgroundColor = 'var(--mac-primary-fill)'
+        document.body.append(probe)
+        const color = getComputedStyle(probe).backgroundColor
+        probe.remove()
+        return color
+      })
+    ])
+    expect(permissionIndicatorSurface).toEqual(modelIndicatorSurface)
+    expect(modelIndicatorSurface.borderWidth).toBe('0px')
+    expect(modelIndicatorSurface.boxShadow).toBe('none')
+    expect(modelIndicatorSurface.backgroundColor).not.toBe(primaryFill)
+
+    await modelTrigger.click()
+    await expect(modelSettingsMenu).toBeVisible()
+    const openModelIndicatorSurface = await readIndicatorSurface(modelIndicator)
+    expect(openModelIndicatorSurface.backgroundColor).not.toBe(modelIndicatorSurface.backgroundColor)
+    expect(openModelIndicatorSurface.backgroundColor).not.toBe(primaryFill)
+    await page.keyboard.press('Escape')
+    await expect(modelSettingsMenu).toHaveCount(0)
+    await page.mouse.move(800, 300)
+    await expect.poll(async () => (await readIndicatorSurface(modelIndicator)).backgroundColor)
+      .toBe(modelIndicatorSurface.backgroundColor)
+
+    const hasVisibleFocus = (base: typeof modelSurface, focused: typeof modelSurface) => (
+      focused.boxShadow !== base.boxShadow || Number.parseFloat(focused.outlineWidth) > 0
+    )
+    const expectKeyboardFocus = async (
+      focusControl: typeof modelTrigger,
+      surfaceControl: typeof modelTrigger,
+      base: typeof modelSurface
+    ) => {
+      await focusControl.focus()
+      await page.keyboard.press('Shift+Tab')
+      await page.keyboard.press('Tab')
+      await expect(focusControl).toBeFocused()
+      await expect.poll(async () => hasVisibleFocus(base, await readControlSurface(surfaceControl))).toBe(true)
+      await expect.poll(async () => (await readControlSurface(surfaceControl)).boxShadow)
+        .toMatch(/0px 0px 0px 1px/)
+    }
+    await expectKeyboardFocus(modelTrigger, modelTrigger, modelSurface)
+    await expectKeyboardFocus(permissionMode, permissionControl, permissionSurface)
+    await expectKeyboardFocus(addContext, addContext, contextSurface)
+    await expectKeyboardFocus(sendButton, sendButton, sendSurface)
+
+    const hoverSurface = async (control: typeof modelTrigger, base: typeof modelSurface) => {
+      await control.hover()
+      await expect.poll(async () => (await readControlSurface(control)).backgroundColor)
+        .not.toBe(base.backgroundColor)
+      return readControlSurface(control)
+    }
+    await composer.focus()
+    const modelHover = await hoverSurface(modelTrigger, modelSurface)
+    const contextHover = await hoverSurface(addContext, contextSurface)
+    const permissionHover = await hoverSurface(permissionControl, permissionSurface)
+    const sendHover = await hoverSurface(sendButton, sendSurface)
+    const hoverChrome = ({ backgroundImage, borderRadius, borderWidth, boxShadow }: typeof modelSurface) => ({
+      backgroundImage,
+      borderRadius,
+      borderWidth,
+      boxShadow
+    })
+    expect(hoverChrome(permissionHover)).toEqual(hoverChrome(modelHover))
+    expect(modelHover.backgroundColor).not.toBe(modelSurface.backgroundColor)
+    expect(permissionHover.backgroundColor).not.toBe(permissionSurface.backgroundColor)
+    expect(contextHover.backgroundColor).not.toBe(contextSurface.backgroundColor)
+    expect(contextHover.borderColor).toBe(contextSurface.borderColor)
+    expect(contextHover.boxShadow).toBe('none')
+    expect(sendHover.backgroundColor).not.toBe(sendSurface.backgroundColor)
+
+    await selectKodyOption(page, 'Permission mode', 'Full access')
+    await expect(permissionMode).toHaveAttribute('data-value', 'full_access')
+    await page.mouse.move(800, 300)
+    await composer.focus()
+    const permissionDangerColors = await page.evaluate(() => {
+      const probe = document.createElement('span')
+      probe.style.backgroundColor = 'var(--mac-permission-danger-fill)'
+      probe.style.color = 'var(--mac-danger-foreground)'
+      document.body.append(probe)
+      const base = getComputedStyle(probe)
+      const baseFill = base.backgroundColor
+      const text = base.color
+      probe.style.backgroundColor = 'var(--mac-permission-danger-fill-hover)'
+      const hoverFill = getComputedStyle(probe).backgroundColor
+      probe.remove()
+      return { baseFill, hoverFill, text }
+    })
+    await expect.poll(async () => (await readControlSurface(permissionControl)).backgroundColor)
+      .toBe(permissionDangerColors.baseFill)
+    const fullAccessSurface = await readControlSurface(permissionControl)
+    const fullAccessIconColor = await permissionControl.locator('.kody-select__leading-icon').evaluate((element) => (
+      getComputedStyle(element).color
+    ))
+    expect(fullAccessSurface.backgroundImage).toBe(permissionSurface.backgroundImage)
+    expect(fullAccessSurface.backgroundColor).toBe(permissionDangerColors.baseFill)
+    expect(fullAccessSurface.backgroundColor).toBe(permissionSurface.backgroundColor)
+    expect(fullAccessSurface.borderWidth).toBe('0px')
+    expect(fullAccessSurface.color).toBe(permissionDangerColors.text)
+    expect(fullAccessSurface.color).not.toBe(permissionSurface.color)
+    expect(fullAccessIconColor).not.toBe(permissionIndicatorSurface.color)
+    if (process.env.KODY_QA_FULL_ACCESS_SCREENSHOT) {
+      await page.screenshot({ path: process.env.KODY_QA_FULL_ACCESS_SCREENSHOT, animations: 'disabled' })
+    }
+    const fullAccessHover = await hoverSurface(permissionControl, fullAccessSurface)
+    expect(fullAccessHover.borderWidth).toBe('0px')
+    expect(fullAccessHover.borderRadius).toBe(permissionHover.borderRadius)
+    expect(fullAccessHover.backgroundImage).toBe(permissionHover.backgroundImage)
+    await expect.poll(async () => (await readControlSurface(permissionControl)).backgroundColor)
+      .toBe(permissionDangerColors.hoverFill)
+    expect(permissionDangerColors.hoverFill).not.toBe(permissionHover.backgroundColor)
+    await expect.poll(async () => (await readControlSurface(permissionControl)).color)
+      .toBe(permissionDangerColors.text)
+    await selectKodyOption(page, 'Permission mode', 'Read only')
+    await expect(permissionMode).toHaveAttribute('data-value', 'read_only')
+    await expect.poll(async () => permissionControl.locator('.kody-select__leading-icon').evaluate((element) => (
+      getComputedStyle(element).color
+    ))).not.toBe(fullAccessIconColor)
 
     // Two synchronous clicks exercise both renderer guarding and server request idempotency.
-    await page.getByRole('button', { name: 'Send', exact: true }).evaluate((button) => {
+    await sendButton.evaluate((button) => {
       ;(button as HTMLButtonElement).click()
       ;(button as HTMLButtonElement).click()
     })
@@ -535,6 +991,29 @@ test('creates the first Thread through one idempotent draft request', async () =
       durable.snapshot.thread.id
     ])
 
+    const workflowLabels = [
+      { locator: page.locator('.asset-row__badge--new_progress').first(), fontSize: '11px' },
+      { locator: page.locator('.conversation-document-header__status--new_progress').first(), fontSize: '12px' }
+    ]
+    for (const [index, { locator: label, fontSize }] of workflowLabels.entries()) {
+      await expect(label).toBeVisible()
+      const surface = await label.evaluate((element) => {
+        const style = getComputedStyle(element)
+        return {
+          height: element.getBoundingClientRect().height,
+          borderRadius: style.borderRadius,
+          borderWidth: style.borderTopWidth,
+          fontSize: style.fontSize,
+          backgroundColor: style.backgroundColor
+        }
+      })
+      expect(surface.height, `workflow label ${index} height`).toBe(20)
+      expect(surface.borderRadius, `workflow label ${index} radius`).toBe('999px')
+      expect(surface.borderWidth, `workflow label ${index} border`).toBe('1px')
+      expect(surface.fontSize, `workflow label ${index} font size`).toBe(fontSize)
+      expect(surface.backgroundColor, `workflow label ${index} fill`).not.toBe('rgba(0, 0, 0, 0)')
+    }
+
     const workflowAction = page.locator('.titlebar').getByRole('button', { name: 'Mark as Processed' })
     await expect(workflowAction).toBeVisible()
     await workflowAction.click()
@@ -564,11 +1043,10 @@ test('creates the first Thread through one idempotent draft request', async () =
     const contextToggle = contextCard.getByRole('button', { name: 'Context', exact: true })
     await expect(contextToggle).toBeVisible()
     await expect(contextToggle).toHaveAttribute('aria-expanded', 'true')
-    await expect(contextCard.getByText('Threads', { exact: true })).toBeVisible()
-    await expect(contextCard.getByText('Projects', { exact: true })).toBeVisible()
-    await expect(contextCard.getByText('Managed procs', { exact: true })).toBeVisible()
-    await expect(contextCard.getByLabel('Referenced Projects')).toContainText(durable.projects[0]?.name ?? '')
-    await expect(contextCard.getByLabel('Referenced Projects')).toContainText('Read & write')
+    await expect(contextCard.locator('.thread-context-card__metrics')).toHaveCount(0)
+    const referencedProjects = contextCard.getByRole('region', { name: 'Referenced Projects', exact: true })
+    await expect(referencedProjects).toContainText(durable.projects[0]?.name ?? '')
+    await expect(referencedProjects).toContainText('Read & write')
     await expect(contextCard.getByText('No active managed processes', { exact: true })).toBeVisible()
     const contextTypography = await contextCard.evaluate((card) => {
       const fontSize = (selector: string) => {
@@ -579,78 +1057,130 @@ test('creates the first Thread through one idempotent draft request', async () =
       return {
         eyebrow: fontSize('.right-rail-disclosure__eyebrow'),
         heading: fontSize('.right-rail-disclosure__title'),
-        metricLabel: fontSize('.thread-context-card__metric dt'),
-        metricValue: fontSize('.thread-context-card__metric dd'),
         groupLabel: fontSize('.thread-context-card__group-label'),
         itemName: fontSize('.thread-context-card__group li strong'),
         itemDetail: fontSize('.thread-context-card__group li > span:last-child'),
         emptyState: fontSize('.thread-context-card__empty'),
-        processEmpty: fontSize('.thread-context-card__process-empty'),
-        metricLabelsFit: Object.fromEntries(
-          [...card.querySelectorAll<HTMLElement>('.thread-context-card__metric dt')]
-            .map((element) => [element.textContent?.trim() ?? '', element.scrollWidth <= element.clientWidth])
-        )
+        processEmpty: fontSize('.thread-context-card__process-empty')
       }
     })
     expect(contextTypography).toEqual({
       eyebrow: '14px',
-      heading: '13px',
-      metricLabel: '13px',
-      metricValue: '13px',
-      groupLabel: '13px',
+      heading: '14px',
+      groupLabel: '12px',
       itemName: '13px',
       itemDetail: '12px',
-      emptyState: '13px',
-      processEmpty: '13px',
-      metricLabelsFit: {
-        Threads: true,
-        Projects: true,
-        'Managed procs': true
-      }
+      emptyState: '12px',
+      processEmpty: '12px'
     })
     if (process.env.KODY_QA_CONTEXT_SCREENSHOT) {
       await page.screenshot({ path: process.env.KODY_QA_CONTEXT_SCREENSHOT, animations: 'disabled' })
     }
-    const inspector = page.getByLabel('Thread context and activity')
+    const inspector = page.locator('#thread-inspector')
     await expect(inspector).toBeVisible()
     const workspaceToggle = inspector.getByRole('button', { name: 'Workspace', exact: true })
-    const referencesToggle = inspector.getByRole('button', { name: 'Active references', exact: true })
     const changesToggle = inspector.getByRole('button', { name: 'Changed files', exact: true })
+    const projectDetails = contextCard.getByRole('button', { name: /Referenced Projects/ })
+    const runtimeDetails = contextCard.getByRole('button', { name: /Runtime/ })
+    await expect(inspector.getByRole('button', { name: 'Active references', exact: true })).toHaveCount(0)
+    await expect(inspector.getByRole('button', { name: 'Background processes', exact: true })).toHaveCount(0)
     await expect(workspaceToggle).toHaveAttribute('aria-expanded', 'false')
-    await expect(referencesToggle).toHaveAttribute('aria-expanded', 'false')
 
     await workspaceToggle.focus()
     await page.keyboard.press('Enter')
     await expect(workspaceToggle).toHaveAttribute('aria-expanded', 'true')
-    await expect(referencesToggle).toHaveAttribute('aria-expanded', 'false')
     const completeWorkspacePath = inspector.locator('.workspace-card .path-copy code')
     await expect(completeWorkspacePath).toBeVisible()
     await expect(completeWorkspacePath).toHaveText(durable.snapshot.workspace.root)
+    const workspacePathScroll = inspector.getByRole('region', { name: 'Workspace path' })
+    const workspacePathLayout = await workspacePathScroll.evaluate((element) => {
+      const code = element.querySelector('code')
+      if (!(code instanceof HTMLElement)) throw new Error('Missing Workspace path content')
+      const style = getComputedStyle(element)
+      const codeStyle = getComputedStyle(code)
+      return {
+        overflowX: style.overflowX,
+        overflowY: style.overflowY,
+        whiteSpace: codeStyle.whiteSpace,
+        overflowWrap: codeStyle.overflowWrap,
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        tabIndex: element.tabIndex
+      }
+    })
+    expect(workspacePathLayout).toMatchObject({
+      overflowX: 'auto',
+      overflowY: 'hidden',
+      whiteSpace: 'nowrap',
+      overflowWrap: 'normal',
+      tabIndex: 0
+    })
+    expect(workspacePathLayout.scrollWidth).toBeGreaterThan(workspacePathLayout.clientWidth)
+    expect(await workspacePathScroll.evaluate((element) => {
+      element.scrollLeft = element.scrollWidth
+      return element.scrollLeft
+    })).toBeGreaterThan(0)
 
-    await referencesToggle.focus()
+    await projectDetails.focus()
+    await page.keyboard.press('Enter')
+    const projectDialog = page.getByRole('dialog', { name: 'Referenced Projects' })
+    await expect(projectDialog).toBeVisible()
+    await expect(page.locator('[aria-modal="true"]')).toHaveCount(1)
+    await expect(projectDialog.getByRole('button', { name: 'Close Referenced Projects' })).toBeFocused()
+    const referenceToken = projectDialog.locator('.reference-chip').first()
+    await expect(referenceToken).toBeVisible()
+    const referenceTokenSurface = await referenceToken.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        height: element.getBoundingClientRect().height,
+        borderRadius: style.borderRadius,
+        borderWidth: style.borderTopWidth,
+        fontSize: style.fontSize
+      }
+    })
+    expect(referenceTokenSurface.height).toBeCloseTo(24, 0)
+    expect(referenceTokenSurface).toMatchObject({
+      borderRadius: '6px',
+      borderWidth: '1px',
+      fontSize: '13px'
+    })
+    const referencePanelTypography = await projectDialog.locator('.reference-group__label strong').first().evaluate((element) => {
+      const style = getComputedStyle(element)
+      return { fontSize: style.fontSize, fontWeight: style.fontWeight }
+    })
+    expect(referencePanelTypography).toEqual({ fontSize: '12px', fontWeight: '500' })
+    await page.keyboard.press('Escape')
+    await expect(projectDialog).toBeHidden()
+    await expect(projectDetails).toBeFocused()
+
+    await runtimeDetails.focus()
     await page.keyboard.press('Space')
-    await expect(referencesToggle).toHaveAttribute('aria-expanded', 'true')
-    await expect(workspaceToggle).toHaveAttribute('aria-expanded', 'true')
+    const runtimeDialog = page.getByRole('dialog', { name: 'Runtime' })
+    await expect(runtimeDialog).toBeVisible()
+    await expect(runtimeDialog.getByRole('heading', { name: 'Background processes' })).toBeVisible()
+    await expect(runtimeDialog.getByText('No managed background processes.', { exact: true })).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(runtimeDialog).toBeHidden()
+    await expect(runtimeDetails).toBeFocused()
+
     await changesToggle.click()
     await expect(changesToggle).toHaveAttribute('aria-expanded', 'true')
     await expect.poll(() => page.evaluate(() => JSON.parse(
       window.localStorage.getItem('kody.rightRailSections.v1') ?? '{}'
-    ))).toMatchObject({ context: true, workspace: true, references: true, changes: true, projects: true })
+    ))).toEqual({ context: true, workspace: true, changes: true, timeline: false })
 
     await page.reload()
     await expect(workbenchRail.getByText('Local server connected', { exact: true })).toBeVisible({ timeout: 30_000 })
     await expect(contextToggle).toHaveAttribute('aria-expanded', 'true')
     await expect(workspaceToggle).toHaveAttribute('aria-expanded', 'true')
-    await expect(referencesToggle).toHaveAttribute('aria-expanded', 'true')
     await expect(changesToggle).toHaveAttribute('aria-expanded', 'true')
 
     const rightRailHeadingOffsets = await page.locator('#right-rail').evaluate((rail) => {
       const railLeft = rail.getBoundingClientRect().left
       const selectors = [
-        '#thread-context-card .right-rail-disclosure__eyebrow',
-        '#right-rail-workspace .right-rail-disclosure__eyebrow',
-        '#right-rail-references .right-rail-disclosure__eyebrow',
-        '#right-rail-projects .right-rail-disclosure__eyebrow'
+        '#thread-context-card .right-rail-disclosure__title',
+        '#right-rail-workspace .right-rail-disclosure__title',
+        '#right-rail-changes .right-rail-disclosure__title'
       ]
       return selectors.map((selector) => {
         const element = rail.querySelector(selector)
@@ -687,17 +1217,21 @@ test('creates the first Thread through one idempotent draft request', async () =
           '.asset-row__topline strong',
           '.message--assistant .markdown',
           '.composer textarea',
-          '.workspace-card .right-rail-disclosure__title',
-          '.project-shelf__copy strong'
+          '.workbench-project-list .workbench-row > span:nth-child(2)'
         ].map(fontSize),
         caption: [
           '.asset-row__project',
           '.message > header',
           '.workspace-card > .right-rail-disclosure__panel > p',
-          '.project-shelf__copy span'
+          '.workbench-project-list .workbench-row__count'
         ].map(fontSize),
         windowTitle: fontSize('.titlebar__identity h1'),
+        titlebarAction: fontSize('.titlebar__workflow-action'),
         workbenchAction: fontSize('.workbench-new-thread span'),
+        composerModelControl: fontSize('.model-menu__trigger'),
+        composerPermissionControl: fontSize('.permission-mode-control'),
+        composerSendControl: fontSize('.turn-button'),
+        inspectorSectionTitle: fontSize('.workspace-card .right-rail-disclosure__title'),
         sidebarWeights: {
           workbenchSection: fontWeight('.workbench-section > h2'),
           workbenchItem: fontWeight('.workbench-row > span:nth-child(2)'),
@@ -705,23 +1239,30 @@ test('creates the first Thread through one idempotent draft request', async () =
           threadItem: fontWeight('.asset-row__topline strong'),
           inspectorDisclosure: fontWeight('.right-rail-disclosure__title'),
           inspectorSubheading: fontWeight('.thread-context-card__group-label'),
-          projectItem: fontWeight('.project-shelf__copy strong')
+          inspectorItem: fontWeight('.thread-context-card__group li strong'),
+          projectItem: fontWeight('.workbench-project-list .workbench-row > span:nth-child(2)')
         }
       }
     })
     expect(applicationTypography).toEqual({
-      body: ['13px', '14px', '14px', '13px', '13px'],
+      body: ['13px', '14px', '14px', '13px'],
       caption: ['12px', '13px', '12px', '12px'],
       windowTitle: '13px',
+      titlebarAction: '13px',
       workbenchAction: '13px',
+      composerModelControl: '13px',
+      composerPermissionControl: '13px',
+      composerSendControl: '13px',
+      inspectorSectionTitle: '14px',
       sidebarWeights: {
         workbenchSection: '500',
         workbenchItem: '400',
         threadHeading: '500',
         threadItem: '600',
-        inspectorDisclosure: '500',
+        inspectorDisclosure: '600',
         inspectorSubheading: '500',
-        projectItem: '500'
+        inspectorItem: '500',
+        projectItem: '400'
       }
     })
     if (process.env.KODY_QA_SCREENSHOT) {
@@ -737,7 +1278,6 @@ test('creates the first Thread through one idempotent draft request', async () =
     await workspaceToggle.click()
     await expect(workspaceToggle).toHaveAttribute('aria-expanded', 'false')
     await expect(workspaceToggle).toBeFocused()
-    await expect(referencesToggle).toHaveAttribute('aria-expanded', 'true')
     await expect(completeWorkspacePath).toBeHidden()
     await expect(contextToggle).toHaveAttribute('aria-expanded', 'true')
 
@@ -823,16 +1363,14 @@ test('creates the first Thread through one idempotent draft request', async () =
     expect(contextCardBox?.x ?? 0).toBeGreaterThan(viewport.width / 2)
     expect(contextCardBox?.y ?? viewport.height).toBeLessThan(viewport.height / 2)
 
-    await projectShelf.scrollIntoViewIfNeeded()
-    await expect(projectShelf.getByRole('button', { name: 'Projects', exact: true })).toBeVisible()
-    await expect(projectShelf.locator('.right-rail-disclosure__badge .count-pill')).toHaveText('1')
-    await expect(projectShelf.getByText(durable.projects[0]?.name ?? '', { exact: true })).toBeVisible()
-    await expect(projectShelf.getByTitle(canonicalProjectRoot)).toBeVisible()
-    await expect(projectShelf.getByText('Added', { exact: true })).toBeVisible()
-    const populatedShelfBox = await projectShelf.boundingBox()
-    expect(populatedShelfBox).not.toBeNull()
-    expect(populatedShelfBox?.x ?? 0).toBeGreaterThan(viewport.width / 2)
-    expect(populatedShelfBox?.width ?? Infinity).toBeLessThanOrEqual(initialRightRailBox?.width ?? 0)
+    const projectName = durable.projects[0]?.name ?? ''
+    const workbenchProjectList = workbenchProjects.locator('.workbench-project-list')
+    const workbenchProject = workbenchProjectList.getByRole('button', { name: new RegExp(projectName) })
+    await expect(workbenchProjects.getByText('No Projects yet', { exact: true })).toHaveCount(0)
+    await expect(workbenchProjectList.getByRole('listitem')).toHaveCount(1)
+    await expect(workbenchProject).toBeVisible()
+    await expect(workbenchProject).toHaveAttribute('title', canonicalProjectRoot)
+    await expect(workbenchProject.locator('.workbench-row__count')).toHaveText('1')
 
     const threadNavigation = page.getByRole('navigation', { name: 'Thread list' })
     const durableThreadRow = threadNavigation.locator('.asset-row__open').filter({ hasText: prompt })
@@ -910,18 +1448,13 @@ test('creates the first Thread through one idempotent draft request', async () =
     })
     await expect(page.locator('#asset-filter')).toBeFocused()
 
-    // Menu commands that redirect focus must dismiss the narrow Projects modal first.
+    // Menu commands that redirect focus must open the narrow navigation drawer.
     await application.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.setSize(900, 700)
     })
-    const projectLauncher = page.locator('.project-shelf-launcher')
-    await expect(projectLauncher).toBeVisible()
-    await projectLauncher.click()
-    await expect(projectShelf).toHaveAttribute('aria-modal', 'true')
     await application.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.webContents.send('kody:menu-command', 'focus-assets')
     })
-    await expect(projectShelf).toBeHidden()
     await expect(page.locator('#asset-filter')).toBeFocused()
     const navigationRails = page.locator('#navigation-rails')
     await expect(navigationRails).toBeVisible()
@@ -932,7 +1465,7 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expect(navigationRails).toBeHidden()
     await expect(page.locator('[aria-modal="true"]')).toHaveCount(0)
 
-    // Keep a compact responsive smoke for both independent drawers.
+    // Keep a compact responsive smoke for the navigation and inspector drawers.
     await application.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.setSize(700, 700)
     })
@@ -957,16 +1490,6 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expect(assetRail).toBeHidden()
     await expect(openAssetDrawer).toBeFocused()
 
-    await expect(projectLauncher).toBeVisible()
-    await projectLauncher.click()
-    await expect(projectShelf).toBeVisible()
-    await expect(projectShelf).toHaveAttribute('role', 'dialog')
-    await expect(projectShelf).toHaveAttribute('aria-modal', 'true')
-    await expect(page.locator('[aria-modal="true"]')).toHaveCount(1)
-    await page.keyboard.press('Escape')
-    await expect(projectShelf).toBeHidden()
-    await expect(projectLauncher).toBeFocused()
-
     const openInspector = page.getByRole('button', { name: 'Show right sidebar' })
     await expect(contextCard).toBeHidden()
     await expect(inspector).toBeHidden()
@@ -980,12 +1503,24 @@ test('creates the first Thread through one idempotent draft request', async () =
     await expect(page.locator('[aria-modal="true"]')).toHaveCount(1)
     const closeInspector = page.getByRole('button', { name: 'Hide right sidebar' })
     await expect(closeInspector).toHaveAttribute('aria-expanded', 'true')
+    await expect(contextCard).toBeVisible()
+    await expect(inspector.getByRole('button', { name: 'Context', exact: true })).toBeVisible()
     await expect(inspector.getByRole('button', { name: 'Workspace', exact: true })).toBeVisible()
-    const processDisclosure = inspector.getByRole('button', { name: 'Background processes', exact: true })
-    await expect(processDisclosure).toBeVisible()
-    await processDisclosure.click()
-    await expect(processDisclosure).toHaveAttribute('aria-expanded', 'true')
-    await expect(inspector.getByText('No managed background processes.', { exact: true })).toBeVisible()
+    await expect(inspector.getByRole('button', { name: 'Active references', exact: true })).toHaveCount(0)
+    await expect(inspector.getByRole('button', { name: 'Background processes', exact: true })).toHaveCount(0)
+    const compactRuntimeDetails = contextCard.getByRole('button', { name: /Runtime/ })
+    await compactRuntimeDetails.click()
+    const compactRuntimeDialog = page.getByRole('dialog', { name: 'Runtime' })
+    await expect(compactRuntimeDialog).toBeVisible()
+    await expect(compactRuntimeDialog.getByText('No managed background processes.', { exact: true })).toBeVisible()
+    await expect(inspector).not.toHaveAttribute('aria-modal')
+    await expect(page.locator('[aria-modal="true"]')).toHaveCount(1)
+    await page.keyboard.press('Escape')
+    await expect(compactRuntimeDialog).toBeHidden()
+    await expect(compactRuntimeDetails).toBeFocused()
+    await expect(inspector).toBeVisible()
+    await expect(inspector).toHaveAttribute('aria-modal', 'true')
+    await expect(page.locator('[aria-modal="true"]')).toHaveCount(1)
     const inspectorDrawerLayers = await page.evaluate(() => ({
       rail: getComputedStyle(document.querySelector('.right-rail')!).zIndex,
       drawer: getComputedStyle(document.querySelector('.inspector')!).zIndex,

@@ -46,6 +46,7 @@ export interface ProviderProfileUpdate {
 }
 
 export interface ProviderSettingsResult {
+  selectedProviderId?: string
   profiles: ProviderProfileRecord[]
   credentialStorage: {
     available: boolean
@@ -93,6 +94,7 @@ export interface KodyDesktopBridge {
   loadArtifact(artifactId: string): Promise<string>
   getServerStatus(): Promise<ServerStatus>
   getProviderSettings(): Promise<ProviderSettingsResult>
+  setSelectedProvider(providerId: string | null): Promise<ProviderSettingsResult>
   upsertProviderProfile(profile: ProviderProfileUpdate): Promise<ProviderProfileRecord>
   deleteProviderProfile(profileId: string): Promise<void>
   getCodexAccountStatus(): Promise<CodexAccountStatus>

@@ -11,8 +11,14 @@ import {
 } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
-export const PROVIDER_SETTINGS_VERSION = 2 as const
-const LEGACY_PROVIDER_SETTINGS_VERSION = 1 as const
+export const PROVIDER_SETTINGS_VERSION = 3 as const
+const LEGACY_PROVIDER_SETTINGS_VERSION_1 = 1 as const
+const LEGACY_PROVIDER_SETTINGS_VERSION_2 = 2 as const
+
+type ProviderSettingsVersion =
+  | typeof LEGACY_PROVIDER_SETTINGS_VERSION_1
+  | typeof LEGACY_PROVIDER_SETTINGS_VERSION_2
+  | typeof PROVIDER_SETTINGS_VERSION
 
 export type ProviderKind = 'openai' | 'openai-compatible'
 
@@ -55,6 +61,7 @@ export interface CredentialStorageStatus {
 }
 
 export interface ProviderSettingsSnapshot {
+  selectedProviderId?: string
   profiles: ProviderProfile[]
   credentialStorage: CredentialStorageStatus
 }
@@ -105,6 +112,7 @@ interface StoredProviderProfile {
 
 interface ProviderSettingsDocument {
   version: typeof PROVIDER_SETTINGS_VERSION
+  selectedProviderId?: string
   profiles: StoredProviderProfile[]
 }
 
@@ -218,10 +226,20 @@ export class ProviderSettingsStore {
 
   async snapshot(): Promise<ProviderSettingsSnapshot> {
     const document = await this.#load()
-    return {
-      profiles: document.profiles.map(toPublicProfile),
-      credentialStorage: this.credentialStorageStatus()
-    }
+    return this.#snapshot(document)
+  }
+
+  async setSelectedProvider(providerId: string | null): Promise<ProviderSettingsSnapshot> {
+    return this.#mutate(async () => {
+      const selectedProviderId = providerId === null
+        ? undefined
+        : validateSelectedProviderId(providerId)
+      const document = cloneDocument(await this.#load())
+      if (selectedProviderId) document.selectedProviderId = selectedProviderId
+      else delete document.selectedProviderId
+      await this.#persist(document)
+      return this.#snapshot(document)
+    })
   }
 
   async upsert(input: ProviderProfileInput): Promise<ProviderProfile> {
@@ -276,6 +294,7 @@ export class ProviderSettingsStore {
       const index = document.profiles.findIndex((profile) => profile.id === profileId)
       if (index < 0) throw new Error(`Provider profile '${profileId}' does not exist`)
       document.profiles.splice(index, 1)
+      if (document.selectedProviderId === profileId) delete document.selectedProviderId
       await this.#persist(document)
     })
   }
@@ -305,6 +324,14 @@ export class ProviderSettingsStore {
   #assertCredentialStorage(): void {
     const status = this.credentialStorageStatus()
     if (!status.available) throw new Error(status.reason ?? 'Credential storage is unavailable')
+  }
+
+  #snapshot(document: ProviderSettingsDocument): ProviderSettingsSnapshot {
+    return {
+      ...(document.selectedProviderId ? { selectedProviderId: document.selectedProviderId } : {}),
+      profiles: document.profiles.map(toPublicProfile),
+      credentialStorage: this.credentialStorageStatus()
+    }
   }
 
   async #load(): Promise<ProviderSettingsDocument> {
@@ -607,6 +634,13 @@ function validateProviderId(id: string): string {
   return id
 }
 
+function validateSelectedProviderId(id: string): string {
+  if (id !== id.trim() || !PROVIDER_ID_PATTERN.test(id)) {
+    throw new Error('Selected provider id contains unsupported characters')
+  }
+  return id
+}
+
 function toPublicProfile(profile: StoredProviderProfile): ProviderProfile {
   return {
     id: profile.id,
@@ -628,6 +662,7 @@ function toPublicProfile(profile: StoredProviderProfile): ProviderProfile {
 function cloneDocument(document: ProviderSettingsDocument): ProviderSettingsDocument {
   return {
     version: document.version,
+    ...(document.selectedProviderId ? { selectedProviderId: document.selectedProviderId } : {}),
     profiles: document.profiles.map((profile) => ({
       ...profile,
       customModels: [...profile.customModels],
@@ -647,7 +682,11 @@ function parseDocument(serialized: string): ParsedProviderSettingsDocument {
   }
   if (
     !isRecord(value)
-    || (value.version !== LEGACY_PROVIDER_SETTINGS_VERSION && value.version !== PROVIDER_SETTINGS_VERSION)
+    || (
+      value.version !== LEGACY_PROVIDER_SETTINGS_VERSION_1
+      && value.version !== LEGACY_PROVIDER_SETTINGS_VERSION_2
+      && value.version !== PROVIDER_SETTINGS_VERSION
+    )
     || !Array.isArray(value.profiles)
   ) {
     throw new Error('Provider settings file has an unsupported shape or version')
@@ -657,15 +696,22 @@ function parseDocument(serialized: string): ParsedProviderSettingsDocument {
   if (new Set(profiles.map((profile) => profile.id)).size !== profiles.length) {
     throw new Error('Provider settings file contains duplicate profile ids')
   }
+  const selectedProviderId = sourceVersion === PROVIDER_SETTINGS_VERSION
+    ? parseStoredSelectedProviderId(value.selectedProviderId)
+    : undefined
   return {
-    document: { version: PROVIDER_SETTINGS_VERSION, profiles },
-    requiresMigration: sourceVersion === LEGACY_PROVIDER_SETTINGS_VERSION
+    document: {
+      version: PROVIDER_SETTINGS_VERSION,
+      ...(selectedProviderId ? { selectedProviderId } : {}),
+      profiles
+    },
+    requiresMigration: sourceVersion !== PROVIDER_SETTINGS_VERSION
   }
 }
 
 function parseStoredProfile(
   value: unknown,
-  sourceVersion: typeof LEGACY_PROVIDER_SETTINGS_VERSION | typeof PROVIDER_SETTINGS_VERSION
+  sourceVersion: ProviderSettingsVersion
 ): StoredProviderProfile {
   if (!isRecord(value)) throw new Error('Provider settings file contains an invalid profile')
   const id = validateProviderId(requiredStoredString(value.id, 'id', 200))
@@ -683,7 +729,7 @@ function parseStoredProfile(
   if (value.customModels.length > 200 || value.customModels.some((model) => model.length > 200)) {
     throw new Error(`Provider profile '${id}' has too many or oversized custom models`)
   }
-  const rawToolModels = sourceVersion === LEGACY_PROVIDER_SETTINGS_VERSION && value.toolModels === undefined
+  const rawToolModels = sourceVersion === LEGACY_PROVIDER_SETTINGS_VERSION_1 && value.toolModels === undefined
     ? []
     : value.toolModels
   if (!Array.isArray(rawToolModels) || rawToolModels.some((model) => typeof model !== 'string')) {
@@ -692,7 +738,7 @@ function parseStoredProfile(
   if (rawToolModels.length > 200 || rawToolModels.some((model) => model.length > 200)) {
     throw new Error(`Provider profile '${id}' has too many or oversized tool models`)
   }
-  const rawVisionModels = sourceVersion === LEGACY_PROVIDER_SETTINGS_VERSION && value.visionModels === undefined
+  const rawVisionModels = sourceVersion === LEGACY_PROVIDER_SETTINGS_VERSION_1 && value.visionModels === undefined
     ? []
     : value.visionModels
   if (!Array.isArray(rawVisionModels) || rawVisionModels.some((model) => typeof model !== 'string')) {
@@ -736,6 +782,18 @@ function parseStoredProfile(
     ...(encryptedSecret ? { encryptedSecret } : {}),
     createdAt: requiredStoredDate(value.createdAt, 'createdAt'),
     updatedAt: requiredStoredDate(value.updatedAt, 'updatedAt')
+  }
+}
+
+function parseStoredSelectedProviderId(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string') {
+    throw new Error("Provider settings field 'selectedProviderId' is invalid")
+  }
+  try {
+    return validateSelectedProviderId(value)
+  } catch {
+    throw new Error("Provider settings field 'selectedProviderId' is invalid")
   }
 }
 

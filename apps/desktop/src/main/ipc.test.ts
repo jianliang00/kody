@@ -21,7 +21,11 @@ vi.mock('electron', () => ({
 }))
 
 import type { ProviderProfileRecord, ProviderProfileUpdate } from '../shared/bridge'
-import { registerIpcHandlers, validateProviderProfileUpdate } from './ipc'
+import {
+  registerIpcHandlers,
+  validateProviderProfileUpdate,
+  validateSelectedProviderId
+} from './ipc'
 
 const RENDERER_URL = 'http://127.0.0.1:5173/'
 
@@ -52,6 +56,36 @@ describe('provider and Codex IPC boundary', () => {
     expect(() => validateProviderProfileUpdate({ ...valid, clearSecret: true }))
       .toThrow(/replaced and removed/)
     expect(() => validateProviderProfileUpdate(null)).toThrow(/must be an object/)
+  })
+
+  it('strictly validates and persists the selected provider through its dedicated IPC', async () => {
+    expect(validateSelectedProviderId('codex')).toBe('codex')
+    expect(validateSelectedProviderId('team.gateway-1')).toBe('team.gateway-1')
+    expect(validateSelectedProviderId(null)).toBeNull()
+    for (const invalid of [undefined, '', ' codex', 'provider/unsafe', 'a'.repeat(201)]) {
+      expect(() => validateSelectedProviderId(invalid)).toThrow(/invalid/)
+    }
+
+    const snapshot = {
+      selectedProviderId: 'codex',
+      profiles: [],
+      credentialStorage: { available: true, backend: 'keychain' }
+    }
+    const providerSettings = {
+      snapshot: vi.fn(),
+      setSelectedProvider: vi.fn(async () => snapshot),
+      upsert: vi.fn(),
+      delete: vi.fn()
+    }
+    const setup = registerWithStubs({ providerSettings })
+    const select = getHandler('kody:provider-settings:select')
+
+    await expect(select(setup.event, 'codex')).resolves.toEqual(snapshot)
+    expect(providerSettings.setSelectedProvider).toHaveBeenCalledWith('codex')
+    await expect(select(setup.event, null)).resolves.toEqual(snapshot)
+    expect(providerSettings.setSelectedProvider).toHaveBeenLastCalledWith(null)
+    await expect(select(setup.event, '../unsafe')).rejects.toThrow(/invalid/)
+    expect(providerSettings.setSelectedProvider).toHaveBeenCalledTimes(2)
   })
 
   it('does not expose privileged provider or Codex control RPC through the generic bridge', async () => {
@@ -123,6 +157,52 @@ describe('provider and Codex IPC boundary', () => {
     expect(JSON.stringify(results)).not.toContain('CANARY')
   })
 
+  it('does not commit a provider selection while profile activation is still pending', async () => {
+    const events: string[] = []
+    let releaseActivation!: () => void
+    const activation = new Promise<void>((resolve) => {
+      releaseActivation = resolve
+    })
+    const selectedSnapshot = {
+      selectedProviderId: 'codex',
+      profiles: [],
+      credentialStorage: { available: true, backend: 'keychain' }
+    }
+    const providerSettings = {
+      snapshot: vi.fn(),
+      upsert: vi.fn(async () => {
+        events.push('persist-profile')
+        return profile('provider-first', 'First')
+      }),
+      setSelectedProvider: vi.fn(async () => {
+        events.push('persist-selection')
+        return selectedSnapshot
+      }),
+      delete: vi.fn()
+    }
+    const configureProvider = vi.fn(async () => {
+      events.push('activate-profile')
+      await activation
+    })
+    const setup = registerWithStubs({ providerSettings, configureProvider })
+
+    const save = Promise.resolve(getHandler('kody:provider-settings:upsert')(setup.event, {
+      name: 'First',
+      kind: 'openai',
+      defaultModel: 'gpt-first'
+    }))
+    await vi.waitFor(() => expect(configureProvider).toHaveBeenCalledOnce())
+    const select = Promise.resolve(
+      getHandler('kody:provider-settings:select')(setup.event, 'codex')
+    )
+    await Promise.resolve()
+    expect(providerSettings.setSelectedProvider).not.toHaveBeenCalled()
+
+    releaseActivation()
+    await Promise.all([save, select])
+    expect(events).toEqual(['persist-profile', 'activate-profile', 'persist-selection'])
+  })
+
   it('exposes only update state-machine actions to the trusted renderer', async () => {
     const updateManager = {
       getStatus: vi.fn(() => ({ phase: 'available', currentVersion: '0.1.1', availableVersion: '0.1.2' })),
@@ -162,6 +242,7 @@ function registerWithStubs(overrides: {
     server: server as never,
     providerSettings: (overrides.providerSettings ?? {
       snapshot: vi.fn(),
+      setSelectedProvider: vi.fn(),
       upsert: vi.fn(),
       delete: vi.fn()
     }) as never,

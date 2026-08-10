@@ -1,6 +1,7 @@
 import * as SelectPrimitive from '@radix-ui/react-select'
 import { Check, ChevronDown, ChevronUp } from 'lucide-react'
 import clsx from 'clsx'
+import type { ReactNode } from 'react'
 
 import './kody-select.css'
 
@@ -23,6 +24,9 @@ interface KodySelectProps {
   ariaDescribedBy?: string
   ariaInvalid?: boolean
   className?: string
+  contentClassName?: string
+  leadingIcon?: ReactNode
+  title?: string
   variant?: 'field' | 'toolbar' | 'compact' | 'chip'
 }
 
@@ -39,6 +43,9 @@ export function KodySelect({
   ariaDescribedBy,
   ariaInvalid,
   className,
+  contentClassName,
+  leadingIcon,
+  title,
   variant = 'field'
 }: KodySelectProps) {
   return (
@@ -56,8 +63,14 @@ export function KodySelect({
         aria-describedby={ariaDescribedBy}
         aria-invalid={ariaInvalid || undefined}
         data-value={value}
+        title={title}
       >
-        <SelectPrimitive.Value placeholder={placeholder} />
+        {leadingIcon ? (
+          <span className="kody-select__leading-icon" aria-hidden="true">
+            {leadingIcon}
+          </span>
+        ) : null}
+        <SelectPrimitive.Value className="kody-select__value" placeholder={placeholder} />
         <SelectPrimitive.Icon className="kody-select__trigger-icon">
           <ChevronDown aria-hidden="true" size={14} />
         </SelectPrimitive.Icon>
@@ -65,7 +78,8 @@ export function KodySelect({
 
       <SelectPrimitive.Portal>
         <SelectPrimitive.Content
-          className="kody-select__content"
+          className={clsx('kody-select__content', contentClassName)}
+          data-variant={variant}
           position="popper"
           sideOffset={5}
           collisionPadding={8}

@@ -5,8 +5,8 @@ import { Composer } from './Composer'
 
 afterEach(cleanup)
 
-describe('Composer provider and model selection', () => {
-  it('uses two labelled selectors and sends an explicit provider/model pair', async () => {
+describe('Composer model options', () => {
+  it('keeps Provider out of the composer and sends model, effort, and Speedy settings', async () => {
     const send = vi.fn(async () => true)
     const permissionChange = vi.fn()
     render(
@@ -14,29 +14,27 @@ describe('Composer provider and model selection', () => {
         threads={[]}
         projects={[]}
         references={[]}
-        providers={[{
-          id: 'codex',
-          display_name: 'Codex account',
-          kind: 'codex',
-          auth: 'configured',
-          capabilities: {
-            streaming: true,
-            reasoning: true,
-            model_catalog: true,
-            custom_models: false
-          },
-          default_model: 'codex-default'
-        }]}
         providerId="codex"
-        models={[{ id: 'codex-default', display_name: 'Codex default', capabilities: { tool_calling: true, input_modalities: ['text', 'image'] } }]}
+        providerName="Codex account"
+        models={[{
+          id: 'codex-default',
+          display_name: 'Codex default',
+          capabilities: { tool_calling: true, input_modalities: ['text', 'image'] },
+          default_reasoning_effort: 'medium',
+          reasoning_efforts: ['low', 'medium', 'high'],
+          supports_speedy: true
+        }]}
         model="codex-default"
+        reasoningEffort="medium"
+        speedy
         permissionMode="ask"
         running={false}
         message="Inspect the workspace"
         images={[]}
         onReferencesChange={vi.fn()}
-        onProviderChange={vi.fn()}
         onModelChange={vi.fn()}
+        onReasoningEffortChange={vi.fn()}
+        onSpeedyChange={vi.fn()}
         onPermissionModeChange={permissionChange}
         onMessageChange={vi.fn()}
         onImagesChange={vi.fn()}
@@ -45,8 +43,11 @@ describe('Composer provider and model selection', () => {
       />
     )
 
-    expect(screen.getByRole('combobox', { name: 'Provider' }).getAttribute('data-value')).toBe('codex')
-    expect(screen.getByRole('combobox', { name: 'Model' }).getAttribute('data-value')).toBe('codex-default')
+    expect(screen.queryByRole('combobox', { name: 'Provider' })).toBeNull()
+    const modelMenu = screen.getByRole('button', { name: 'Model options: Codex default' })
+    expect(modelMenu.getAttribute('data-model')).toBe('codex-default')
+    expect(modelMenu.getAttribute('data-effort')).toBe('medium')
+    expect(modelMenu.getAttribute('data-speedy')).toBe('true')
     expect(screen.getByRole('combobox', { name: 'Permission mode' }).getAttribute('data-value')).toBe('ask')
     expect((screen.getByLabelText('Message') as HTMLTextAreaElement).rows).toBe(2)
     expect(screen.queryByText('Uses the Codex agent loop and tools for this Turn.')).toBeNull()
@@ -62,51 +63,46 @@ describe('Composer provider and model selection', () => {
       [],
       'codex',
       'codex-default',
+      'medium',
+      true,
       'ask'
     ))
   })
 
-  it('marks providers without authentication as requiring setup', () => {
+  it('routes missing Provider setup to Settings without showing a Provider list', () => {
+    const openSettings = vi.fn()
     render(
       <Composer
         threads={[]}
         projects={[]}
         references={[]}
-        providers={[{
-          id: 'team',
-          display_name: 'Team gateway',
-          kind: 'openai-compatible',
-          auth: 'missing',
-          capabilities: {
-            streaming: true,
-            reasoning: false,
-            model_catalog: false,
-            custom_models: true
-          },
-          default_model: 'team-coder'
-        }]}
         providerId=""
+        providerName="Team gateway"
         models={[]}
         model=""
+        reasoningEffort=""
+        speedy={false}
         permissionMode="ask"
         running={false}
         message="Hello"
         images={[]}
         onReferencesChange={vi.fn()}
-        onProviderChange={vi.fn()}
         onModelChange={vi.fn()}
+        onReasoningEffortChange={vi.fn()}
+        onSpeedyChange={vi.fn()}
         onPermissionModeChange={vi.fn()}
         onMessageChange={vi.fn()}
         onImagesChange={vi.fn()}
         onSend={vi.fn()}
         onCancel={vi.fn()}
+        onOpenProviderSettings={openSettings}
       />
     )
 
     expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true)
-    fireEvent.click(screen.getByRole('combobox', { name: 'Provider' }))
-    const option = screen.getByRole('option', { name: 'Team gateway · setup required' })
-    expect(option.getAttribute('aria-disabled')).toBe('true')
+    expect(screen.queryByRole('combobox', { name: 'Provider' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Set up Team gateway…' }))
+    expect(openSettings).toHaveBeenCalledTimes(1)
   })
 
   it('reads an attached image for a vision-capable model', async () => {
@@ -116,33 +112,24 @@ describe('Composer provider and model selection', () => {
         threads={[]}
         projects={[]}
         references={[]}
-        providers={[{
-          id: 'vision',
-          display_name: 'Vision',
-          kind: 'openai',
-          auth: 'configured',
-          capabilities: {
-            streaming: true,
-            reasoning: true,
-            model_catalog: true,
-            custom_models: true
-          },
-          default_model: 'vision-model'
-        }]}
         providerId="vision"
+        providerName="Vision"
         models={[{
           id: 'vision-model',
           display_name: 'Vision model',
           capabilities: { tool_calling: true, input_modalities: ['text', 'image'] }
         }]}
         model="vision-model"
+        reasoningEffort=""
+        speedy={false}
         permissionMode="ask"
         running={false}
         message=""
         images={[]}
         onReferencesChange={vi.fn()}
-        onProviderChange={vi.fn()}
         onModelChange={vi.fn()}
+        onReasoningEffortChange={vi.fn()}
+        onSpeedyChange={vi.fn()}
         onPermissionModeChange={vi.fn()}
         onMessageChange={vi.fn()}
         onImagesChange={imagesChange}

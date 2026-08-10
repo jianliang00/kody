@@ -333,6 +333,10 @@ pub struct Turn {
     pub input_message_id: MessageId,
     pub provider: String,
     pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub speedy: bool,
     #[serde(default)]
     pub permission_mode: PermissionMode,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -493,5 +497,26 @@ mod tests {
             serialized["output"],
             json!([{ "type": "text", "text": "legacy output" }])
         );
+    }
+
+    #[test]
+    fn legacy_turn_defaults_optional_model_tuning_fields() {
+        let turn: Turn = serde_json::from_value(json!({
+            "id": TurnId::new(),
+            "thread_id": ThreadId::new(),
+            "input_message_id": MessageId::new(),
+            "provider": "echo",
+            "model": "echo",
+            "permission_mode": "ask",
+            "status": "queued",
+            "created_at": Utc::now()
+        }))
+        .unwrap();
+
+        assert!(turn.reasoning_effort.is_none());
+        assert!(!turn.speedy);
+        let serialized = serde_json::to_value(turn).unwrap();
+        assert_eq!(serialized["speedy"], false);
+        assert!(serialized.get("reasoning_effort").is_none());
     }
 }

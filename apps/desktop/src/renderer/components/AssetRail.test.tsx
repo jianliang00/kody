@@ -109,6 +109,28 @@ describe('AssetRail', () => {
     expect(onCollapse).toHaveBeenCalledOnce()
   })
 
+  it('marks an empty Thread scope as a centered status region', () => {
+    render(
+      <AssetRail
+        threads={threads}
+        projects={projects}
+        selection="handled"
+        open={false}
+        workbenchCollapsed={false}
+        onClose={vi.fn()}
+        onCollapse={vi.fn()}
+        onExpandWorkbench={vi.fn()}
+        onSelectThread={vi.fn()}
+        onWorkflowChange={vi.fn()}
+        workflowPendingIds={new Set()}
+      />
+    )
+
+    const threadList = screen.getByRole('navigation', { name: 'Thread list' })
+    expect(threadList.classList.contains('asset-navigation--empty')).toBe(true)
+    expect(within(threadList).getByRole('status').textContent).toBe('No Threads in Processed')
+  })
+
   it('supports quick completion and the keyboard-accessible workflow menu', () => {
     const onWorkflowChange = vi.fn()
     render(

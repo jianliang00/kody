@@ -50,6 +50,7 @@ describe('ThreadContextCard', () => {
         input_message_id: 'message-current',
         provider: 'echo',
         model: 'echo',
+        speedy: false,
         permission_mode: 'ask',
         status: 'running',
         created_at: now
@@ -80,6 +81,7 @@ describe('ThreadContextCard', () => {
       }]
     }
     const onExpandedChange = vi.fn()
+    const onOpenDetails = vi.fn()
 
     const { container } = render(
       <ThreadContextCard
@@ -89,6 +91,7 @@ describe('ThreadContextCard', () => {
         context={context}
         expanded
         onExpandedChange={onExpandedChange}
+        onOpenDetails={onOpenDetails}
       />
     )
 
@@ -109,7 +112,24 @@ describe('ThreadContextCard', () => {
     expect(screen.getByText('Waiting for approval')).toBeTruthy()
     expect(screen.getAllByText('Background process active')).toHaveLength(2)
     expect(screen.getByText('+1 more managed processes')).toBeTruthy()
-    expect(screen.getByTitle('Active managed background processes').parentElement?.textContent).toContain('3')
+    expect(container.querySelector('.thread-context-card__metrics')).toBeNull()
+
+    const threadDetails = screen.getByRole('button', { name: /Referenced Threads/ })
+    const projectDetails = screen.getByRole('button', { name: /Referenced Projects/ })
+    const runtimeDetails = screen.getByRole('button', { name: /Runtime/ })
+    expect(threadDetails.getAttribute('aria-haspopup')).toBe('dialog')
+    expect(projectDetails.getAttribute('aria-haspopup')).toBe('dialog')
+    expect(runtimeDetails.getAttribute('aria-haspopup')).toBe('dialog')
+    expect(threadDetails.getAttribute('aria-label')).toBe('Show Referenced Threads details')
+    expect(projectDetails.getAttribute('aria-label')).toBe('Show Referenced Projects details')
+    expect(runtimeDetails.getAttribute('aria-label')).toBe('Show Runtime details')
+    expect(projectDetails.textContent).toContain('1 pending')
+    fireEvent.click(threadDetails)
+    fireEvent.click(projectDetails)
+    fireEvent.click(runtimeDetails)
+    expect(onOpenDetails.mock.calls.map(([kind]) => kind)).toEqual(['threads', 'projects', 'runtime'])
+    expect(onOpenDetails.mock.calls.every(([, trigger]) => trigger instanceof HTMLButtonElement)).toBe(true)
+
     fireEvent.click(toggle)
     expect(onExpandedChange).toHaveBeenCalledOnce()
     expect(onExpandedChange).toHaveBeenCalledWith(false)
@@ -141,13 +161,14 @@ describe('ThreadContextCard', () => {
         context={{
           threadReferences: [],
           projectReferences: [],
-          pendingReferences: [],
+          pendingReferences: [{ kind: 'thread', thread_id: 'thread-pending', mode: 'summary' }],
           activeTurns: [],
           runningTools: [],
           pendingApprovals: []
         }}
         expanded={false}
         onExpandedChange={onExpandedChange}
+        onOpenDetails={vi.fn()}
       />
     )
 
@@ -158,8 +179,10 @@ describe('ThreadContextCard', () => {
     expect(panel?.getAttribute('role')).toBe('region')
     expect(panel?.getAttribute('aria-labelledby')).toBe('thread-context-card-title')
     expect(panel?.hidden).toBe(true)
-    expect(screen.getByText('No referenced Threads')).toBeTruthy()
+    expect(screen.getByText('No active referenced threads')).toBeTruthy()
     expect(screen.getByText('No referenced Projects')).toBeTruthy()
+    expect(container.querySelector<HTMLButtonElement>('[aria-label="Show Referenced Threads details"]')?.textContent)
+      .toContain('1 pending')
     expect(screen.getByText('No active operations')).toBeTruthy()
 
     fireEvent.click(toggle)

@@ -1,4 +1,4 @@
-import { CircleAlert, KeyRound, Plus, ShieldCheck, Trash2, UserRoundCheck, X } from 'lucide-react'
+import { Check, CircleAlert, KeyRound, Plus, Settings2, ShieldCheck, Trash2, UserRoundCheck, X } from 'lucide-react'
 import {
   useEffect,
   useId,
@@ -11,6 +11,7 @@ import {
 } from 'react'
 
 import { KodySelect } from './KodySelect'
+import type { ProviderDescriptor } from '@shared/protocol'
 
 import './provider-settings.css'
 
@@ -61,12 +62,15 @@ export interface CodexAccountView {
 
 export interface ProviderSettingsProps {
   open: boolean
+  providers: ProviderDescriptor[]
+  selectedProviderId?: string
   profiles: ProviderProfileView[]
   credentialStorage: CredentialStorageView
   codexAccount: CodexAccountView
   onClose: () => void
   onSave: (profile: ProviderProfileSubmission) => Promise<void>
   onDelete: (profileId: string) => Promise<void>
+  onSelectedProviderChange: (providerId: string) => Promise<void>
   onConnectCodexAccount?: () => Promise<void>
   onDisconnectCodexAccount?: () => Promise<void>
 }
@@ -114,19 +118,23 @@ const EMPTY_DRAFT: ProfileDraft = {
 
 export function ProviderSettingsDialog({
   open,
+  providers,
+  selectedProviderId,
   profiles,
   credentialStorage,
   codexAccount,
   onClose,
   onSave,
   onDelete,
+  onSelectedProviderChange,
   onConnectCodexAccount,
   onDisconnectCodexAccount
 }: ProviderSettingsProps) {
   const id = useId()
   const dialogRef = useRef<HTMLDialogElement>(null)
+  const generalRef = useRef<HTMLButtonElement>(null)
   const nameRef = useRef<HTMLInputElement>(null)
-  const [selectedId, setSelectedId] = useState<string>('new')
+  const [selectedId, setSelectedId] = useState<string>('general')
   const [draft, setDraft] = useState<ProfileDraft>(EMPTY_DRAFT)
   const [secret, setSecret] = useState('')
   const [clearSecret, setClearSecret] = useState(false)
@@ -134,9 +142,19 @@ export function ProviderSettingsDialog({
   const [submitting, setSubmitting] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deletePending, setDeletePending] = useState(false)
+  const [providerSelectionPending, setProviderSelectionPending] = useState(false)
+  const [providerSelectionError, setProviderSelectionError] = useState<string>()
   const selectedProfile = useMemo(
     () => profiles.find((profile) => profile.id === selectedId),
     [profiles, selectedId]
+  )
+  const selectedProvider = useMemo(
+    () => providers.find((provider) => provider.id === selectedProviderId),
+    [providers, selectedProviderId]
+  )
+  const selectedProviderProfile = useMemo(
+    () => profiles.find((profile) => profile.id === selectedProviderId),
+    [profiles, selectedProviderId]
   )
 
   useEffect(() => {
@@ -144,16 +162,23 @@ export function ProviderSettingsDialog({
     const returnFocus = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : undefined
-    const frame = window.requestAnimationFrame(() => nameRef.current?.focus())
+    const frame = window.requestAnimationFrame(() => {
+      if (selectedId === 'general') generalRef.current?.focus()
+      else nameRef.current?.focus()
+    })
     return () => {
       window.cancelAnimationFrame(frame)
       returnFocus?.focus()
     }
-  }, [open])
+  }, [open, selectedId])
 
   useEffect(() => {
-    if (selectedId !== 'new' && !profiles.some((profile) => profile.id === selectedId)) {
-      setSelectedId('new')
+    if (
+      selectedId !== 'general'
+      && selectedId !== 'new'
+      && !profiles.some((profile) => profile.id === selectedId)
+    ) {
+      setSelectedId('general')
     }
   }, [profiles, selectedId])
 
@@ -169,7 +194,25 @@ export function ProviderSettingsDialog({
 
   const selectProfile = (profileId: string) => {
     setSelectedId(profileId)
-    window.requestAnimationFrame(() => nameRef.current?.focus())
+    window.requestAnimationFrame(() => {
+      if (profileId === 'general') generalRef.current?.focus()
+      else nameRef.current?.focus()
+    })
+  }
+
+  const selectProvider = async (providerId: string) => {
+    if (providerSelectionPending || providerId === selectedProviderId) return
+    setProviderSelectionPending(true)
+    setProviderSelectionError(undefined)
+    try {
+      await onSelectedProviderChange(providerId)
+    } catch (error) {
+      setProviderSelectionError(
+        error instanceof Error ? error.message : 'The model provider could not be changed.'
+      )
+    } finally {
+      setProviderSelectionPending(false)
+    }
   }
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -270,9 +313,9 @@ export function ProviderSettingsDialog({
       >
         <header className="provider-settings__header">
           <div>
-            <p className="eyebrow">Model connections</p>
-            <h2 id={`${id}-title`}>Provider settings</h2>
-            <p id={`${id}-description`}>Configure reusable provider profiles without exposing saved credentials.</p>
+            <p className="eyebrow">Kody preferences</p>
+            <h2 id={`${id}-title`}>Settings</h2>
+            <p id={`${id}-description`}>Choose how Kody runs models and manage secure connections.</p>
           </div>
           <button type="button" className="icon-button" aria-label="Close provider settings" onClick={onClose}>
             <X aria-hidden="true" size={18} />
@@ -282,6 +325,17 @@ export function ProviderSettingsDialog({
         <div className="provider-settings__body">
           <nav className="provider-profile-nav" aria-label="Provider profiles">
             <button
+              ref={generalRef}
+              type="button"
+              className="provider-profile-general"
+              aria-current={selectedId === 'general' ? 'page' : undefined}
+              onClick={() => selectProfile('general')}
+            >
+              <Settings2 aria-hidden="true" size={16} />
+              <span>General</span>
+            </button>
+            <p className="provider-profile-nav__heading">Connections</p>
+            <button
               type="button"
               className="provider-profile-add"
               aria-current={selectedId === 'new' ? 'page' : undefined}
@@ -290,7 +344,9 @@ export function ProviderSettingsDialog({
               <Plus aria-hidden="true" size={16} />
               Add provider
             </button>
-            {profiles.length === 0 ? <p>No saved provider profiles.</p> : null}
+            {profiles.length === 0 ? (
+              <p className="provider-profile-nav__empty">No saved provider profiles.</p>
+            ) : null}
             <ul>
               {profiles.map((profile) => (
                 <li key={profile.id}>
@@ -300,7 +356,10 @@ export function ProviderSettingsDialog({
                     onClick={() => selectProfile(profile.id)}
                   >
                     <span>{profile.name}</span>
-                    <small>{kindLabel(profile.kind)}</small>
+                    <small>
+                      {kindLabel(profile.kind)}
+                      {profile.id === selectedProviderId ? ' · Current' : ''}
+                    </small>
                   </button>
                 </li>
               ))}
@@ -308,14 +367,70 @@ export function ProviderSettingsDialog({
           </nav>
 
           <div className="provider-settings__content">
-            <CodexAccountStatus
-              titleId={`${id}-codex-account-title`}
-              account={codexAccount}
-              onConnect={onConnectCodexAccount}
-              onDisconnect={onDisconnectCodexAccount}
-            />
+            {selectedId === 'general' ? (
+              <div className="provider-general-settings">
+                <section className="provider-general-section" aria-labelledby={`${id}-model-provider-title`}>
+                  <div className="provider-general-section__heading">
+                    <div>
+                      <p className="eyebrow">Default connection</p>
+                      <h3 id={`${id}-model-provider-title`}>Model Provider</h3>
+                    </div>
+                    {selectedProviderId ? <Check aria-hidden="true" size={16} /> : null}
+                  </div>
+                  <div className="provider-preference-row">
+                    <div>
+                      <label htmlFor={`${id}-selected-provider`}>Provider</label>
+                      <p id={`${id}-selected-provider-hint`}>
+                        Used for future turns; completed turns are unchanged.
+                      </p>
+                    </div>
+                    <KodySelect
+                      id={`${id}-selected-provider`}
+                      value={selectedProviderId ?? ''}
+                      placeholder={providers.length === 0 ? 'No providers' : 'Choose Provider…'}
+                      ariaDescribedBy={`${id}-selected-provider-hint`}
+                      disabled={providerSelectionPending || providers.length === 0}
+                      options={[
+                        ...(!selectedProvider && selectedProviderId ? [{
+                          value: selectedProviderId,
+                          label: 'Unavailable Provider',
+                          disabled: true
+                        }] : []),
+                        ...providers.map((provider) => ({
+                          value: provider.id,
+                          label: `${provider.display_name}${provider.auth === 'missing' ? ' · Setup required' : ''}`,
+                          // Codex must remain selectable while signed out so
+                          // its detail card can offer the sign-in action.
+                          disabled: provider.auth === 'missing' && provider.id !== 'codex'
+                        }))
+                      ]}
+                      onValueChange={(providerId) => void selectProvider(providerId)}
+                    />
+                  </div>
+                  {providerSelectionError ? (
+                    <p className="provider-form-error" role="alert">{providerSelectionError}</p>
+                  ) : null}
+                </section>
 
-            {!credentialStorage.available ? (
+                <SelectedProviderDetails
+                  titleId={`${id}-selected-provider-title`}
+                  providerId={selectedProviderId}
+                  provider={selectedProvider}
+                  profile={selectedProviderProfile}
+                  account={codexAccount}
+                  onConnect={onConnectCodexAccount}
+                  onDisconnect={onDisconnectCodexAccount}
+                  onEditProfile={selectedProviderProfile
+                    ? () => selectProfile(selectedProviderProfile.id)
+                    : undefined}
+                />
+
+                <footer className="provider-profile-form__actions">
+                  <button type="button" className="provider-primary-button" onClick={onClose}>Done</button>
+                </footer>
+              </div>
+            ) : <>
+              {!credentialStorage.available ? (
               <div className="provider-storage-warning" role="alert">
                 <CircleAlert aria-hidden="true" size={17} />
                 <div>
@@ -323,9 +438,9 @@ export function ProviderSettingsDialog({
                   <p>{credentialStorage.reason ?? 'Secure operating-system storage is unavailable. API keys cannot be saved.'}</p>
                 </div>
               </div>
-            ) : null}
+              ) : null}
 
-            <form className="provider-profile-form" noValidate onSubmit={submit}>
+              <form className="provider-profile-form" noValidate onSubmit={submit}>
               <div className="provider-profile-form__heading">
                 <div>
                   <p className="eyebrow">{selectedProfile ? 'Edit profile' : 'New profile'}</p>
@@ -589,12 +704,13 @@ export function ProviderSettingsDialog({
               {errors.form ? <p className="provider-form-error" role="alert">{errors.form}</p> : null}
 
               <footer className="provider-profile-form__actions">
-                <button type="button" className="provider-secondary-button" onClick={onClose}>Cancel</button>
+                <button type="button" className="provider-secondary-button" onClick={onClose}>Close</button>
                 <button type="submit" className="provider-primary-button" aria-busy={submitting}>
                   {submitting ? 'Saving…' : 'Save provider'}
                 </button>
               </footer>
-            </form>
+              </form>
+            </>}
           </div>
         </div>
       </dialog>
@@ -630,6 +746,93 @@ function Field({
   )
 }
 
+function SelectedProviderDetails({
+  titleId,
+  providerId,
+  provider,
+  profile,
+  account,
+  onConnect,
+  onDisconnect,
+  onEditProfile
+}: {
+  titleId: string
+  providerId?: string
+  provider?: ProviderDescriptor
+  profile?: ProviderProfileView
+  account: CodexAccountView
+  onConnect?: () => Promise<void>
+  onDisconnect?: () => Promise<void>
+  onEditProfile?: () => void
+}) {
+  if (provider?.id === 'codex') {
+    return (
+      <CodexAccountStatus
+        titleId={titleId}
+        account={account}
+        onConnect={onConnect}
+        onDisconnect={onDisconnect}
+      />
+    )
+  }
+
+  if (!provider) {
+    const unavailable = Boolean(providerId)
+    return (
+      <section className="provider-details-card" aria-labelledby={titleId}>
+        <span className={`provider-details-card__icon provider-details-card__icon--${unavailable ? 'unavailable' : 'unknown'}`}>
+          {unavailable
+            ? <CircleAlert aria-hidden="true" size={18} />
+            : <Settings2 aria-hidden="true" size={18} />}
+        </span>
+        <div className="provider-details-card__content">
+          <h3 id={titleId}>{profile?.name ?? (unavailable ? 'Provider unavailable' : 'Provider details')}</h3>
+          <p className="provider-details-card__status" role="status">
+            <strong>{unavailable ? 'Runtime unavailable' : 'No Provider selected'}</strong>
+            {profile ? ` · ${kindLabel(profile.kind)}` : ''}
+          </p>
+          <small className="provider-details-card__meta">
+            {profile
+              ? `${providerProfileDetail(profile)} · Repair this connection before using it for new turns.`
+              : unavailable
+              ? 'The selected Provider is no longer available. Choose another Provider or repair its connection.'
+              : 'Choose a Provider to see its connection and model details.'}
+          </small>
+        </div>
+        {profile && onEditProfile ? (
+          <button type="button" className="provider-secondary-button" onClick={onEditProfile}>
+            Edit connection
+          </button>
+        ) : null}
+      </section>
+    )
+  }
+
+  const detail = providerDetail(provider, profile)
+  return (
+    <section className="provider-details-card" aria-labelledby={titleId}>
+      <span className={`provider-details-card__icon provider-details-card__icon--${provider.auth}`}>
+        {profile
+          ? <KeyRound aria-hidden="true" size={18} />
+          : <Settings2 aria-hidden="true" size={18} />}
+      </span>
+      <div className="provider-details-card__content">
+        <h3 id={titleId}>{provider.display_name}</h3>
+        <p className="provider-details-card__status" role="status">
+          <strong>{providerAuthStateLabel(provider.auth)}</strong>
+          {' · '}{providerTypeLabel(provider, profile)}
+        </p>
+        <small className="provider-details-card__meta">{detail}</small>
+      </div>
+      {profile && onEditProfile ? (
+        <button type="button" className="provider-secondary-button" onClick={onEditProfile}>
+          Edit connection
+        </button>
+      ) : null}
+    </section>
+  )
+}
+
 function CodexAccountStatus({
   titleId,
   account,
@@ -657,17 +860,17 @@ function CodexAccountStatus({
     }
   }
   return (
-    <section className="codex-account-status" aria-labelledby={titleId}>
-      <span className={`codex-account-status__icon codex-account-status__icon--${account.state}`}>
+    <section className="provider-details-card" aria-labelledby={titleId}>
+      <span className={`provider-details-card__icon provider-details-card__icon--${account.state}`}>
         {signedIn ? <UserRoundCheck aria-hidden="true" size={18} /> : <ShieldCheck aria-hidden="true" size={18} />}
       </span>
-      <div>
+      <div className="provider-details-card__content">
         <h3 id={titleId}>Codex account</h3>
-        <p role="status" aria-live="polite">
+        <p className="provider-details-card__status" role="status" aria-live="polite">
           <strong>{accountStateLabel(account.state)}</strong>
           {account.accountLabel ? ` · ${account.accountLabel}` : ''}
         </p>
-        {account.detail ? <small>{account.detail}</small> : null}
+        {account.detail ? <small className="provider-details-card__meta">{account.detail}</small> : null}
       </div>
       {signedIn && onDisconnect ? (
         <button
@@ -688,7 +891,7 @@ function CodexAccountStatus({
           {actionPending ? 'Signing in…' : 'Sign in'}
         </button>
       ) : null}
-      {actionError ? <p className="codex-account-status__error" role="alert">{actionError}</p> : null}
+      {actionError ? <p className="provider-details-card__error" role="alert">{actionError}</p> : null}
     </section>
   )
 }
@@ -762,6 +965,56 @@ function validateDraft(draft: ProfileDraft): DraftErrors {
 
 function parseCustomModels(value: string): string[] {
   return [...new Set(value.split(/[\n,]/).map((model) => model.trim()).filter(Boolean))]
+}
+
+function providerAuthStateLabel(auth: ProviderDescriptor['auth']): string {
+  switch (auth) {
+    case 'configured': return 'Configured'
+    case 'not_required': return 'Ready'
+    case 'missing': return 'Setup required'
+    case 'unknown': return 'Availability unknown'
+  }
+}
+
+function providerTypeLabel(
+  provider: ProviderDescriptor,
+  profile?: ProviderProfileView
+): string {
+  if (profile) return kindLabel(profile.kind)
+  switch (provider.id) {
+    case 'echo': return 'Built-in Provider'
+  }
+  switch (provider.kind) {
+    case 'openai_responses': return 'OpenAI Responses'
+    case 'openai_chat_completions': return 'OpenAI-compatible'
+    case 'codex_app_server': return 'Codex App Server'
+    default: return provider.kind.replace(/[_-]+/g, ' ')
+  }
+}
+
+function providerProfileDetail(profile: ProviderProfileView): string {
+  return [
+    profile.baseUrl,
+    `Default model: ${profile.defaultModel}`,
+    profile.hasSecret ? 'Credential saved' : 'No credential saved'
+  ].filter(Boolean).join(' · ')
+}
+
+function providerDetail(
+  provider: ProviderDescriptor,
+  profile?: ProviderProfileView
+): string {
+  if (profile) return providerProfileDetail(profile)
+  const details = []
+  if (provider.auth === 'not_required') details.push('No account or API key required')
+  if (provider.default_model) details.push(`Default model: ${provider.default_model}`)
+  const capabilities = [
+    provider.capabilities.reasoning ? 'Reasoning' : undefined,
+    provider.capabilities.streaming ? 'Streaming' : undefined,
+    provider.capabilities.model_catalog ? 'Model catalog' : undefined
+  ].filter(Boolean)
+  if (capabilities.length > 0) details.push(capabilities.join(', '))
+  return details.join(' · ') || 'No additional Provider details are available.'
 }
 
 function kindLabel(kind: ProviderKind): string {

@@ -93,7 +93,7 @@ export function validateRpcInvocation(method: unknown, params: unknown): asserts
       requireKeys(
         params,
         ['client_request_id', 'message', 'images', 'references', 'provider', 'permission_mode'],
-        ['model', 'working_directory']
+        ['model', 'reasoning_effort', 'speedy', 'working_directory']
       )
       requireId(params.client_request_id, 'client_request_id')
       requireString(params.message, 'message', 128_000, true)
@@ -102,6 +102,8 @@ export function validateRpcInvocation(method: unknown, params: unknown): asserts
       requireString(params.provider, 'provider', 256)
       requirePermissionMode(params.permission_mode)
       requireOptionalString(params.model, 'model', 256)
+      requireOptionalTrimmedString(params.reasoning_effort, 'reasoning_effort', 64)
+      requireOptionalBoolean(params.speedy, 'speedy')
       requireOptionalString(params.working_directory, 'working_directory', 32_768)
       if (!Array.isArray(params.references) || params.references.length > 128) {
         throw new Error('Invalid Turn references')
@@ -126,7 +128,7 @@ export function validateRpcInvocation(method: unknown, params: unknown): asserts
       requireKeys(
         params,
         ['thread_id', 'message', 'images', 'references', 'provider', 'permission_mode'],
-        ['model']
+        ['model', 'reasoning_effort', 'speedy']
       )
       requireId(params.thread_id, 'thread_id')
       requireString(params.message, 'message', 128_000, true)
@@ -135,6 +137,8 @@ export function validateRpcInvocation(method: unknown, params: unknown): asserts
       requireString(params.provider, 'provider', 256)
       requirePermissionMode(params.permission_mode)
       requireOptionalString(params.model, 'model', 256)
+      requireOptionalTrimmedString(params.reasoning_effort, 'reasoning_effort', 64)
+      requireOptionalBoolean(params.speedy, 'speedy')
       if (!Array.isArray(params.references) || params.references.length > 128) {
         throw new Error('Invalid Turn references')
       }
@@ -204,6 +208,14 @@ function requirePermissionMode(value: unknown): asserts value is PermissionMode 
   if (value !== 'read_only' && value !== 'ask' && value !== 'full_access') {
     throw new Error("'permission_mode' must be read_only, ask, or full_access")
   }
+}
+
+function requireBoolean(value: unknown, name: string): asserts value is boolean {
+  if (typeof value !== 'boolean') throw new Error(`'${name}' must be a boolean`)
+}
+
+function requireOptionalBoolean(value: unknown, name: string): void {
+  if (value !== undefined) requireBoolean(value, name)
 }
 
 function requireThreadWorkflowState(value: unknown): asserts value is ThreadWorkflowState {
@@ -337,6 +349,13 @@ function requireString(value: unknown, name: string, maxLength: number, allowEmp
 
 function requireOptionalString(value: unknown, name: string, maxLength: number): void {
   if (value !== undefined) requireString(value, name, maxLength)
+}
+
+function requireOptionalTrimmedString(value: unknown, name: string, maxLength: number): void {
+  requireOptionalString(value, name, maxLength)
+  if (typeof value === 'string' && value !== value.trim()) {
+    throw new Error(`'${name}' must not contain surrounding whitespace`)
+  }
 }
 
 function requireOptionalUnsignedInteger(

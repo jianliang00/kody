@@ -758,6 +758,8 @@ impl RpcDispatcher {
             references: params.references,
             provider: params.provider,
             model: params.model,
+            reasoning_effort: params.reasoning_effort,
+            speedy: params.speedy,
             permission_mode: params.permission_mode,
             temperature: None,
             max_output_tokens: None,
@@ -800,6 +802,8 @@ struct CreateRequestFingerprint<'a> {
     references: &'a [ContextReference],
     provider: &'a str,
     model: &'a Option<String>,
+    reasoning_effort: &'a Option<String>,
+    speedy: bool,
     permission_mode: &'a Option<kody_core::PermissionMode>,
     working_directory: &'a Option<PathBuf>,
 }
@@ -814,6 +818,8 @@ fn create_request_fingerprint(params: &CreateThreadAndStartParams) -> Result<Str
             references: &params.references,
             provider: &params.provider,
             model: &params.model,
+            reasoning_effort: &params.reasoning_effort,
+            speedy: params.speedy,
             permission_mode: &params.permission_mode,
             working_directory: &params.working_directory,
         },
@@ -979,6 +985,10 @@ struct CreateThreadAndStartParams {
     provider: String,
     #[serde(default)]
     model: Option<String>,
+    #[serde(default)]
+    reasoning_effort: Option<String>,
+    #[serde(default)]
+    speedy: bool,
     #[serde(default)]
     permission_mode: Option<kody_core::PermissionMode>,
     #[serde(default)]

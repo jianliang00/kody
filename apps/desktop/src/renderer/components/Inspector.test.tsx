@@ -15,34 +15,39 @@ const now = '2026-08-09T00:00:00.000Z'
 afterEach(cleanup)
 
 describe('Inspector disclosures', () => {
-  it('expands sections independently and keeps their panels mounted', () => {
+  it('keeps the Context overview and expands only unique detail sections', () => {
     const { container } = render(<InspectorHarness />)
     const workspace = screen.getByRole('button', { name: 'Workspace' })
-    const references = screen.getByRole('button', { name: 'Active references' })
-    const processes = screen.getByRole('button', { name: 'Background processes' })
+    const changes = screen.getByRole('button', { name: 'Changed files' })
+    const timeline = screen.getByRole('button', { name: 'Execution timeline' })
     const workspacePanel = container.querySelector<HTMLElement>('#right-rail-workspace-panel')
     const workspacePath = screen.getByText('/tmp/kody-workspace')
 
+    expect(screen.getByTestId('context-overview')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Active references' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Background processes' })).toBeNull()
     expect(workspace.getAttribute('aria-expanded')).toBe('false')
-    expect(references.getAttribute('aria-expanded')).toBe('false')
-    expect(processes.getAttribute('aria-expanded')).toBe('false')
+    expect(changes.getAttribute('aria-expanded')).toBe('false')
+    expect(timeline.getAttribute('aria-expanded')).toBe('false')
     expect(workspacePanel?.hidden).toBe(true)
 
     fireEvent.click(workspace)
 
     expect(workspace.getAttribute('aria-expanded')).toBe('true')
-    expect(references.getAttribute('aria-expanded')).toBe('false')
-    expect(processes.getAttribute('aria-expanded')).toBe('false')
+    expect(changes.getAttribute('aria-expanded')).toBe('false')
     expect(workspacePanel?.hidden).toBe(false)
     expect(screen.getByText('/tmp/kody-workspace')).toBe(workspacePath)
+    expect(workspacePath.parentElement?.getAttribute('role')).toBe('region')
+    expect(workspacePath.parentElement?.getAttribute('aria-label')).toBe('Workspace path')
+    expect(workspacePath.parentElement?.getAttribute('tabindex')).toBe('0')
 
-    fireEvent.click(references)
+    fireEvent.click(changes)
     expect(workspace.getAttribute('aria-expanded')).toBe('true')
-    expect(references.getAttribute('aria-expanded')).toBe('true')
+    expect(changes.getAttribute('aria-expanded')).toBe('true')
 
     fireEvent.click(workspace)
     expect(workspace.getAttribute('aria-expanded')).toBe('false')
-    expect(references.getAttribute('aria-expanded')).toBe('true')
+    expect(changes.getAttribute('aria-expanded')).toBe('true')
     expect(workspacePanel?.hidden).toBe(true)
     expect(screen.getByText('/tmp/kody-workspace')).toBe(workspacePath)
   })
@@ -51,8 +56,7 @@ describe('Inspector disclosures', () => {
 function InspectorHarness() {
   const [sections, setSections] = useState<RightRailSectionsState>({
     ...DEFAULT_RIGHT_RAIL_SECTIONS,
-    context: false,
-    projects: false
+    context: false
   })
   const setExpanded = (id: RightRailSectionId, expanded: boolean): void => {
     setSections((current) => updateRightRailSection(current, id, expanded))
@@ -61,21 +65,17 @@ function InspectorHarness() {
   return (
     <Inspector
       snapshot={snapshot()}
-      threads={[]}
       projects={[]}
-      draftReferences={[]}
       events={[]}
       open={false}
       modal={false}
       sections={sections}
-      stoppingProcessIds={new Set()}
-      processOutputCursors={{}}
       onClose={vi.fn()}
       onSectionExpandedChange={setExpanded}
       onCopyText={vi.fn(async () => undefined)}
-      onReadProcessOutput={vi.fn()}
-      onStopProcess={vi.fn()}
-    />
+    >
+      <div data-testid="context-overview" />
+    </Inspector>
   )
 }
 

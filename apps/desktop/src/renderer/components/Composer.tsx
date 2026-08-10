@@ -1,11 +1,10 @@
-import { AtSign, FolderOpen, Image as ImageIcon, ImagePlus, Send, ShieldCheck, Square, X } from 'lucide-react'
+import { AtSign, FolderOpen, Image as ImageIcon, ImagePlus, Send, Settings2, ShieldCheck, Square, X } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import type {
   ContextReference,
   ModelDescriptor,
   PermissionMode,
   Project,
-  ProviderDescriptor,
   Thread,
   UploadedImage
 } from '@shared/protocol'
@@ -21,6 +20,7 @@ import {
 } from '../lib/references'
 import { KodySelect } from './KodySelect'
 import { MentionPalette } from './MentionPalette'
+import { ModelMenu } from './ModelMenu'
 import { ReferenceChips } from './ReferenceChips'
 
 const PERMISSION_MODE_OPTIONS = [
@@ -58,10 +58,12 @@ interface ComposerProps {
   threads: Thread[]
   projects: Project[]
   references: ContextReference[]
-  providers: ProviderDescriptor[]
   providerId: string
+  providerName?: string
   models: ModelDescriptor[]
   model: string
+  reasoningEffort: string
+  speedy: boolean
   permissionMode: PermissionMode
   modelsLoading?: boolean
   running: boolean
@@ -71,8 +73,9 @@ interface ComposerProps {
   workingDirectory?: string
   unavailable?: boolean
   onReferencesChange: (references: ContextReference[]) => void
-  onProviderChange: (providerId: string) => void
   onModelChange: (model: string) => void
+  onReasoningEffortChange: (effort: string) => void
+  onSpeedyChange: (speedy: boolean) => void
   onPermissionModeChange: (mode: PermissionMode) => void
   onMessageChange: (message: string) => void
   onImagesChange: (images: UploadedImage[]) => void
@@ -84,11 +87,14 @@ interface ComposerProps {
     references: ContextReference[],
     providerId: string,
     model: string,
+    reasoningEffort: string,
+    speedy: boolean,
     permissionMode: PermissionMode
   ) => Promise<boolean>
   onCancel: () => Promise<void>
   imageGenerationAvailable?: boolean
   onOpenImageGenerator?: () => void
+  onOpenProviderSettings?: () => void
 }
 
 export function Composer({
@@ -96,10 +102,12 @@ export function Composer({
   threads,
   projects,
   references,
-  providers,
   providerId,
+  providerName,
   models,
   model,
+  reasoningEffort,
+  speedy,
   permissionMode,
   modelsLoading = false,
   running,
@@ -109,8 +117,9 @@ export function Composer({
   workingDirectory,
   unavailable = false,
   onReferencesChange,
-  onProviderChange,
   onModelChange,
+  onReasoningEffortChange,
+  onSpeedyChange,
   onPermissionModeChange,
   onMessageChange,
   onImagesChange,
@@ -119,7 +128,8 @@ export function Composer({
   onSend,
   onCancel,
   imageGenerationAvailable = false,
-  onOpenImageGenerator
+  onOpenImageGenerator,
+  onOpenProviderSettings
 }: ComposerProps) {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [manualPalette, setManualPalette] = useState(false)
@@ -143,16 +153,8 @@ export function Composer({
     () => filterCandidates(candidates, paletteQuery, references),
     [candidates, paletteQuery, references]
   )
-  const selectedProvider = providers.find((item) => item.id === providerId)
   const modelOptions = useMemo(() => {
     const byId = new Map<string, ModelDescriptor>()
-    if (selectedProvider?.default_model) {
-      byId.set(selectedProvider.default_model, {
-        id: selectedProvider.default_model,
-        display_name: selectedProvider.default_model,
-        capabilities: { tool_calling: false, input_modalities: ['text'] }
-      })
-    }
     for (const item of models) byId.set(item.id, item)
     if (model && !byId.has(model)) byId.set(model, {
       id: model,
@@ -160,7 +162,7 @@ export function Composer({
       capabilities: { tool_calling: false, input_modalities: ['text'] }
     })
     return [...byId.values()]
-  }, [model, models, selectedProvider?.default_model])
+  }, [model, models])
   const selectedModel = modelOptions.find((item) => item.id === model)
   const imageInputAvailable = selectedModel?.capabilities.input_modalities.includes('image') ?? false
   const closePalette = (restore: 'composer' | 'button' = 'composer'): void => {
@@ -219,7 +221,7 @@ export function Composer({
       return
     }
     if (!providerId || !model) {
-      setValidationError('Choose a provider and model before starting a turn.')
+      setValidationError('Choose a Model Provider in Settings and select a model before starting a turn.')
       return
     }
     if (images.length > 0 && !imageInputAvailable) {
@@ -231,7 +233,16 @@ export function Composer({
     setSubmitting(true)
     setValidationError('')
     try {
-      const sent = await onSend(trimmed, images, references, providerId, model, permissionMode)
+      const sent = await onSend(
+        trimmed,
+        images,
+        references,
+        providerId,
+        model,
+        reasoningEffort,
+        speedy,
+        permissionMode
+      )
       if (sent) {
         onMessageChange('')
         onImagesChange([])
@@ -392,30 +403,31 @@ export function Composer({
       <footer className="composer__footer">
         <div className="composer__context-controls">
           <div className="composer__provider">
-            <label className="sr-only" htmlFor="composer-provider">Provider</label>
-            <KodySelect
-              id="composer-provider"
-              value={providerId}
-              variant="toolbar"
-              placeholder={providers.length === 0 ? 'Unavailable' : 'No configured provider'}
-              options={providers.map((item) => ({
-                value: item.id,
-                label: `${item.display_name}${item.auth === 'missing' ? ' · setup required' : ''}`,
-                disabled: item.auth === 'missing'
-              }))}
-              onValueChange={onProviderChange}
-              disabled={running || unavailable || providers.length === 0}
-            />
-            <label className="sr-only" htmlFor="composer-model">Model</label>
-            <KodySelect
-              id="composer-model"
-              value={model}
-              variant="toolbar"
-              placeholder={modelsLoading ? 'Loading models…' : 'Unavailable'}
-              options={modelOptions.map((item) => ({ value: item.id, label: item.display_name }))}
-              onValueChange={onModelChange}
-              disabled={running || unavailable || !providerId || modelOptions.length === 0}
-            />
+            {providerId ? (
+              <ModelMenu
+                id="composer-model-menu"
+                models={modelOptions}
+                model={model}
+                effort={reasoningEffort}
+                speedy={speedy}
+                supportsSpeedy={Boolean(selectedModel?.supports_speedy)}
+                loading={modelsLoading}
+                disabled={running || unavailable}
+                onModelChange={onModelChange}
+                onEffortChange={onReasoningEffortChange}
+                onSpeedyChange={onSpeedyChange}
+              />
+            ) : (
+              <button
+                className="model-provider-settings-button"
+                type="button"
+                disabled={unavailable}
+                onClick={onOpenProviderSettings}
+              >
+                <Settings2 aria-hidden="true" size={14} />
+                <span>{providerName ? `Set up ${providerName}…` : 'Choose Provider in Settings…'}</span>
+              </button>
+            )}
           </div>
           <button
             ref={contextButtonRef}
@@ -424,6 +436,7 @@ export function Composer({
             disabled={unavailable || running}
             onClick={openManualPalette}
             aria-label="Add context"
+            title="Add context"
             aria-expanded={paletteOpen && manualPalette}
             aria-haspopup="listbox"
             aria-controls={paletteOpen ? 'context-reference-options' : undefined}
@@ -464,25 +477,23 @@ export function Composer({
             <ImageIcon aria-hidden="true" size={16} />
             <span className="context-button__label">Image</span>
           </button>
-          <div
+          <KodySelect
+            value={permissionMode}
+            variant="compact"
             className={`permission-mode-control permission-mode-control--${permissionMode}`}
+            contentClassName="composer-permission-menu"
+            leadingIcon={<ShieldCheck size={14} />}
             title={permissionMode === 'read_only'
               ? 'Only inspection tools can run for this turn.'
               : permissionMode === 'full_access'
                 ? 'Tools and commands run without approval or a Codex sandbox.'
                 : 'File changes are allowed; commands ask for approval.'}
-          >
-            <ShieldCheck aria-hidden="true" size={15} />
-            <KodySelect
-              value={permissionMode}
-              variant="compact"
-              ariaLabel="Permission mode"
-              disabled={unavailable || running}
-              ariaDescribedBy="permission-mode-description"
-              options={PERMISSION_MODE_OPTIONS}
-              onValueChange={(mode) => onPermissionModeChange(mode as PermissionMode)}
-            />
-          </div>
+            ariaLabel="Permission mode"
+            disabled={unavailable || running}
+            ariaDescribedBy="permission-mode-description"
+            options={PERMISSION_MODE_OPTIONS}
+            onValueChange={(mode) => onPermissionModeChange(mode as PermissionMode)}
+          />
           <span id="permission-mode-description" className="sr-only">
             {permissionMode === 'read_only'
               ? 'Only inspection tools can run for this turn.'
@@ -509,6 +520,7 @@ export function Composer({
               disabled={unavailable || running}
               onClick={() => void onPickWorkingDirectory?.()}
               aria-label="Working directory"
+              title="Choose working directory"
             >
               <FolderOpen aria-hidden="true" size={16} />
               <span className="context-button__label">Working directory</span>

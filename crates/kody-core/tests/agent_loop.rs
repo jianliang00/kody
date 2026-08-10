@@ -75,6 +75,8 @@ async fn first_completed_echo_turn_generates_one_deterministic_title() {
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
+            reasoning_effort: None,
+            speedy: false,
             permission_mode: None,
             temperature: None,
             max_output_tokens: None,
@@ -101,6 +103,8 @@ async fn first_completed_echo_turn_generates_one_deterministic_title() {
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
+            reasoning_effort: None,
+            speedy: false,
             permission_mode: None,
             temperature: None,
             max_output_tokens: None,
@@ -118,6 +122,38 @@ async fn first_completed_echo_turn_generates_one_deterministic_title() {
         engine.store().get_thread(thread.id).await.unwrap().title,
         "Implement OAuth callback handling"
     );
+}
+
+#[tokio::test]
+async fn reasoning_effort_is_bounded_and_must_be_trimmed() {
+    let (engine, _state) = engine().await;
+    engine
+        .providers()
+        .register(Arc::new(kody_core::provider::EchoProvider::default()))
+        .unwrap();
+    let (thread, _, _) = engine.create_thread("Validation", None).await.unwrap();
+    let request = |reasoning_effort: String| StartTurn {
+        thread_id: thread.id,
+        message: "Validate model options".into(),
+        images: Vec::new(),
+        references: Vec::new(),
+        provider: "echo".into(),
+        model: None,
+        reasoning_effort: Some(reasoning_effort),
+        speedy: false,
+        permission_mode: None,
+        temperature: None,
+        max_output_tokens: None,
+    };
+
+    for effort in [" high".into(), " ".into(), "x".repeat(65)] {
+        let error = engine
+            .runtime()
+            .prepare_turn(request(effort))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("reasoning_effort"));
+    }
 }
 
 #[tokio::test]
@@ -140,6 +176,8 @@ async fn an_explicit_thread_title_is_never_overwritten() {
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
+            reasoning_effort: None,
+            speedy: false,
             permission_mode: None,
             temperature: None,
             max_output_tokens: None,
@@ -212,6 +250,8 @@ async fn provider_backed_title_generation_never_blocks_turn_completion() {
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
+            reasoning_effort: None,
+            speedy: false,
             permission_mode: None,
             temperature: None,
             max_output_tokens: None,
@@ -253,6 +293,8 @@ async fn terminal_event_is_emitted_only_after_thread_is_idle() {
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
+            reasoning_effort: None,
+            speedy: false,
             permission_mode: None,
             temperature: None,
             max_output_tokens: None,
@@ -374,6 +416,8 @@ async fn external_backend_tool_activity_is_part_of_durable_message_history() {
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
+            reasoning_effort: None,
+            speedy: false,
             permission_mode: None,
             temperature: None,
             max_output_tokens: None,
@@ -439,6 +483,8 @@ async fn external_backend_uses_durable_lifecycle_and_generates_title_after_termi
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
+            reasoning_effort: None,
+            speedy: false,
             permission_mode: None,
             temperature: None,
             max_output_tokens: None,
@@ -561,6 +607,8 @@ async fn external_backend_failure_is_terminal_and_releases_the_thread() {
         references: Vec::new(),
         provider: "echo".into(),
         model: None,
+        reasoning_effort: None,
+        speedy: false,
         permission_mode: None,
         temperature: None,
         max_output_tokens: None,
@@ -657,6 +705,8 @@ async fn external_backend_cancellation_persists_no_answer_and_releases_the_threa
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
+            reasoning_effort: None,
+            speedy: false,
             permission_mode: None,
             temperature: None,
             max_output_tokens: None,
@@ -703,6 +753,8 @@ async fn external_backend_cancellation_persists_no_answer_and_releases_the_threa
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
+            reasoning_effort: None,
+            speedy: false,
             permission_mode: None,
             temperature: None,
             max_output_tokens: None,
@@ -732,6 +784,8 @@ async fn queued_turn_keeps_its_provider_lease_across_registry_replace_and_remove
         references: Vec::new(),
         provider: "hot-provider".into(),
         model: None,
+        reasoning_effort: None,
+        speedy: false,
         permission_mode: None,
         temperature: None,
         max_output_tokens: None,
@@ -822,6 +876,8 @@ async fn agent_loop_executes_tools_persists_history_and_emits_ordered_events() {
             references: Vec::new(),
             provider: "test".into(),
             model: None,
+            reasoning_effort: Some("high".into()),
+            speedy: true,
             permission_mode: None,
             temperature: Some(0.2),
             max_output_tokens: Some(1_024),
@@ -835,6 +891,8 @@ async fn agent_loop_executes_tools_persists_history_and_emits_ordered_events() {
         .unwrap();
 
     assert_eq!(completed.status, TurnStatus::Completed);
+    assert_eq!(completed.reasoning_effort.as_deref(), Some("high"));
+    assert!(completed.speedy);
     assert_eq!(
         tokio::fs::read_to_string(project_root.path().join("hello.txt"))
             .await
@@ -951,6 +1009,8 @@ async fn cancellation_cleans_up_and_a_duplicate_executor_cannot_claim_the_turn()
             references: Vec::new(),
             provider: "blocking".into(),
             model: None,
+            reasoning_effort: None,
+            speedy: false,
             permission_mode: None,
             temperature: None,
             max_output_tokens: None,
@@ -1015,6 +1075,8 @@ async fn shell_waits_for_an_explicit_approval_decision() {
             references: Vec::new(),
             provider: "approval-provider".into(),
             model: None,
+            reasoning_effort: None,
+            speedy: false,
             permission_mode: None,
             temperature: None,
             max_output_tokens: None,
@@ -1107,6 +1169,8 @@ async fn read_only_mode_blocks_a_write_tool_even_if_the_provider_calls_it() {
             references: Vec::new(),
             provider: "read-only-provider".into(),
             model: None,
+            reasoning_effort: None,
+            speedy: false,
             permission_mode: Some(PermissionMode::ReadOnly),
             temperature: None,
             max_output_tokens: None,
@@ -1180,6 +1244,8 @@ async fn full_access_mode_runs_a_command_without_creating_an_approval() {
             references: Vec::new(),
             provider: "full-access-provider".into(),
             model: None,
+            reasoning_effort: None,
+            speedy: false,
             permission_mode: Some(PermissionMode::FullAccess),
             temperature: None,
             max_output_tokens: None,
@@ -1245,6 +1311,8 @@ async fn managed_process_start_uses_command_approval_and_outlives_its_turn() {
             references: Vec::new(),
             provider: "process-approval-provider".into(),
             model: None,
+            reasoning_effort: None,
+            speedy: false,
             permission_mode: None,
             temperature: None,
             max_output_tokens: None,
@@ -1351,6 +1419,8 @@ async fn referenced_thread_context_is_resolved_without_copying_messages() {
             }],
             provider: "test-ref".into(),
             model: Some("test-model".into()),
+            reasoning_effort: None,
+            speedy: false,
             permission_mode: None,
             temperature: None,
             max_output_tokens: None,
@@ -1405,6 +1475,8 @@ async fn provider_failure_releases_thread_for_the_next_turn() {
         references: Vec::new(),
         provider: "failing".into(),
         model: Some("model".into()),
+        reasoning_effort: None,
+        speedy: false,
         permission_mode: None,
         temperature: None,
         max_output_tokens: None,
@@ -1458,6 +1530,8 @@ async fn durable_engine_recovers_an_interrupted_queued_turn_on_restart() {
             references: Vec::new(),
             provider: "echo".into(),
             model: None,
+            reasoning_effort: None,
+            speedy: false,
             permission_mode: None,
             temperature: None,
             max_output_tokens: None,
@@ -1504,6 +1578,8 @@ async fn current_turn_upload_is_materialized_as_model_image_input() {
             references: Vec::new(),
             provider: "vision".into(),
             model: Some("scripted".into()),
+            reasoning_effort: None,
+            speedy: false,
             permission_mode: None,
             temperature: None,
             max_output_tokens: None,
@@ -1549,6 +1625,8 @@ async fn image_upload_is_rejected_before_persistence_for_text_only_models() {
             references: Vec::new(),
             provider: "text-only".into(),
             model: Some("scripted".into()),
+            reasoning_effort: None,
+            speedy: false,
             permission_mode: None,
             temperature: None,
             max_output_tokens: None,
@@ -1590,6 +1668,8 @@ async fn view_image_materializes_only_the_selected_artifact_in_the_current_turn(
             references: Vec::new(),
             provider: "vision".into(),
             model: Some("scripted".into()),
+            reasoning_effort: None,
+            speedy: false,
             permission_mode: None,
             temperature: None,
             max_output_tokens: None,
@@ -1631,6 +1711,8 @@ async fn view_image_materializes_only_the_selected_artifact_in_the_current_turn(
             references: Vec::new(),
             provider: "vision".into(),
             model: Some("scripted".into()),
+            reasoning_effort: None,
+            speedy: false,
             permission_mode: Some(PermissionMode::ReadOnly),
             temperature: None,
             max_output_tokens: None,
