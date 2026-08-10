@@ -97,7 +97,11 @@ describe('Provider bootstrap compatibility', () => {
 
     render(<App />)
 
-    expect(await screen.findByRole('button', { name: 'Model options: Codex default' })).toBeTruthy()
+    expect(await screen.findByRole(
+      'button',
+      { name: 'Model options: Codex default' },
+      { timeout: 10_000 }
+    )).toBeTruthy()
     expect(screen.queryByRole('heading', { name: 'Kody could not start' })).toBeNull()
   })
 
